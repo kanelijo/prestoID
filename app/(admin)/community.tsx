@@ -252,14 +252,12 @@ function PostCard({ item, onLike, onAddComment, onDelete }: PostCardProps) {
 }
 
 export default function CommunityScreen() {
-  const { user } = useAuthStore();
+  const { user, businessId, businessName } = useAuthStore();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showComposer, setShowComposer] = useState(false);
   const [composerCategory, setComposerCategory] = useState<Post['category']>('announcement');
   const [composerText, setComposerText] = useState('');
-  const [businessName, setBusinessName] = useState('Business Name');
-  const [businessId, setBusinessId] = useState<string | null>(null);
   const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
   const [availableBatches, setAvailableBatches] = useState<string[]>(['All']);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -358,38 +356,24 @@ export default function CommunityScreen() {
   };
 
   useEffect(() => {
-    const fetchBusinessName = async () => {
-      if (!user) return;
+    const fetchBatches = async () => {
+      if (!businessId) return;
       try {
-        const { data, error } = await supabase
-          .from('businesses')
-          .select('id, business_name')
-          .eq('admin_id', user.id)
-          .maybeSingle();
-
-        if (!error && data) {
-          setBusinessName(data.business_name);
-          setBusinessId(data.id);
+        const { data: batchesData } = await supabase
+          .from('students')
+          .select('batch_name')
+          .eq('business_id', businessId);
           
-          // Fetch unique batches for this business
-          const { data: batchesData } = await supabase
-            .from('students')
-            .select('batch_name')
-            .eq('business_id', data.id);
-            
-          if (batchesData) {
-            const uniqueBatches = Array.from(new Set(batchesData.map(b => b.batch_name)));
-            setAvailableBatches(['All', ...uniqueBatches]);
-          }
-        } else if (user?.user_metadata?.name) {
-          setBusinessName(user.user_metadata.name);
+        if (batchesData) {
+          const uniqueBatches = Array.from(new Set(batchesData.map(b => b.batch_name)));
+          setAvailableBatches(['All', ...uniqueBatches]);
         }
       } catch (err) {
-        console.warn('Failed to fetch business name:', err);
+        console.warn('Failed to fetch batches:', err);
       }
     };
-    fetchBusinessName();
-  }, [user]);
+    fetchBatches();
+  }, [businessId]);
 
   const fetchPosts = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
