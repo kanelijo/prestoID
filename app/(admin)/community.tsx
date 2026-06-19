@@ -22,7 +22,7 @@ try {
 } catch (e) {
   console.warn('DocumentPicker native module not found:', e);
 }
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
