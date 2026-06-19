@@ -16,7 +16,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
+let DocumentPicker: any = null;
+try {
+  DocumentPicker = require('expo-document-picker');
+} catch (e) {
+  console.warn('DocumentPicker native module not found:', e);
+}
 import * as FileSystem from 'expo-file-system';
 import { decode } from 'base64-arraybuffer';
 import { Colors, Shadows } from '@/constants/colors';
@@ -258,7 +263,7 @@ export default function CommunityScreen() {
   const [selectedBatches, setSelectedBatches] = useState<string[]>([]);
   const [availableBatches, setAvailableBatches] = useState<string[]>(['All']);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
+  const [selectedFile, setSelectedFile] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
 
   const handlePickImage = async () => {
@@ -306,6 +311,10 @@ export default function CommunityScreen() {
   };
 
   const handlePickDocument = async () => {
+    if (!DocumentPicker || !DocumentPicker.getDocumentAsync) {
+      Alert.alert('Unsupported', 'Document picking is not supported in this development build. Please rebuild the app with npx expo run:android.');
+      return;
+    }
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
