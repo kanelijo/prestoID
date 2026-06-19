@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "40873429937",
+    "project_id": "studio-6595741346-21608",
+    "storage_bucket": "studio-6595741346-21608.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:40873429937:android:c5c0976a5c1aae59860b90",
+        "android_client_info": {
+          "package_name": "com.kanelijo.prestoid"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJO17y7OvE5Zzk-s-G3PzfIRnLsvIPfEg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

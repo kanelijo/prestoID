@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "PrestoID",
+    "slug": "prestoid",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "prestoid",
+    "icon": "./assets/images/icon.png",
+    "splash": {
+      "backgroundColor": "#FFF8F6"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kanelijo.prestoid",
+      "infoPlist": {
+        "NSCameraUsageDescription": "PrestoID needs camera access to scan student QR codes for attendance."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/icon.png",
+        "backgroundColor": "#FFF8F6"
+      },
+      "package": "com.kanelijo.prestoid",
+      "googleServicesFile": "./google-services.json",
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "PrestoID needs camera access to scan student QR codes."
+        }
+      ],
+      "expo-font",
+      "expo-splash-screen",
+      "expo-status-bar",
+      "expo-sharing",
+      "@react-native-google-signin/google-signin"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "871609f4-5fd0-4552-bee6-f086a51767a1"
+      }
+    },
+    "owner": "catataste"
+  }
+}
