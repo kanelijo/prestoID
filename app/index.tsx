@@ -41,11 +41,31 @@ export default function SplashScreen() {
       }),
     ]).start();
 
-    // Check active auth session in database
+    // Check active auth session in database with timeout safety
     const checkAuth = async () => {
+      let isDone = false;
+      const timeout = setTimeout(async () => {
+        if (!isDone) {
+          isDone = true;
+          console.warn('Splash auth check timed out after 8s. Routing to fallback.');
+          try {
+            const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
+            if (onboardingCompleted === 'true') {
+              router.replace('/(auth)/login');
+            } else {
+              router.replace('/onboarding');
+            }
+          } catch {
+            router.replace('/onboarding');
+          }
+        }
+      }, 8000);
+
       try {
         const { data: { session }, error } = await supabase.auth.getSession();
         
+        if (isDone) return;
+
         if (session && session.user) {
           // Fetch user profile from database
           const { data: profile, error: profileError } = await supabase
@@ -53,6 +73,8 @@ export default function SplashScreen() {
             .select('role, business_id, claimed')
             .eq('id', session.user.id)
             .single();
+
+          if (isDone) return;
 
           if (profile && !profileError) {
             const store = useAuthStore.getState();
@@ -67,6 +89,8 @@ export default function SplashScreen() {
                 .select('id, organization_id, business_name, business_type')
                 .eq('id', profile.business_id)
                 .single();
+
+              if (isDone) return;
 
               if (business) {
                 store.setBusiness(business.id, business.organization_id, business.business_name, business.business_type);
@@ -88,10 +112,14 @@ export default function SplashScreen() {
                 router.replace('/(auth)/claim-profile');
               }
             }
+            clearTimeout(timeout);
+            isDone = true;
             return;
           }
         }
         
+        if (isDone) return;
+
         // No session or profile found, check onboarding status
         const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
         if (onboardingCompleted === 'true') {
@@ -99,7 +127,12 @@ export default function SplashScreen() {
         } else {
           router.replace('/onboarding');
         }
+        clearTimeout(timeout);
+        isDone = true;
       } catch (err) {
+        if (isDone) return;
+        clearTimeout(timeout);
+        isDone = true;
         console.error('Splash auth check error:', err);
         router.replace('/onboarding');
       }

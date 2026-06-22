@@ -19,7 +19,7 @@ export default function TestResultScreen() {
 
   useEffect(() => {
     fetchResults();
-  }, [id]);
+  }, [id, activeStudentId]);
 
   const fetchResults = async () => {
     setIsLoading(true);
@@ -28,13 +28,22 @@ export default function TestResultScreen() {
         setTestDetails({ title: 'MPPSC Mock Test', duration_minutes: 60 });
         setSubmission({ 
           score: 85, 
-          total_questions: 100, 
+          total_questions: 5, 
           submitted_at: new Date().toISOString(),
           exit_logs: [{ time: new Date().toISOString(), duration_ms: 15000, type: 'app_switch' }] 
         });
         setIsLoading(false);
         return;
       }
+
+      // Fetch student details to get the student primary key
+      const { data: student } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', activeStudentId)
+        .single();
+
+      if (!student) throw new Error("Student profile not found.");
 
       // Fetch test details
       const { data: test, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
@@ -46,7 +55,7 @@ export default function TestResultScreen() {
         .from('test_submissions')
         .select('*')
         .eq('test_id', id)
-        .eq('student_id', activeStudentId)
+        .eq('student_id', student.id)
         .single();
         
       if (subErr) throw subErr;
@@ -80,6 +89,27 @@ export default function TestResultScreen() {
   }
 
   const exitCount = submission.exit_logs ? submission.exit_logs.length : 0;
+
+  const getInsights = (score: number) => {
+    if (score >= 80) {
+      return {
+        strong: ['Town Planning & Urban Structure', 'Seals & Trade Materials'],
+        weak: ['None - Excellent mastery of topics!']
+      };
+    } else if (score >= 50) {
+      return {
+        strong: ['Basic Historical Chronology'],
+        weak: ['Detailed Port Site Identification', 'Harappan Crafts & Social Stratification']
+      };
+    } else {
+      return {
+        strong: ['Basic Historical Vocabulary'],
+        weak: ['Urban Sewerage and Infrastructure', 'Craft Production Centres', 'Geographical Extent & Chronology']
+      };
+    }
+  };
+
+  const insights = getInsights(scorePercentage);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -115,8 +145,9 @@ export default function TestResultScreen() {
             <Ionicons name="trending-up" size={20} color={Colors.status.success} />
             <Text style={styles.insightTitle}>Strong Areas</Text>
           </View>
-          <Text style={styles.insightText}>• Town Planning</Text>
-          <Text style={styles.insightText}>• Harappan Trade</Text>
+          {insights.strong.map((item, idx) => (
+            <Text key={idx} style={styles.insightText}>• {item}</Text>
+          ))}
         </View>
 
         <View style={styles.insightCard}>
@@ -124,8 +155,9 @@ export default function TestResultScreen() {
             <Ionicons name="trending-down" size={20} color={Colors.status.danger} />
             <Text style={styles.insightTitle}>Weak Areas</Text>
           </View>
-          <Text style={styles.insightText}>• Post-Harappan Sites</Text>
-          <Text style={styles.insightText}>• Agriculture patterns</Text>
+          {insights.weak.map((item, idx) => (
+            <Text key={idx} style={styles.insightText}>• {item}</Text>
+          ))}
         </View>
 
         {/* Activity Logs */}

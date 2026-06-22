@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
@@ -12,21 +12,15 @@ const MOCK_QUESTIONS = [
   {
     id: 'q1',
     question_text: "What was the main feature of the Indus Valley Civilization?",
-    option_a: "Town Planning",
-    option_b: "Iron usage",
-    option_c: "Horse chariots",
-    option_d: "Temple architecture",
-    correct_option: "A",
+    options: ["Town Planning", "Iron usage", "Horse chariots", "Temple architecture"],
+    correct_option: 0,
     explanation: "The Indus Valley Civilization is best known for its advanced urban town planning and drainage systems."
   },
   {
     id: 'q2',
     question_text: "Which of these was a major port city of Indus Valley?",
-    option_a: "Harappa",
-    option_b: "Lothal",
-    option_c: "Mohenjodaro",
-    option_d: "Kalibangan",
-    correct_option: "B",
+    options: ["Harappa", "Lothal", "Mohenjodaro", "Kalibangan"],
+    correct_option: 1,
     explanation: "Lothal was a prominent port city known for its massive dockyard."
   }
 ];
@@ -34,12 +28,21 @@ const MOCK_QUESTIONS = [
 export default function TestReviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { verified } = useAuthStore();
   
   const [testDetails, setTestDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
+
+  // Edit Modal State
+  const [editingQuestion, setEditingQuestion] = useState<any | null>(null);
+  const [editQText, setEditQText] = useState('');
+  const [editOptions, setEditOptions] = useState<string[]>(['', '', '', '']);
+  const [editCorrectIdx, setEditCorrectIdx] = useState(0);
+  const [editExplanation, setEditExplanation] = useState('');
+  const [isSavingQuestion, setIsSavingQuestion] = useState(false);
 
   useEffect(() => {
     fetchTestDetails();
@@ -70,7 +73,7 @@ export default function TestReviewScreen() {
         .from('test_questions')
         .select('*')
         .eq('test_id', id)
-        .order('order_index', { ascending: true });
+        .order('created_at', { ascending: true });
         
       if (qErr) throw qErr;
       setQuestions(qData || []);
@@ -79,6 +82,75 @@ export default function TestReviewScreen() {
       setTestDetails({ title: 'Unknown Test' });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const openEditModal = (q: any) => {
+    setEditingQuestion(q);
+    setEditQText(q.question_text);
+    setEditOptions(q.options && q.options.length === 4 ? [...q.options] : ['', '', '', '']);
+    setEditCorrectIdx(q.correct_option !== undefined ? q.correct_option : 0);
+    setEditExplanation(q.explanation || '');
+  };
+
+  const handleSaveQuestion = async () => {
+    if (!editQText.trim() || editOptions.some(opt => !opt.trim())) {
+      Alert.alert('Error', 'Please fill the question and all 4 options.');
+      return;
+    }
+
+    if (!verified || id === 'demo-test-id') {
+      const updated = questions.map(q => {
+        if (q.id === editingQuestion.id) {
+          return {
+            ...q,
+            question_text: editQText,
+            options: [...editOptions],
+            correct_option: editCorrectIdx,
+            explanation: editExplanation
+          };
+        }
+        return q;
+      });
+      setQuestions(updated);
+      setEditingQuestion(null);
+      return;
+    }
+
+    setIsSavingQuestion(true);
+    try {
+      const { error } = await supabase
+        .from('test_questions')
+        .update({
+          question_text: editQText,
+          options: editOptions,
+          correct_option: editCorrectIdx,
+          explanation: editExplanation
+        })
+        .eq('id', editingQuestion.id);
+
+      if (error) throw error;
+
+      // Update local state
+      const updated = questions.map(q => {
+        if (q.id === editingQuestion.id) {
+          return {
+            ...q,
+            question_text: editQText,
+            options: [...editOptions],
+            correct_option: editCorrectIdx,
+            explanation: editExplanation
+          };
+        }
+        return q;
+      });
+      setQuestions(updated);
+      setEditingQuestion(null);
+      Alert.alert('Success', 'Question updated successfully.');
+    } catch (err: any) {
+      Alert.alert('Save Failed', err.message);
+    } finally {
+      setIsSavingQuestion(false);
     }
   };
 
@@ -98,7 +170,7 @@ export default function TestReviewScreen() {
 
             const { error } = await supabase
               .from('tests')
-              .update({ status: 'published', scheduled_at: new Date().toISOString() })
+              .update({ status: 'published', start_time: new Date().toISOString() })
               .eq('id', id);
 
             if (error) throw error;
@@ -121,6 +193,8 @@ export default function TestReviewScreen() {
       </SafeAreaView>
     );
   }
+
+  const optLabels = ['A', 'B', 'C', 'D'];
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -148,7 +222,7 @@ export default function TestReviewScreen() {
           <View key={q.id} style={styles.questionCard}>
             <View style={styles.questionHeader}>
               <Text style={styles.questionNum}>Q{index + 1}</Text>
-              <TouchableOpacity style={styles.editBtn}>
+              <TouchableOpacity style={styles.editBtn} onPress={() => openEditModal(q)}>
                 <Ionicons name="pencil" size={16} color={Colors.accent.primary} />
                 <Text style={styles.editBtnText}>Edit</Text>
               </TouchableOpacity>
@@ -157,32 +231,24 @@ export default function TestReviewScreen() {
             <Text style={styles.questionText}>{q.question_text}</Text>
             
             <View style={styles.optionsList}>
-              <View style={[styles.optionRow, q.correct_option === 'A' && styles.optionCorrect]}>
-                <View style={styles.optionLetter}><Text style={styles.optionLetterText}>A</Text></View>
-                <Text style={styles.optionText}>{q.option_a}</Text>
-                {q.correct_option === 'A' && <Ionicons name="checkmark-circle" size={20} color={Colors.status.success} />}
-              </View>
-              <View style={[styles.optionRow, q.correct_option === 'B' && styles.optionCorrect]}>
-                <View style={styles.optionLetter}><Text style={styles.optionLetterText}>B</Text></View>
-                <Text style={styles.optionText}>{q.option_b}</Text>
-                {q.correct_option === 'B' && <Ionicons name="checkmark-circle" size={20} color={Colors.status.success} />}
-              </View>
-              <View style={[styles.optionRow, q.correct_option === 'C' && styles.optionCorrect]}>
-                <View style={styles.optionLetter}><Text style={styles.optionLetterText}>C</Text></View>
-                <Text style={styles.optionText}>{q.option_c}</Text>
-                {q.correct_option === 'C' && <Ionicons name="checkmark-circle" size={20} color={Colors.status.success} />}
-              </View>
-              <View style={[styles.optionRow, q.correct_option === 'D' && styles.optionCorrect]}>
-                <View style={styles.optionLetter}><Text style={styles.optionLetterText}>D</Text></View>
-                <Text style={styles.optionText}>{q.option_d}</Text>
-                {q.correct_option === 'D' && <Ionicons name="checkmark-circle" size={20} color={Colors.status.success} />}
-              </View>
+              {(q.options || []).map((opt: string, oIdx: number) => {
+                const isCorrect = q.correct_option === oIdx;
+                return (
+                  <View key={oIdx} style={[styles.optionRow, isCorrect && styles.optionCorrect]}>
+                    <View style={styles.optionLetter}><Text style={styles.optionLetterText}>{optLabels[oIdx]}</Text></View>
+                    <Text style={styles.optionText}>{opt}</Text>
+                    {isCorrect && <Ionicons name="checkmark-circle" size={20} color={Colors.status.success} />}
+                  </View>
+                );
+              })}
             </View>
             
-            <View style={styles.explanationBox}>
-              <Text style={styles.explanationLabel}>AI Explanation:</Text>
-              <Text style={styles.explanationText}>{q.explanation}</Text>
-            </View>
+            {q.explanation && (
+              <View style={styles.explanationBox}>
+                <Text style={styles.explanationLabel}>AI Explanation:</Text>
+                <Text style={styles.explanationText}>{q.explanation}</Text>
+              </View>
+            )}
           </View>
         ))}
       </ScrollView>
@@ -199,6 +265,103 @@ export default function TestReviewScreen() {
           )}
         </TouchableOpacity>
       </View>
+
+      {/* Inline Question Editor Modal */}
+      <Modal
+        visible={editingQuestion !== null}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setEditingQuestion(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            style={styles.modalContainer}
+          >
+            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit MCQ Question</Text>
+                <TouchableOpacity onPress={() => setEditingQuestion(null)}>
+                  <Ionicons name="close" size={24} color={Colors.text.primary} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                <View style={styles.inputContainer}>
+                  <Text style={styles.inputLabel}>Question Text *</Text>
+                  <TextInput
+                    style={[styles.input, { height: 80 }]}
+                    multiline
+                    placeholder="Enter the question text"
+                    placeholderTextColor={Colors.text.tertiary}
+                    value={editQText}
+                    onChangeText={setEditQText}
+                  />
+                </View>
+
+                {editOptions.map((opt, idx) => (
+                  <View key={idx} style={styles.inputContainer}>
+                    <Text style={styles.inputLabel}>Option {optLabels[idx]} *</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder={`Enter option ${optLabels[idx]}`}
+                      placeholderTextColor={Colors.text.tertiary}
+                      value={opt}
+                      onChangeText={(val) => {
+                        const newOpts = [...editOptions];
+                        newOpts[idx] = val;
+                        setEditOptions(newOpts);
+                      }}
+                    />
+                  </View>
+                ))}
+
+                <View style={styles.inputContainer}>
+                  <Text style={styles.inputLabel}>Correct Option *</Text>
+                  <View style={styles.correctSelectorRow}>
+                    {optLabels.map((lbl, idx) => (
+                      <TouchableOpacity
+                        key={lbl}
+                        style={[styles.selectorChip, editCorrectIdx === idx && styles.selectorChipActive]}
+                        onPress={() => setEditCorrectIdx(idx)}
+                      >
+                        <Text style={[styles.selectorChipText, editCorrectIdx === idx && styles.selectorChipTextActive]}>
+                          {lbl}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+
+                <View style={[styles.inputContainer, { marginBottom: 30 }]}>
+                  <Text style={styles.inputLabel}>Explanation</Text>
+                  <TextInput
+                    style={[styles.input, { height: 70 }]}
+                    multiline
+                    placeholder="Explain why this option is correct..."
+                    placeholderTextColor={Colors.text.tertiary}
+                    value={editExplanation}
+                    onChangeText={setEditExplanation}
+                  />
+                </View>
+              </ScrollView>
+
+              <View style={styles.modalFooter}>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditingQuestion(null)}>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveBtn} onPress={handleSaveQuestion} disabled={isSavingQuestion}>
+                  {isSavingQuestion ? (
+                    <ActivityIndicator color="#FFF" />
+                  ) : (
+                    <Text style={styles.saveBtnText}>Save Changes</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -365,6 +528,111 @@ const styles = StyleSheet.create({
   },
   publishBtnText: {
     fontSize: 16,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContainer: {
+    width: '100%',
+    maxHeight: '90%',
+  },
+  modalContent: {
+    backgroundColor: Colors.bg.primary,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.text.primary,
+  },
+  modalBody: {
+    maxHeight: 400,
+  },
+  inputContainer: {
+    gap: 8,
+    marginBottom: 14,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text.primary,
+  },
+  input: {
+    backgroundColor: Colors.bg.secondary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    borderRadius: 12,
+    padding: 12,
+    fontSize: 15,
+    color: Colors.text.primary,
+  },
+  correctSelectorRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 4,
+  },
+  selectorChip: {
+    flex: 1,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: Colors.bg.secondary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectorChipActive: {
+    backgroundColor: Colors.accent.primary,
+    borderColor: Colors.accent.primary,
+  },
+  selectorChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  selectorChipTextActive: {
+    color: '#FFF',
+    fontWeight: '700',
+  },
+  modalFooter: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  cancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.bg.secondary,
+    alignItems: 'center',
+  },
+  cancelBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  saveBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.accent.primary,
+    alignItems: 'center',
+  },
+  saveBtnText: {
+    fontSize: 15,
     fontWeight: '700',
     color: '#FFF',
   },

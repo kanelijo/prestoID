@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { clearBadgeCount, registerForPushNotificationsAsync } from '@/lib/notifications';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 
 type TabIconProps = {
@@ -38,6 +39,7 @@ function TabIcon({ name, label, focused }: TabIconProps) {
 export default function StudentLayout() {
   const insets = useSafeAreaInsets();
   const { user } = useAuthStore();
+  const { studentUnreadCount } = useNotificationStore();
 
   useEffect(() => {
     clearBadgeCount();
@@ -102,6 +104,7 @@ export default function StudentLayout() {
       <Tabs.Screen
         name="notifications"
         options={{
+          tabBarBadge: studentUnreadCount > 0 ? studentUnreadCount : undefined,
           tabBarIcon: ({ focused }) => (
             <TabIcon
               name={focused ? 'notifications' : 'notifications-outline'}
@@ -123,7 +126,6 @@ export default function StudentLayout() {
           ),
           }}
         />
-      <Tabs.Screen name="select-profile" options={{ href: null }} />
       <Tabs.Screen name="test/engine/[id]" options={{ href: null }} />
       <Tabs.Screen name="test/result/[id]" options={{ href: null }} />
       </Tabs>

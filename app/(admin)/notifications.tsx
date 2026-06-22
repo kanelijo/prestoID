@@ -8,15 +8,25 @@ import {
   RefreshControl,
   Alert,
   Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 
-type NotificationType = 'fee_payment' | 'new_student' | 'attendance' | 'system' | 'community';
+let Notifications: any = null;
+try {
+  Notifications = require('expo-notifications');
+} catch (e) {
+  console.warn('Notifications module not loaded:', e);
+}
+
+type NotificationType = 'fee_payment' | 'new_student' | 'attendance' | 'system';
 
 interface Notification {
   id: string;
@@ -35,88 +45,42 @@ const NOTIFICATION_CONFIG: Record<
   new_student: { icon: 'person-add', tint: Colors.status.info, label: 'New Student Registered' },
   attendance: { icon: 'calendar', tint: Colors.accent.primary, label: 'Attendance Alert' },
   system: { icon: 'information-circle', tint: Colors.status.warning, label: 'System Update' },
-  community: { icon: 'megaphone', tint: Colors.accent.primary, label: 'Community Response' },
 };
 
-const INITIAL_NOTIFICATIONS: Notification[] = [
-  {
-    id: '1',
-    type: 'fee_payment',
-    title: 'Fee Payment Received',
-    description: 'Amit Sharma paid ₹2,500 for June 2026',
-    timeAgo: '2 hours ago',
-    read: false,
-  },
-  {
-    id: '2',
-    type: 'community',
-    title: 'Community Response',
-    description: 'Priya Patel commented on your announcement',
-    timeAgo: '3 hours ago',
-    read: false,
-  },
-  {
-    id: '3',
-    type: 'attendance',
-    title: 'Attendance Alert',
-    description: '5 students absent today (MPPSC batch)',
-    timeAgo: '5 hours ago',
-    read: false,
-  },
-  {
-    id: '4',
-    type: 'new_student',
-    title: 'New Student Registered',
-    description: 'Rohit Mishra registered via invite code',
-    timeAgo: '1 day ago',
-    read: true,
-  },
-  {
-    id: '5',
-    type: 'fee_payment',
-    title: 'Fee Payment Received',
-    description: 'Sneha Gupta paid ₹2,200 for June 2026',
-    timeAgo: '1 day ago',
-    read: true,
-  },
-  {
-    id: '6',
-    type: 'system',
-    title: 'System Update',
-    description: 'Monthly fee report is ready to download',
-    timeAgo: '2 days ago',
-    read: true,
-  },
-  {
-    id: '7',
-    type: 'attendance',
-    title: 'Attendance Alert',
-    description: 'Attendance rate dropped below 80% for 3 students',
-    timeAgo: '3 days ago',
-    read: true,
-  },
-  {
-    id: '8',
-    type: 'community',
-    title: 'Community Response',
-    description: 'Deepak Kumar liked your note',
-    timeAgo: '3 days ago',
-    read: true,
-  },
-];
+const formatTimeAgo = (date: Date) => {
+  const seconds = Math.floor((new Date().getTime() - date.getTime()) / 1000);
+  if (seconds < 60) return 'Just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+};
 
 type FilterTab = 'All' | 'Unread';
 
 export default function AdminNotificationsScreen() {
   const router = useRouter();
-  const [notifications, setNotifications] = useState<Notification[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeTab, setActiveTab] = useState<FilterTab>('All');
   const [refreshing, setRefreshing] = useState(false);
-  const { user, verified } = useAuthStore();
+  const { user, verified, businessId } = useAuthStore();
   const [deletionRequests, setDeletionRequests] = useState<any[]>([]);
   const [claimRequests, setClaimRequests] = useState<any[]>([]);
   const [adminName, setAdminName] = useState('Admin');
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const logoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const [hasNotificationPermission, setHasNotificationPermission] = useState(true);
+
+  const checkPermissions = async () => {
+    if (!Notifications) return;
+    try {
+      const { status } = await Notifications.getPermissionsAsync();
+      setHasNotificationPermission(status === 'granted');
+    } catch (e) {
+      console.warn('Failed to check notifications permission:', e);
+    }
+  };
 
   const getInitials = (name: string) => {
     const parts = name.split(' ').filter(Boolean);
@@ -154,6 +118,160 @@ export default function AdminNotificationsScreen() {
       }
     } catch (err) {
       console.warn('Failed to load admin profile in alerts:', err);
+    }
+  };
+
+  // Load/save local read state from AsyncStorage
+  const loadReadNotifications = async (): Promise<string[]> => {
+    try {
+      const readIdsJSON = await AsyncStorage.getItem('@presto_admin_read_notifications');
+      return readIdsJSON ? JSON.parse(readIdsJSON) : [];
+    } catch (e) {
+      console.warn('Failed to load read notifications:', e);
+      return [];
+    }
+  };
+
+  const saveReadNotifications = async (ids: string[]) => {
+    try {
+      await AsyncStorage.setItem('@presto_admin_read_notifications', JSON.stringify(ids));
+    } catch (e) {
+      console.warn('Failed to save read notifications:', e);
+    }
+  };
+
+  const fetchDynamicAlerts = async () => {
+    if (!user) return;
+    try {
+      let currentBusinessId = businessId;
+      if (!currentBusinessId) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('business_id')
+          .eq('id', user.id)
+          .maybeSingle();
+        currentBusinessId = profile?.business_id;
+      }
+      
+      if (!currentBusinessId) return;
+
+      const rawAlerts: Array<Notification & { timestamp: Date }> = [];
+
+      // 1. Fetch recent payments
+      const { data: payments, error: paymentsError } = await supabase
+        .from('payments')
+        .select(`
+          id,
+          amount,
+          payment_date,
+          transaction_id,
+          students!inner (
+            name,
+            business_id
+          )
+        `)
+        .eq('students.business_id', currentBusinessId)
+        .order('payment_date', { ascending: false })
+        .limit(10);
+
+      if (!paymentsError && payments) {
+        payments.forEach((p: any) => {
+          const pDate = p.payment_date ? new Date(p.payment_date) : new Date();
+          const formattedMonth = p.payment_date
+            ? new Date(p.payment_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+            : 'Current Month';
+          rawAlerts.push({
+            id: `pay-${p.id}`,
+            type: 'fee_payment',
+            title: 'Fee Payment Received',
+            description: `${p.students?.name || 'A student'} paid ₹${Number(p.amount).toLocaleString()} for ${formattedMonth}`,
+            timeAgo: '',
+            timestamp: pDate,
+            read: false,
+          });
+        });
+      }
+
+      // 2. Fetch today's/recent absentees
+      const { data: absentees, error: absenteesError } = await supabase
+        .from('attendance')
+        .select(`
+          id,
+          date,
+          created_at,
+          students!inner (
+            name,
+            business_id,
+            batch_name
+          )
+        `)
+        .eq('students.business_id', currentBusinessId)
+        .eq('status', 'absent')
+        .order('date', { ascending: false })
+        .limit(10);
+
+      if (!absenteesError && absentees) {
+        absentees.forEach((a: any) => {
+          const aDate = a.created_at ? new Date(a.created_at) : new Date(a.date);
+          rawAlerts.push({
+            id: `abs-${a.id}`,
+            type: 'attendance',
+            title: 'Absent Alert',
+            description: `${a.students?.name || 'A student'} (${a.students?.batch_name || 'N/A'}) was absent on ${a.date}`,
+            timeAgo: '',
+            timestamp: aDate,
+            read: false,
+          });
+        });
+      }
+
+      // 3. Fetch recently registered students
+      const { data: newStudents, error: studentError } = await supabase
+        .from('students')
+        .select('id, name, created_at, enrollment_id')
+        .eq('business_id', currentBusinessId)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      if (!studentError && newStudents) {
+        newStudents.forEach((s: any) => {
+          rawAlerts.push({
+            id: `std-${s.id}`,
+            type: 'new_student',
+            title: 'New Student Registered',
+            description: `${s.name} (${s.enrollment_id}) joined the workspace`,
+            timeAgo: '',
+            timestamp: new Date(s.created_at),
+            read: false,
+          });
+        });
+      }
+
+
+
+      // Sort by timestamp descending
+      rawAlerts.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+
+      // Load read IDs
+      const readIds = await loadReadNotifications();
+
+      // Format timeAgo and mark read state
+      const finalAlerts = rawAlerts.map(alert => ({
+        id: alert.id,
+        type: alert.type,
+        title: alert.title,
+        description: alert.description,
+        timeAgo: formatTimeAgo(alert.timestamp),
+        read: readIds.includes(alert.id),
+      }));
+
+      setNotifications(finalAlerts);
+
+      // Update badge store
+      const unread = finalAlerts.filter(n => !n.read).length;
+      useNotificationStore.getState().setAdminUnreadCount(unread);
+    } catch (e) {
+      console.warn('Failed to fetch dynamic alerts:', e);
     }
   };
 
@@ -210,15 +328,23 @@ export default function AdminNotificationsScreen() {
     }
   };
 
-  useEffect(() => {
-    fetchAdminProfile();
-    fetchDeletionRequests();
-    fetchClaimRequests();
-  }, [user, verified]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchAdminProfile();
+      fetchDeletionRequests();
+      fetchClaimRequests();
+      fetchDynamicAlerts();
+      checkPermissions();
+    }, [user, verified])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([fetchDeletionRequests(), fetchClaimRequests()]);
+    await Promise.all([
+      fetchDeletionRequests(),
+      fetchClaimRequests(),
+      fetchDynamicAlerts()
+    ]);
     setRefreshing(false);
   };
 
@@ -282,14 +408,25 @@ export default function AdminNotificationsScreen() {
     } catch (e) {}
   };
 
-  const markAsRead = (id: string) => {
-    setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    );
+  const markAsRead = async (id: string) => {
+    const updated = notifications.map((n) => (n.id === id ? { ...n, read: true } : n));
+    setNotifications(updated);
+    const readIds = await loadReadNotifications();
+    if (!readIds.includes(id)) {
+      const nextRead = [...readIds, id];
+      await saveReadNotifications(nextRead);
+    }
+    // Update store count
+    const unread = updated.filter(n => !n.read).length;
+    useNotificationStore.getState().setAdminUnreadCount(unread);
   };
 
-  const markAllRead = () => {
+  const markAllRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    const allIds = notifications.map(n => n.id);
+    await saveReadNotifications(allIds);
+    // Update store count
+    useNotificationStore.getState().setAdminUnreadCount(0);
   };
 
   const TABS: FilterTab[] = ['All', 'Unread'];
@@ -323,6 +460,20 @@ export default function AdminNotificationsScreen() {
             <Ionicons name="settings-outline" size={20} color={Colors.text.primary} />
           </TouchableOpacity>
         </View>
+
+        {/* Permissions Warning Banner */}
+        {!hasNotificationPermission && (
+          <View style={styles.permissionWarningCard}>
+            <Ionicons name="notifications-off" size={20} color="#FF9800" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.permissionWarningTitle}>Notifications Disabled</Text>
+              <Text style={styles.permissionWarningDesc}>Enable notifications in settings to get real-time workspace updates.</Text>
+            </View>
+            <TouchableOpacity style={styles.permissionWarningBtn} onPress={() => Linking.openSettings()}>
+              <Text style={styles.permissionWarningBtnText}>Enable</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Test Mode Banner */}
         {!verified && (
@@ -771,5 +922,39 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: '#FFF',
+  },
+  permissionWarningCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 152, 0, 0.08)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 152, 0, 0.25)',
+    padding: 12,
+    marginHorizontal: 20,
+    marginBottom: 16,
+    gap: 12,
+  },
+  permissionWarningTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  permissionWarningDesc: {
+    fontSize: 11,
+    color: Colors.text.secondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  permissionWarningBtn: {
+    backgroundColor: Colors.accent.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+  },
+  permissionWarningBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

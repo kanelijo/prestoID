@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
 
 let Notifications: any = null;
@@ -42,6 +43,8 @@ export async function registerForPushNotificationsAsync(userId: string): Promise
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
         lightColor: '#FF231F7C',
+        enableVibrate: true,
+        showBadge: true,
       });
     } catch (e) {
       console.warn('Failed to set notification channel:', e);
@@ -69,20 +72,53 @@ export async function registerForPushNotificationsAsync(userId: string): Promise
         projectId,
       });
       const token = tokenData.data;
+      console.log('[SUCCESS] Fetched Expo Push Token:', token);
+
+      // Get or create persistent device ID
+      let deviceId = await AsyncStorage.getItem('device_id');
+      if (!deviceId) {
+        deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + '_' + Date.now().toString(36);
+        await AsyncStorage.setItem('device_id', deviceId);
+      }
 
       // Save push token in profiles
-      const { error } = await supabase
+      const { error: profileError } = await supabase
         .from('profiles')
-        .update({ push_token: token })
+        .update({ 
+          push_token: token,
+          claimed: true
+        })
         .eq('id', userId);
 
-      if (error) {
-        console.warn('Failed to update push_token in DB:', error);
+      if (profileError) {
+        console.warn('Failed to update push_token in profiles:', profileError);
+      } else {
+        console.log('[SUCCESS] Saved push_token to database profiles for userId:', userId);
+      }
+
+      // Update device_id and is_claimed in students table where user_id matches
+      const { error: studentError } = await supabase
+        .from('students')
+        .update({
+          device_id: deviceId,
+          is_claimed: true
+        })
+        .eq('user_id', userId);
+
+      if (studentError) {
+        console.warn('Failed to update device_id and is_claimed in students:', studentError);
+      } else {
+        console.log('[SUCCESS] Saved device_id and is_claimed to database students for userId:', userId);
       }
 
       return token;
-    } catch (e) {
+    } catch (e: any) {
       console.warn('Failed to fetch Expo push token:', e);
+      console.warn(
+        '\n👉 TIP: Push notifications require Google Play Services on your device.\n' +
+        '1. If you are using a Custom Dev Build (or APK), you MUST run a clean rebuild so that your google-services.json is compiled into native code. Run: npx expo run:android --clean\n' +
+        '2. If you are using Expo Go, ensure you are testing on a physical device with active Google Play Services.'
+      );
       return null;
     }
   } else {
@@ -103,30 +139,42 @@ export async function sendPushNotification(
 ): Promise<void> {
   if (!to || to.length === 0) return;
 
-  try {
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-      },
-      body: JSON.stringify({
-        to,
-        title,
-        body,
-        data,
-        sound: 'default',
-        priority: 'high',
-        channelId: 'presto_alerts',
-        badge: badge ?? 1,
-      }),
-    });
+  // Filter out invalid/empty tokens
+  const cleanTokens = to.filter(token => token && token.startsWith('ExponentPushToken'));
+  if (cleanTokens.length === 0) return;
 
-    const resData = await response.json();
-    console.log('Expo push response:', resData);
-  } catch (error) {
-    console.error('Failed to send push notifications:', error);
-  }
+  console.log(`[Push] Sending push notifications to ${cleanTokens.length} tokens individually.`);
+
+  // Send to each token individually to avoid PUSH_TOO_MANY_EXPERIENCE_IDS error
+  // which happens if tokens from different Expo projects are mixed in the database.
+  const sendPromises = cleanTokens.map(async (token) => {
+    try {
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          to: token,
+          title,
+          body,
+          data,
+          sound: 'default',
+          priority: 'high',
+          channelId: 'presto_alerts',
+          badge: badge ?? 1,
+        }),
+      });
+
+      const resData = await response.json();
+      console.log(`Expo push response for token [${token.substring(0, 25)}...]:`, resData);
+    } catch (error) {
+      console.error(`Failed to send push notification to token [${token.substring(0, 25)}...]:`, error);
+    }
+  });
+
+  await Promise.all(sendPromises);
 }
 
 /**

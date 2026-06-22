@@ -40,8 +40,8 @@ export default function StudentTestScreen() {
       // Get student details to match batch
       const { data: student } = await supabase
         .from('students')
-        .select('batch_name, institute_id')
-        .eq('id', activeStudentId)
+        .select('id, batch_name, business_id')
+        .eq('user_id', activeStudentId)
         .single();
         
       if (!student) throw new Error("Student not found");
@@ -50,23 +50,24 @@ export default function StudentTestScreen() {
       const { data: allTests, error: testErr } = await supabase
         .from('tests')
         .select('*')
-        .eq('institute_id', student.institute_id)
+        .eq('business_id', student.business_id)
         .eq('status', 'published')
-        .order('scheduled_at', { ascending: true });
+        .order('created_at', { ascending: false });
 
       if (testErr) throw testErr;
 
-      // Filter by batch match (tests that include the student's batch, or 'All')
+      // Filter by batch match (tests that match the student's batch, or are set to null / 'All')
       const applicableTests = (allTests || []).filter((t: any) => 
-        t.target_batches.includes('All') || 
-        t.target_batches.some((b: string) => student.batch_name.startsWith(b))
+        !t.batch_name ||
+        t.batch_name === 'All' || 
+        t.batch_name === student.batch_name
       );
 
       // Get submissions to see what is already taken
       const { data: submissions, error: subErr } = await supabase
         .from('test_submissions')
         .select('*, tests(*)')
-        .eq('student_id', activeStudentId);
+        .eq('student_id', student.id);
 
       if (subErr) throw subErr;
 

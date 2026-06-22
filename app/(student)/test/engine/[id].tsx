@@ -20,10 +20,11 @@ export default function TestEngineScreen() {
   const backgroundTime = useRef<number | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [studentId, setStudentId] = useState<string | null>(null);
   const [testDetails, setTestDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
   const [currentQIndex, setCurrentQIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, number>>({});
   
   // Timer State
   const [timeLeft, setTimeLeft] = useState<number>(0); // in seconds
@@ -42,7 +43,7 @@ export default function TestEngineScreen() {
     return () => {
       subscription.remove();
     };
-  }, [id, questions.length]);
+  }, [id, questions.length, answers, timeLeft, exitLogs, studentId]);
 
   useEffect(() => {
     // Timer interval
@@ -74,8 +75,8 @@ export default function TestEngineScreen() {
       if (!verified || id === 'demo-test-id') {
         setTestDetails({ id: 'demo-test-id', title: 'MPPSC Mock Test', duration_minutes: 60 });
         setQuestions([
-          { id: 'q1', question_text: 'What was the main feature of the Indus Valley Civilization?', option_a: 'Town Planning', option_b: 'Iron usage', option_c: 'Horse chariots', option_d: 'Temple architecture', correct_option: 'A' },
-          { id: 'q2', question_text: 'Which of these was a major port city of Indus Valley?', option_a: 'Harappa', option_b: 'Lothal', option_c: 'Mohenjodaro', option_d: 'Kalibangan', correct_option: 'B' }
+          { id: 'q1', question_text: 'What was the main feature of the Indus Valley Civilization?', options: ['Town Planning', 'Iron usage', 'Horse chariots', 'Temple architecture'], correct_option: 0 },
+          { id: 'q2', question_text: 'Which of these was a major port city of Indus Valley?', options: ['Harappa', 'Lothal', 'Mohenjodaro', 'Kalibangan'], correct_option: 1 }
         ]);
         setTimeLeft(savedSession?.timeLeft || 60 * 60);
         setAnswers(savedSession?.answers || {});
@@ -84,11 +85,22 @@ export default function TestEngineScreen() {
         return;
       }
 
-      // Fetch from DB
+      // Fetch student record
+      const { data: student } = await supabase
+        .from('students')
+        .select('id')
+        .eq('user_id', activeStudentId)
+        .single();
+      
+      if (!student) throw new Error("Could not load student profile. Please verify your profile.");
+      setStudentId(student.id);
+
+      // Fetch test details
       const { data: test, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
       if (tErr) throw tErr;
 
-      const { data: qs, error: qErr } = await supabase.from('test_questions').select('*').eq('test_id', id).order('order_index');
+      // Fetch questions
+      const { data: qs, error: qErr } = await supabase.from('test_questions').select('*').eq('test_id', id).order('created_at', { ascending: true });
       if (qErr) throw qErr;
 
       setTestDetails(test);
@@ -109,7 +121,7 @@ export default function TestEngineScreen() {
     }
   };
 
-  const saveSessionProgress = async (currentAnswers: Record<string, string>, currentTimeLeft: number, currentLogs: any[]) => {
+  const saveSessionProgress = async (currentAnswers: Record<string, number>, currentTimeLeft: number, currentLogs: any[]) => {
     try {
       await AsyncStorage.setItem(`test_session_${id}`, JSON.stringify({
         answers: currentAnswers,
@@ -135,10 +147,10 @@ export default function TestEngineScreen() {
         const newLogs = [...exitLogs, newLog];
         setExitLogs(newLogs);
         
-        if (timeAway > GRACE_PERIOD_MS) {
+        if (timeAway > 20000) {
           Alert.alert(
             'Violation Detected',
-            `You left the test for ${(timeAway/1000).toFixed(1)} seconds, which exceeds the ${GRACE_PERIOD_MS/1000}s grace period. Your test is being auto-submitted.`,
+            `You left the test for ${(timeAway/1000).toFixed(1)} seconds, which exceeds the 20s grace period. Your test is being auto-submitted.`,
             [{ text: 'OK', onPress: () => submitTest('violation', newLogs) }]
           );
         } else {
@@ -157,8 +169,8 @@ export default function TestEngineScreen() {
     appState.current = nextAppState;
   };
 
-  const selectOption = (questionId: string, option: string) => {
-    const newAnswers = { ...answers, [questionId]: option };
+  const selectOption = (questionId: string, optionIndex: number) => {
+    const newAnswers = { ...answers, [questionId]: optionIndex };
     setAnswers(newAnswers);
     saveSessionProgress(newAnswers, timeLeft, exitLogs);
   };
@@ -199,10 +211,25 @@ export default function TestEngineScreen() {
         return;
       }
 
+      // Resolve student primary key
+      let currentStudentId = studentId;
+      if (!currentStudentId) {
+        const { data: student } = await supabase
+          .from('students')
+          .select('id')
+          .eq('user_id', activeStudentId)
+          .single();
+        if (student) {
+          currentStudentId = student.id;
+        }
+      }
+
+      if (!currentStudentId) throw new Error("Could not retrieve student ID");
+
       // 2. Upload to Supabase
       const { error } = await supabase.from('test_submissions').insert({
         test_id: id,
-        student_id: activeStudentId,
+        student_id: currentStudentId,
         answers,
         score: finalScore,
         total_questions: questions.length,
@@ -242,6 +269,7 @@ export default function TestEngineScreen() {
   }
 
   const currentQ = questions[currentQIndex];
+  const optLabels = ['A', 'B', 'C', 'D'];
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -270,19 +298,18 @@ export default function TestEngineScreen() {
 
         {/* Options */}
         <View style={styles.optionsList}>
-          {['A', 'B', 'C', 'D'].map(optKey => {
-            const isSelected = answers[currentQ.id] === optKey;
-            const optValue = currentQ[`option_${optKey.toLowerCase()}`];
+          {(currentQ.options || []).map((optValue: string, optIndex: number) => {
+            const isSelected = answers[currentQ.id] === optIndex;
             
             return (
               <TouchableOpacity
-                key={optKey}
+                key={optIndex}
                 style={[styles.optionRow, isSelected && styles.optionSelected]}
                 activeOpacity={0.7}
-                onPress={() => selectOption(currentQ.id, optKey)}
+                onPress={() => selectOption(currentQ.id, optIndex)}
               >
                 <View style={[styles.optionLetter, isSelected && styles.optionLetterSelected]}>
-                  <Text style={[styles.optionLetterText, isSelected && styles.optionLetterTextSelected]}>{optKey}</Text>
+                  <Text style={[styles.optionLetterText, isSelected && styles.optionLetterTextSelected]}>{optLabels[optIndex]}</Text>
                 </View>
                 <Text style={styles.optionText}>{optValue}</Text>
               </TouchableOpacity>

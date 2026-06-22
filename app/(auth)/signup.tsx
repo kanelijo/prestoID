@@ -22,7 +22,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 GoogleSignin.configure({
-  webClientId: '1025675193948-mqvpd8ibggabdk1kgar0bub55vkhbkur.apps.googleusercontent.com',
+  webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
   offlineAccess: true,
 });
 

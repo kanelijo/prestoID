@@ -14,7 +14,8 @@ export default function StudentDetailScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [student, setStudent] = useState<any>(null);
-  const [attendanceRate, setAttendanceRate] = useState(100);
+  const [attendanceRate, setAttendanceRate] = useState(0);
+  const [attendanceLogs, setAttendanceLogs] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { verified } = useAuthStore();
@@ -93,14 +94,20 @@ export default function StudentDetailScreen() {
       // Fetch attendance logs for rate
       const { data: attLogs, error: attError } = await supabase
         .from('attendance')
-        .select('status')
-        .eq('student_id', id);
+        .select('id, date, status, created_at')
+        .eq('student_id', id)
+        .order('date', { ascending: false });
 
-      if (!attError && attLogs && attLogs.length > 0) {
-        const present = attLogs.filter((a: any) => a.status === 'present').length;
-        setAttendanceRate(Math.round((present / attLogs.length) * 100));
+      if (!attError && attLogs) {
+        setAttendanceLogs(attLogs);
+        if (attLogs.length > 0) {
+          const presentOrLate = attLogs.filter((a: any) => a.status === 'present' || a.status === 'late').length;
+          setAttendanceRate(Math.round((presentOrLate / attLogs.length) * 100));
+        } else {
+          setAttendanceRate(0);
+        }
       } else {
-        setAttendanceRate(100);
+        setAttendanceRate(0);
       }
 
       // Fetch payment receipts
@@ -108,7 +115,7 @@ export default function StudentDetailScreen() {
         .from('payments')
         .select('*')
         .eq('student_id', id)
-        .order('paid_date', { ascending: false });
+        .order('payment_date', { ascending: false });
 
       if (!payError) {
         setPayments(payLogs || []);
@@ -205,6 +212,91 @@ export default function StudentDetailScreen() {
     }
   };
 
+  const handleRecordPayment = async () => {
+    const currentMonth = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    Alert.alert(
+      'Record Payment',
+      `Record fee payment of ₹${student.fee_amount} for ${student.name} for ${currentMonth}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Confirm',
+          onPress: async () => {
+            if (!verified || id.startsWith('demo-')) {
+              // Test/Demo mode
+              setPayments([
+                { id: 'demo-p_new', payment_date: new Date().toISOString(), status: 'success', amount: student.fee_amount },
+                ...payments
+              ]);
+              setStudent({ ...student, fee_status: 'paid' });
+              Alert.alert('Success (Test Mode)', 'Payment recorded successfully.');
+              return;
+            }
+
+            setIsLoading(true);
+            try {
+              // 1. Insert row into payments
+              const transactionId = `TXN-${Date.now().toString().slice(-6).toUpperCase()}`;
+              const { data: newPayment, error: insertError } = await supabase
+                .from('payments')
+                .insert({
+                  student_id: id,
+                  business_id: student.business_id,
+                  amount: student.fee_amount,
+                  status: 'success',
+                  transaction_id: transactionId,
+                  payment_date: new Date().toISOString()
+                })
+                .select()
+                .single();
+
+              if (insertError) throw insertError;
+
+              // 2. Update student fee status to paid
+              const { error: updateError } = await supabase
+                .from('students')
+                .update({ fee_status: 'paid' })
+                .eq('id', id);
+
+              if (updateError) throw updateError;
+
+              // Update local state
+              setStudent({ ...student, fee_status: 'paid' });
+              
+              // Refresh payment logs
+              await loadStudentData();
+
+              Alert.alert('Success', 'Payment recorded successfully.');
+
+              // 3. Send Push Notification to student
+              const targetUserId = student.user_id;
+              if (targetUserId) {
+                const { data: profile, error: profileError } = await supabase
+                  .from('profiles')
+                  .select('push_token')
+                  .eq('id', targetUserId)
+                  .single();
+
+                if (!profileError && profile && profile.push_token) {
+                  await sendPushNotification(
+                    [profile.push_token],
+                    'Fee Payment Received',
+                    `Your payment of ₹${Number(student.fee_amount).toLocaleString()} for ${currentMonth} has been verified. Transaction ID: ${transactionId}`,
+                    { screen: 'fees' }
+                  );
+                }
+              }
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to record payment.');
+            } finally {
+              setIsLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const handleShareCredentials = () => {
     const phone = student?.phone || student?.parent_phone;
     const finalInviteCode = inviteCode || 'Not Set';
@@ -277,12 +369,14 @@ export default function StudentDetailScreen() {
             }
             setIsLoading(true);
             try {
-              const { error } = await supabase
-                .from('profiles')
+              // Reset device_id in students
+              const { error: studentError } = await supabase
+                .from('students')
                 .update({ device_id: null })
-                .eq('id', student.user_id || student.id);
+                .eq('id', student.id);
 
-              if (error) throw error;
+              if (studentError) throw studentError;
+
               Alert.alert('Reset', 'Device lock reset successfully.');
             } catch (err: any) {
               Alert.alert('Error', err.message || 'Failed to reset device lock.');
@@ -596,27 +690,33 @@ export default function StudentDetailScreen() {
           <View style={styles.feeHistoryDivider} />
 
           {payments && payments.length > 0 ? (
-            payments.map((item, index) => (
-              <View
-                key={item.id || item.month}
-                style={[
-                  styles.feeHistoryRow,
-                  index === payments.length - 1 && { borderBottomWidth: 0 },
-                ]}
-              >
-                <Text style={styles.feeHistoryMonth}>{item.month}</Text>
-                <View style={[styles.feeHistoryBadge, { backgroundColor: getFeeStatusColor(item.status) + '15' }]}>
-                  <Ionicons
-                    name={item.status === 'paid' ? 'checkmark-circle' : 'close-circle'}
-                    size={14}
-                    color={getFeeStatusColor(item.status)}
-                  />
-                  <Text style={[styles.feeHistoryStatus, { color: getFeeStatusColor(item.status) }]}>
-                    {item.status === 'paid' ? 'Paid' : 'Unpaid'}
-                  </Text>
+            payments.map((item, index) => {
+              const formattedMonth = item.payment_date
+                ? new Date(item.payment_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                : (item.month || 'Current Month');
+              const isPaid = item.status === 'success' || item.status === 'paid';
+              return (
+                <View
+                  key={item.id || index}
+                  style={[
+                    styles.feeHistoryRow,
+                    index === payments.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <Text style={styles.feeHistoryMonth}>{formattedMonth}</Text>
+                  <View style={[styles.feeHistoryBadge, { backgroundColor: getFeeStatusColor(isPaid ? 'paid' : 'unpaid') + '15' }]}>
+                    <Ionicons
+                      name={isPaid ? 'checkmark-circle' : 'close-circle'}
+                      size={14}
+                      color={getFeeStatusColor(isPaid ? 'paid' : 'unpaid')}
+                    />
+                    <Text style={[styles.feeHistoryStatus, { color: getFeeStatusColor(isPaid ? 'paid' : 'unpaid') }]}>
+                      {isPaid ? 'Paid' : 'Unpaid'}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            ))
+              );
+            })
           ) : (
             <View style={{ paddingVertical: 12, alignItems: 'center' }}>
               <Text style={{ fontSize: 13, color: Colors.text.tertiary, fontWeight: '500' }}>
@@ -625,14 +725,25 @@ export default function StudentDetailScreen() {
             </View>
           )}
 
+          {student.fee_status !== 'paid' && (
             <TouchableOpacity
-              style={styles.reminderButton}
+              style={[styles.reminderButton, { backgroundColor: Colors.status.success, marginBottom: 10 }]}
               activeOpacity={0.8}
-              onPress={handleSendReminder}
+              onPress={handleRecordPayment}
             >
-              <Ionicons name="notifications-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.reminderButtonText}>Send Fee Reminder</Text>
+              <Ionicons name="cash-outline" size={18} color="#FFFFFF" />
+              <Text style={styles.reminderButtonText}>Record Fee Payment</Text>
             </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.reminderButton}
+            activeOpacity={0.8}
+            onPress={handleSendReminder}
+          >
+            <Ionicons name="notifications-outline" size={18} color="#FFFFFF" />
+            <Text style={styles.reminderButtonText}>Send Fee Reminder</Text>
+          </TouchableOpacity>
           </View>
         </View>
         )}
@@ -643,8 +754,61 @@ export default function StudentDetailScreen() {
               <Ionicons name="calendar-outline" size={18} color={Colors.accent.primary} />
               <Text style={styles.sectionTitle}>Attendance Records</Text>
             </View>
-            <View style={{ paddingVertical: 12, alignItems: 'center' }}>
-              <Text style={{ fontSize: 13, color: Colors.text.tertiary, fontWeight: '500' }}>Attendance log will appear here.</Text>
+            <View style={{ paddingVertical: 8 }}>
+              {attendanceLogs && attendanceLogs.length > 0 ? (
+                attendanceLogs.map((log: any, index: number) => {
+                  const dateStr = log.date 
+                    ? new Date(log.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                    : 'N/A';
+                  const timeStr = log.created_at
+                    ? new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+                    : '';
+                  const isPresent = log.status === 'present';
+                  const isLate = log.status === 'late';
+                  const isAbsent = log.status === 'absent';
+                  
+                  let statusColor = Colors.status.success;
+                  let statusText = 'Present';
+                  if (isLate) {
+                    statusColor = Colors.status.warning;
+                    statusText = 'Late';
+                  } else if (isAbsent) {
+                    statusColor = Colors.status.danger;
+                    statusText = 'Absent';
+                  }
+                  
+                  return (
+                    <View 
+                      key={log.id || index} 
+                      style={[
+                        styles.feeHistoryRow,
+                        index === attendanceLogs.length - 1 && { borderBottomWidth: 0 }
+                      ]}
+                    >
+                      <View>
+                        <Text style={styles.feeHistoryMonth}>{dateStr}</Text>
+                        {timeStr ? <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>Check-in: {timeStr}</Text> : null}
+                      </View>
+                      <View style={[styles.feeHistoryBadge, { backgroundColor: statusColor + '15' }]}>
+                        <Ionicons 
+                          name={isPresent ? 'checkmark-circle' : isLate ? 'time' : 'close-circle'} 
+                          size={14} 
+                          color={statusColor} 
+                        />
+                        <Text style={[styles.feeHistoryStatus, { color: statusColor }]}>
+                          {statusText}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 13, color: Colors.text.tertiary, fontWeight: '500' }}>
+                    No check-in records found
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
         )}

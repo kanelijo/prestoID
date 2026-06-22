@@ -17,9 +17,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Shadows } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { supabase } from '@/lib/supabase';
+import { supabase, signOutAll } from '@/lib/supabase';
 
 const HELP_TOPICS = [
   { q: 'How is attendance marked?', a: 'Your attendance is registered instantly when your virtual ID Card QR code is scanned by your organization staff.' },
@@ -35,6 +36,11 @@ export default function StudentSettingsScreen() {
   const [studentDetails, setStudentDetails] = useState<any>(null);
   const [completeness, setCompleteness] = useState({ percentage: 0, missing: [] as string[], filled: [] as string[] });
 
+  // Dynamic DB states
+  const [attendanceLogs, setAttendanceLogs] = useState<any[]>([]);
+  const [attendanceRate, setAttendanceRate] = useState(0);
+  const [payments, setPayments] = useState<any[]>([]);
+
   // Modal visibility states
   const [isChangePasswordVisible, setIsChangePasswordVisible] = useState(false);
   const [isTermsVisible, setIsTermsVisible] = useState(false);
@@ -43,6 +49,39 @@ export default function StudentSettingsScreen() {
   // Settings switches
   const [attendanceAlerts, setAttendanceAlerts] = useState(true);
   const [feeReminders, setFeeReminders] = useState(true);
+
+  // Load settings on mount
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const attVal = await AsyncStorage.getItem('@presto_student_settings_attendance_alerts');
+        const feeVal = await AsyncStorage.getItem('@presto_student_settings_fee_reminders');
+        if (attVal !== null) setAttendanceAlerts(attVal === 'true');
+        if (feeVal !== null) setFeeReminders(feeVal === 'true');
+      } catch (e) {
+        console.warn('Failed to load settings from storage:', e);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  const handleToggleAttendanceAlerts = async (value: boolean) => {
+    setAttendanceAlerts(value);
+    try {
+      await AsyncStorage.setItem('@presto_student_settings_attendance_alerts', String(value));
+    } catch (e) {
+      console.warn('Failed to save settings:', e);
+    }
+  };
+
+  const handleToggleFeeReminders = async (value: boolean) => {
+    setFeeReminders(value);
+    try {
+      await AsyncStorage.setItem('@presto_student_settings_fee_reminders', String(value));
+    } catch (e) {
+      console.warn('Failed to save settings:', e);
+    }
+  };
   const [expandedHelpIndex, setExpandedHelpIndex] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'profile' | 'attendance' | 'fees'>('profile');
 
@@ -96,6 +135,36 @@ export default function StudentSettingsScreen() {
           missing,
           filled
         });
+
+        // Fetch attendance logs & calculate rate
+        const { data: attLogs, error: attError } = await supabase
+          .from('attendance')
+          .select('id, date, status, created_at')
+          .eq('student_id', data.id)
+          .order('date', { ascending: false });
+
+        if (!attError && attLogs) {
+          setAttendanceLogs(attLogs);
+          if (attLogs.length > 0) {
+            const presentOrLate = attLogs.filter((a: any) => a.status === 'present' || a.status === 'late').length;
+            setAttendanceRate(Math.round((presentOrLate / attLogs.length) * 100));
+          } else {
+            setAttendanceRate(0);
+          }
+        } else {
+          setAttendanceRate(0);
+        }
+
+        // Fetch payments history
+        const { data: payLogs, error: payError } = await supabase
+          .from('payments')
+          .select('*')
+          .eq('student_id', data.id)
+          .order('payment_date', { ascending: false });
+
+        if (!payError && payLogs) {
+          setPayments(payLogs);
+        }
       } else {
         setStudentName(user.user_metadata?.name || 'Student User');
       }
@@ -165,7 +234,7 @@ export default function StudentSettingsScreen() {
           onPress: async () => {
             setIsLoading(true);
             try {
-              await supabase.auth.signOut();
+              await signOutAll();
               reset();
               router.replace('/(auth)/login');
             } catch (err) {
@@ -231,8 +300,7 @@ export default function StudentSettingsScreen() {
       }
 
       // Log out
-      await supabase.auth.signOut();
-      reset();
+      await signOutAll();
       Alert.alert(
         'Request Sent Successfully',
         'Your deletion request is now pending admin approval. You have been logged out. If you wish to recover your account, log in again within 7 days.',
@@ -337,7 +405,7 @@ export default function StudentSettingsScreen() {
               </View>
               <Switch
                 value={attendanceAlerts}
-                onValueChange={setAttendanceAlerts}
+                onValueChange={handleToggleAttendanceAlerts}
                 trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
                 thumbColor={attendanceAlerts ? Colors.accent.primary : Colors.text.tertiary}
               />
@@ -350,7 +418,7 @@ export default function StudentSettingsScreen() {
               </View>
               <Switch
                 value={feeReminders}
-                onValueChange={setFeeReminders}
+                onValueChange={handleToggleFeeReminders}
                 trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
                 thumbColor={feeReminders ? Colors.accent.primary : Colors.text.tertiary}
               />
@@ -404,8 +472,78 @@ export default function StudentSettingsScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Attendance Overview</Text>
             <View style={styles.card}>
-               <Text style={styles.settingLabel}>Your attendance records will appear here.</Text>
-               <Text style={styles.settingDesc}>Scan your ID Card QR code at your organization to mark your presence.</Text>
+              <View style={styles.feeHeaderRow}>
+                <View>
+                  <Text style={styles.feeLabel}>Attendance Rate</Text>
+                  <Text style={[styles.feeAmount, { color: attendanceRate >= 75 ? Colors.status.success : Colors.status.danger }]}>
+                    {attendanceRate}%
+                  </Text>
+                </View>
+                <View style={[styles.feeStatusBadge, { backgroundColor: (attendanceRate >= 75 ? Colors.status.success : Colors.status.danger) + '15' }]}>
+                  <Text style={[styles.feeStatusText, { color: attendanceRate >= 75 ? Colors.status.success : Colors.status.danger }]}>
+                    {attendanceRate >= 75 ? 'GOOD' : 'LOW'}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Total Classes Logged</Text>
+                  <Text style={styles.settingDesc}>{attendanceLogs.length} days</Text>
+                </View>
+              </View>
+            </View>
+
+            <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Attendance Logs</Text>
+            <View style={styles.card}>
+              {attendanceLogs && attendanceLogs.length > 0 ? (
+                attendanceLogs.map((log: any, index: number) => {
+                  const dateStr = log.date 
+                    ? new Date(log.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                    : 'N/A';
+                  const timeStr = log.created_at
+                    ? new Date(log.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+                    : '';
+                  const isPresent = log.status === 'present';
+                  const isLate = log.status === 'late';
+                  const isAbsent = log.status === 'absent';
+                  
+                  let statusColor = Colors.status.success;
+                  let statusText = 'Present';
+                  if (isLate) {
+                    statusColor = Colors.status.warning;
+                    statusText = 'Late';
+                  } else if (isAbsent) {
+                    statusColor = Colors.status.danger;
+                    statusText = 'Absent';
+                  }
+                  
+                  return (
+                    <View 
+                      key={log.id || index} 
+                      style={[
+                        styles.settingRow,
+                        { paddingVertical: 12, borderBottomWidth: index === attendanceLogs.length - 1 ? 0 : 1, borderBottomColor: Colors.card.border }
+                      ]}
+                    >
+                      <View style={styles.settingInfo}>
+                        <Text style={styles.settingLabel}>{dateStr}</Text>
+                        {timeStr ? <Text style={styles.settingDesc}>Check-in: {timeStr}</Text> : null}
+                      </View>
+                      <View style={[styles.feeStatusBadge, { backgroundColor: statusColor + '15' }]}>
+                        <Text style={[styles.feeStatusText, { color: statusColor, fontSize: 11 }]}>
+                          {statusText.toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                  <Text style={styles.settingLabel}>No check-in records found</Text>
+                  <Text style={styles.settingDesc}>Scan your ID Card QR code at your organization to mark presence.</Text>
+                </View>
+              )}
             </View>
           </View>
         )}
@@ -439,8 +577,43 @@ export default function StudentSettingsScreen() {
 
             <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Fee History</Text>
             <View style={styles.card}>
-               <Text style={styles.settingLabel}>Fees are collected by your organization.</Text>
-               <Text style={styles.settingDesc}>Contact your admin for payment methods, receipts, or fee-related queries.</Text>
+              {payments && payments.length > 0 ? (
+                payments.map((item: any, index: number) => {
+                  const formattedMonth = item.payment_date
+                    ? new Date(item.payment_date).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+                    : (item.month || 'Current Month');
+                  const dateStr = item.payment_date
+                    ? new Date(item.payment_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+                    : 'N/A';
+                  const isSuccess = item.status === 'success' || item.status === 'paid';
+                  
+                  return (
+                    <View 
+                      key={item.id || index} 
+                      style={[
+                        styles.settingRow,
+                        { paddingVertical: 12, borderBottomWidth: index === payments.length - 1 ? 0 : 1, borderBottomColor: Colors.card.border }
+                      ]}
+                    >
+                      <View style={styles.settingInfo}>
+                        <Text style={styles.settingLabel}>{formattedMonth}</Text>
+                        <Text style={styles.settingDesc}>Amount: ₹{Number(item.amount || 0).toLocaleString()} • Paid on: {dateStr}</Text>
+                        {item.transaction_id ? <Text style={[styles.settingDesc, { fontSize: 10 }]}>Txn ID: {item.transaction_id}</Text> : null}
+                      </View>
+                      <View style={[styles.feeStatusBadge, { backgroundColor: (isSuccess ? Colors.status.success : Colors.status.danger) + '15' }]}>
+                        <Text style={[styles.feeStatusText, { color: isSuccess ? Colors.status.success : Colors.status.danger, fontSize: 11 }]}>
+                          {isSuccess ? 'PAID' : 'FAILED'}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              ) : (
+                <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                  <Text style={styles.settingLabel}>No payments recorded yet</Text>
+                  <Text style={styles.settingDesc}>All verified receipts will appear in this list.</Text>
+                </View>
+              )}
             </View>
           </View>
         )}

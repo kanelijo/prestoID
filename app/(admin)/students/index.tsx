@@ -20,6 +20,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 import { useOfflineQueue } from '@/stores/useOfflineQueue';
 import { registerForPushNotificationsAsync, sendPushNotification } from '@/lib/notifications';
 
@@ -46,10 +47,11 @@ export default function StudentsListScreen() {
   const [stats, setStats] = useState({ totalStudents: 0, presentToday: 0, feeCollected: '₹0' });
   const [isLoading, setIsLoading] = useState(true);
   const [adminName, setAdminName] = useState('Admin');
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
-  const [isSendingReminders, setIsSendingReminders] = useState(false);
   const { user, verified, businessId, businessName } = useAuthStore();
-  const { attendanceQueue, addAttendance, syncAttendance, loadQueue } = useOfflineQueue();
+  const { adminUnreadCount } = useNotificationStore();
+  const logoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const [isSendingReminders, setIsSendingReminders] = useState(false);
+  const { attendanceQueue, addAttendance, syncAttendance, loadQueue, clearQueue } = useOfflineQueue();
 
   // Scanner states
   const [permission, requestPermission] = useCameraPermissions();
@@ -109,12 +111,22 @@ export default function StudentsListScreen() {
         .eq('status', 'present');
 
       // 3. Fetch monthly collections
-      const currentMonth = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-      const { data: payments, error: paymentsError } = await supabase
+      const now = new Date();
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+      
+      let paymentsQuery = supabase
         .from('payments')
         .select('amount')
-        .eq('month', currentMonth)
-        .eq('status', 'paid');
+        .eq('status', 'success')
+        .gte('payment_date', firstDay.toISOString())
+        .lte('payment_date', lastDay.toISOString());
+
+      if (businessId) {
+        paymentsQuery = paymentsQuery.eq('business_id', businessId);
+      }
+      
+      const { data: payments, error: paymentsError } = await paymentsQuery;
 
       const sumCollected = (payments || []).reduce((sum, p) => sum + Number(p.amount), 0);
       let feeCollectedStr = '₹0';
@@ -182,32 +194,127 @@ export default function StudentsListScreen() {
     setIsScannerVisible(true);
   };
 
+  const sendStudentAttendanceNotification = async (studentId: string, timestamp: string) => {
+    try {
+      const { data: studentData } = await supabase
+        .from('students')
+        .select('name, user_id')
+        .eq('id', studentId)
+        .maybeSingle();
+
+      if (studentData && studentData.user_id) {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('push_token')
+          .eq('id', studentData.user_id)
+          .maybeSingle();
+
+        if (profileData && profileData.push_token) {
+          const scanTime = new Date(timestamp).toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          await sendPushNotification(
+            [profileData.push_token],
+            'Attendance Marked',
+            `Hi ${studentData.name}, your attendance was marked PRESENT today at ${scanTime}.`,
+            { screen: 'id-card' }
+          );
+        }
+      }
+    } catch (pushErr) {
+      console.warn('Failed to send attendance push notification:', pushErr);
+    }
+  };
+
   const handleBarcodeScanned = async ({ data }: { data: string }) => {
     if (scanned) return;
     setScanned(true);
     setIsScannerVisible(false);
 
-    try {
-      let studentIdOrEnrollment = data;
-      if (data.startsWith('KF-')) {
-        // KF-studentId-enrollmentId
-        const parts = data.split('-');
-        studentIdOrEnrollment = parts[1]; // student ID (UUID)
-      }
+    let studentIdOrEnrollment = data;
+    if (data.startsWith('KF-')) {
+      // KF-studentId-enrollmentId (UUID is 36 characters, starting at index 3)
+      studentIdOrEnrollment = data.substring(3, 39);
+    }
 
-      // Try Offline Mode First (Queue it locally)
+    // 1. Check if we are in Test Mode (Sandbox)
+    if (!verified) {
+      const matchedDemo = DEMO_STUDENTS.find(
+        (s) => s.id === studentIdOrEnrollment || s.enrollment_id === studentIdOrEnrollment
+      );
+
+      if (matchedDemo) {
+        Alert.alert(
+          'Attendance Marked (Test Mode)',
+          `Hi ${matchedDemo.name}, your attendance was marked PRESENT today.`
+        );
+        // Optimistically increment present count
+        setStats(prev => ({
+          ...prev,
+          presentToday: Math.min(prev.presentToday + 1, DEMO_STUDENTS.length)
+        }));
+      } else {
+        Alert.alert('Scan Result (Test Mode)', `Scanned ID: ${studentIdOrEnrollment} (No matching demo student found)`);
+      }
+      return;
+    }
+
+    // 2. Production Mode (Verified)
+    // If the student list is loaded, validate that this student is registered here
+    if (students && students.length > 0) {
+      const matchedStudent = students.find(
+        (s) => s.id === studentIdOrEnrollment || s.enrollment_id === studentIdOrEnrollment
+      );
+      if (!matchedStudent) {
+        Alert.alert('Invalid Card', 'This QR code does not match any registered student in this coaching center.');
+        return;
+      }
+      // Use the verified UUID for insertion/queuing
+      studentIdOrEnrollment = matchedStudent.id;
+    }
+
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timestamp = now.toISOString();
+
+    try {
+      // Try to record attendance directly online first
+      const { error: onlineError } = await supabase
+        .from('attendance')
+        .insert({
+          student_id: studentIdOrEnrollment,
+          business_id: businessId,
+          date: dateStr,
+          status: 'present',
+          created_at: timestamp,
+        });
+
+      if (!onlineError) {
+        Alert.alert('Attendance Marked', 'Attendance marked successfully!');
+        // Trigger push notification to student in the background
+        sendStudentAttendanceNotification(studentIdOrEnrollment, timestamp);
+      } else {
+        // Handle specific error codes if any
+        if (onlineError.code === '23505') {
+          Alert.alert('Already Scanned', 'This student is already marked present for today.');
+        } else {
+          // Fall back to offline queue on any database write failure (e.g. network timeout/offline)
+          console.warn('Online insert failed, falling back to offline queue:', onlineError);
+          await addAttendance(studentIdOrEnrollment, studentIdOrEnrollment);
+          Alert.alert('Offline Mode', 'Attendance saved to offline queue. Will sync automatically.');
+        }
+      }
+    } catch (err: any) {
+      console.warn('Network or unexpected error, falling back to offline queue:', err);
       try {
         await addAttendance(studentIdOrEnrollment, studentIdOrEnrollment);
-        Alert.alert('Attendance Logged', 'Saved to offline queue. Will sync automatically.');
-      } catch (err: any) {
-        Alert.alert('Scan Result', err.message);
+        Alert.alert('Offline Mode', 'Attendance saved to offline queue. Will sync automatically.');
+      } catch (queueErr: any) {
+        Alert.alert('Scan Result', queueErr.message);
       }
-      
-      // Optionally update stats optimistically, or let the sync handle it
+    } finally {
       fetchStudentsAndStats();
-      
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to record attendance.');
     }
   };
 
@@ -399,9 +506,13 @@ export default function StudentsListScreen() {
           })
         }
       >
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
-        </View>
+        {item.photo_url ? (
+          <Image source={{ uri: item.photo_url }} style={styles.studentAvatarImage} />
+        ) : (
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
+          </View>
+        )}
         <View style={styles.studentInfo}>
           <Text style={styles.studentName}>{item.name}</Text>
           <Text style={styles.studentMeta}>
@@ -432,16 +543,7 @@ export default function StudentsListScreen() {
           )}
         </TouchableOpacity>
         <Text style={styles.headerTitle}>PrestoID</Text>
-        <TouchableOpacity style={styles.bellButton} onPress={() => router.push('/(admin)/notifications')}>
-          <Ionicons
-            name="notifications-outline"
-            size={22}
-            color={Colors.text.primary}
-          />
-          <View style={styles.bellBadge}>
-            <Text style={styles.bellBadgeText}>3</Text>
-          </View>
-        </TouchableOpacity>
+        <View style={{ width: 38 }} />
       </View>
 
       {/* Test Mode Banner */}
@@ -522,10 +624,63 @@ export default function StudentsListScreen() {
           <Text style={styles.scanSubtitle}>Quick attendance marking (Offline Supported)</Text>
         </View>
         {attendanceQueue.length > 0 && (
-          <View style={styles.offlineBadge}>
+          <TouchableOpacity 
+            style={styles.offlineBadge}
+            activeOpacity={0.8}
+            onPress={(e) => {
+              e.stopPropagation();
+              Alert.alert(
+                'Offline Attendance Queue',
+                `You have ${attendanceQueue.length} unsynced attendance record(s).`,
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Clear Queue',
+                    style: 'destructive',
+                    onPress: () => {
+                      Alert.alert(
+                        'Clear Queue',
+                        'Are you sure you want to clear all records from the offline queue? These records will NOT be synced.',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          {
+                            text: 'Clear Now',
+                            style: 'destructive',
+                            onPress: async () => {
+                              await clearQueue();
+                              Alert.alert('Queue Cleared', 'The offline queue has been cleared.');
+                            }
+                          }
+                        ]
+                      );
+                    }
+                  },
+                  {
+                    text: 'Sync Now',
+                    onPress: async () => {
+                      const res = await syncAttendance();
+                      if (res) {
+                        if (res.failed > 0) {
+                          Alert.alert(
+                            'Sync Complete',
+                            `Successfully synced ${res.success} record(s).\n\n${res.failed} record(s) failed to sync (possibly due to invalid or duplicate attendance records). You can clear the queue if they keep failing.`
+                          );
+                        } else {
+                          Alert.alert('Sync Success', `Successfully synced all ${res.success} record(s)!`);
+                        }
+                      } else {
+                        Alert.alert('Sync Result', 'No records to sync or synchronization already in progress.');
+                      }
+                      fetchStudentsAndStats();
+                    }
+                  }
+                ]
+              );
+            }}
+          >
             <Ionicons name="cloud-offline-outline" size={14} color={Colors.accent.primary} />
             <Text style={styles.offlineBadgeText}>{attendanceQueue.length}</Text>
-          </View>
+          </TouchableOpacity>
         )}
       </TouchableOpacity>
 
@@ -981,6 +1136,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.stitch.primaryFixed,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  studentAvatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
   },
   avatarText: {
     fontSize: 15,

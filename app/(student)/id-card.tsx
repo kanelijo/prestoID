@@ -14,7 +14,7 @@ import {
   KeyboardAvoidingView, 
   Platform 
 } from 'react-native';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,8 +25,9 @@ import QRCode from 'react-native-qrcode-svg';
 import { Colors, Shadows, Gradients } from '@/constants/colors';
 import { APP_CONFIG } from '@/constants/config';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { supabase } from '@/lib/supabase';
-import { useRouter } from 'expo-router';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { supabase, signOutAll } from '@/lib/supabase';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { registerForPushNotificationsAsync } from '@/lib/notifications';
 
 const { width } = Dimensions.get('window');
@@ -37,13 +38,23 @@ export default function StudentStudentIDCardScreen() {
   const [studentData, setStudentData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
-  const { user, session } = useAuthStore();
+  const { user, session, businessName } = useAuthStore();
+  const { studentCommunityUnreadCount } = useNotificationStore();
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
+
+  useFocusEffect(
+    useCallback(() => {
+      if (user?.id) {
+        useNotificationStore.getState().fetchStudentUnreadCounts(user.id);
+      }
+    }, [user])
+  );
 
   // Claim Profile Form States
   const [claimVerificationMode, setClaimVerificationMode] = useState<'aadhaar' | 'secret_code'>('secret_code');
   const [inviteCodeInput, setInviteCodeInput] = useState('');
   const [claimVerificationInput, setClaimVerificationInput] = useState('');
+  const [hasShownCongrats, setHasShownCongrats] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
 
   // Profile Edit Form States
@@ -135,8 +146,14 @@ export default function StudentStudentIDCardScreen() {
       .channel('student_updates')
       .on(
         'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'students', filter: `user_id=eq.${user.id}` },
+        {
+          event: '*',
+          schema: 'public',
+          table: 'students',
+          filter: `user_id=eq.${user.id}`,
+        },
         (payload) => {
+          console.log('Realtime student changes received:', payload);
           setStudentData(payload.new);
         }
       )
@@ -147,7 +164,37 @@ export default function StudentStudentIDCardScreen() {
     };
   }, [user]);
 
-
+  // Congratulation popup and forceful profile completion trigger
+  useEffect(() => {
+    if (studentData) {
+      const isComplete = !!(
+        studentData.photo_url &&
+        !studentData.photo_url.includes('placeholder') &&
+        studentData.dob &&
+        studentData.dob.trim() !== '' &&
+        studentData.address &&
+        studentData.address.trim() !== ''
+      );
+      if (!isComplete) {
+        if (!hasShownCongrats) {
+          setHasShownCongrats(true);
+          Alert.alert(
+            'Congratulations! 🎉',
+            'Your student profile has been claimed successfully!\n\nTo activate your Virtual ID Card, please complete your profile by providing your photo, date of birth, and home address.',
+            [
+              {
+                text: 'Complete Profile Now',
+                onPress: () => setIsProfileModalVisible(true),
+              },
+            ],
+            { cancelable: false }
+          );
+        } else {
+          setIsProfileModalVisible(true);
+        }
+      }
+    }
+  }, [studentData]);
 
   // Load state when Modal opens
   useEffect(() => {
@@ -166,12 +213,12 @@ export default function StudentStudentIDCardScreen() {
 
   // Fallback if no student data exists yet
   const activeStudent = studentData || {
-    name: user?.user_metadata?.name || 'Student User',
+    name: 'Student User',
     father_name: '',
     batch_name: 'Other',
     course: 'General',
     enrollment_id: 'UCI-PENDING',
-    phone: user?.user_metadata?.phone || '',
+    phone: '',
     id: user?.id,
     fee_amount: 2500,
     fee_status: 'unpaid',
@@ -209,6 +256,15 @@ export default function StudentStudentIDCardScreen() {
 
   const completionPercentage = calculateCompletion(activeStudent);
 
+  const isProfileComplete = !!(
+    activeStudent.photo_url &&
+    !activeStudent.photo_url.includes('placeholder') &&
+    activeStudent.dob &&
+    activeStudent.dob.trim() !== '' &&
+    activeStudent.address &&
+    activeStudent.address.trim() !== ''
+  );
+
   const cardData = {
     studentName: activeStudent.name,
     fatherName: activeStudent.father_name || 'Not Set',
@@ -216,7 +272,7 @@ export default function StudentStudentIDCardScreen() {
     course: activeStudent.course || 'General',
     enrollmentId: activeStudent.enrollment_id,
     phone: activeStudent.phone || 'Not Set',
-    coachingName: 'BUSINESS CENTER',
+    coachingName: businessName || 'PrestoID Coaching',
     qrValue: `KF-${activeStudent.id}-${activeStudent.enrollment_id}`,
     feeAmount: Number(activeStudent.fee_amount || 0),
     feeStatus: (activeStudent.fee_status || 'unpaid') as 'paid' | 'unpaid' | 'overdue',
@@ -335,8 +391,12 @@ export default function StudentStudentIDCardScreen() {
   };
 
   const handleSaveProfile = async () => {
-    if (!editName.trim() || !editPhone.trim() || !editParentPhone.trim() || !editAadhaar.trim()) {
-      Alert.alert('Error', 'Name, Phone, Parent Phone, and Aadhaar Number are required.');
+    if (!editName.trim() || !editPhone.trim() || !editParentPhone.trim() || !editAadhaar.trim() || !editDob.trim() || !editAddress.trim()) {
+      Alert.alert('Error', 'Name, Date of Birth, Phone, Parent Phone, Aadhaar, and Address are required.');
+      return;
+    }
+    if (!studentData?.photo_url || studentData.photo_url.includes('placeholder')) {
+      Alert.alert('Photo Required', 'Please upload or capture your profile photo before saving.');
       return;
     }
     if (editPhone.trim().length !== 10 || isNaN(Number(editPhone)) || editParentPhone.trim().length !== 10 || isNaN(Number(editParentPhone))) {
@@ -543,7 +603,7 @@ export default function StudentStudentIDCardScreen() {
               style={styles.bellButton} 
               activeOpacity={0.7}
               onPress={async () => {
-                await supabase.auth.signOut();
+                await signOutAll();
                 router.replace('/(auth)/login');
               }}
             >
@@ -683,13 +743,7 @@ export default function StudentStudentIDCardScreen() {
             )}
           </TouchableOpacity>
           <Text style={styles.headerTitle}>PrestoID</Text>
-          <TouchableOpacity 
-            style={styles.bellButton} 
-            activeOpacity={0.7}
-            onPress={() => router.push('/(student)/notifications')}
-          >
-            <Ionicons name="notifications-outline" size={24} color={Colors.text.primary} />
-          </TouchableOpacity>
+          <View style={{ width: 42 }} />
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -842,9 +896,13 @@ export default function StudentStudentIDCardScreen() {
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           >
             <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setIsProfileModalVisible(false)} style={styles.modalCloseButton}>
-                <Ionicons name="close-outline" size={28} color={Colors.text.primary} />
-              </TouchableOpacity>
+              {isProfileComplete ? (
+                <TouchableOpacity onPress={() => setIsProfileModalVisible(false)} style={styles.modalCloseButton}>
+                  <Ionicons name="close-outline" size={28} color={Colors.text.primary} />
+                </TouchableOpacity>
+              ) : (
+                <View style={{ width: 40 }} />
+              )}
               <Text style={styles.modalHeaderTitle}>My Profile</Text>
               <TouchableOpacity onPress={handleSaveProfile} style={styles.modalSaveButton} disabled={isSavingProfile}>
                 {isSavingProfile ? (
@@ -1861,5 +1919,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: Colors.text.secondary,
     fontWeight: '500',
+  },
+  bellBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: Colors.status.danger,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  bellBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#FFF',
   },
 });

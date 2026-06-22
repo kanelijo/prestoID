@@ -13,6 +13,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -21,14 +22,14 @@ import { Colors, Shadows } from '@/constants/colors';
 import { APP_CONFIG } from '@/constants/config';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { supabase } from '@/lib/supabase';
+import { supabase, signOutAll } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 const ACCOUNT_ITEMS: { label: string; icon: keyof typeof Ionicons.glyphMap; action?: string }[] = [
   { label: 'Change Password', icon: 'lock-closed-outline', action: 'change_password' },
-  { label: 'Help & Support', icon: 'help-circle-outline' },
-  { label: 'Terms & Privacy', icon: 'document-text-outline' },
-  { label: 'About PrestoID', icon: 'information-circle-outline' },
+  { label: 'Help & Support', icon: 'help-circle-outline', action: 'help_support' },
+  { label: 'Terms & Privacy', icon: 'document-text-outline', action: 'terms_privacy' },
+  { label: 'About PrestoID', icon: 'information-circle-outline', action: 'about_prestoid' },
 ];
 
 export default function AdminProfileScreen() {
@@ -122,7 +123,6 @@ export default function AdminProfileScreen() {
         setBusinessName(inst.business_name);
         setBusinessCode(inst.organization_id);
         setLocation('Indore, Madhya Pradesh');
-        setPhotoUrl(null);
       } else {
         // Fallback to profile table if no institute exists yet
         const { data: profile } = await supabase
@@ -137,6 +137,7 @@ export default function AdminProfileScreen() {
         }
       }
 
+      setPhotoUrl(user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null);
       setAdminEmail(user.email || '');
 
       // 2. Fetch Batches list from database
@@ -238,11 +239,21 @@ export default function AdminProfileScreen() {
         .getPublicUrl(filePath);
 
       // Update Auth Metadata for admin user avatar
-      const { error: updateError } = await supabase.auth.updateUser({
+      const { data: updateData, error: updateError } = await supabase.auth.updateUser({
         data: { avatar_url: publicUrl },
       });
 
       if (updateError) throw updateError;
+
+      // Update Profiles table for public queries
+      await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+
+      if (updateData?.user) {
+        useAuthStore.getState().setUser(updateData.user);
+      }
 
       setPhotoUrl(publicUrl);
       Alert.alert('Success', 'Profile picture updated successfully.');
@@ -334,8 +345,7 @@ export default function AdminProfileScreen() {
         onPress: async () => {
           setIsLoading(true);
           try {
-            await supabase.auth.signOut();
-            reset();
+            await signOutAll();
             router.replace('/(auth)/login');
           } catch (err) {
             Alert.alert('Error', 'Failed to log out.');
@@ -528,6 +538,27 @@ export default function AdminProfileScreen() {
                   onPress={() => {
                     if (item.action === 'change_password') {
                       setIsChangePasswordVisible(true);
+                    } else if (item.action === 'help_support') {
+                      Alert.alert(
+                        'Help & Support',
+                        'For any queries, verification issues, or custom requests, please email our team at support@prestoid.com. We are active 24/7.',
+                        [
+                          { text: 'Email Support', onPress: () => Linking.openURL('mailto:support@prestoid.com').catch(() => {}) },
+                          { text: 'Close', style: 'cancel' }
+                        ]
+                      );
+                    } else if (item.action === 'terms_privacy') {
+                      Alert.alert(
+                        'Terms & Privacy Policy',
+                        'PrestoID securely manages student roster check-ins and fee receipts. All data, including Aadhaar inputs and attendance logs, is fully encrypted and never shared with third parties.',
+                        [{ text: 'OK', style: 'cancel' }]
+                      );
+                    } else if (item.action === 'about_prestoid') {
+                      Alert.alert(
+                        'About PrestoID',
+                        'PrestoID v1.0.0\n\nSmart student attendance tracking, offline-first barcode scanning, automated push alerts, and fee receipt management.\n\nDeveloped with ❤️ by Kanelijo.',
+                        [{ text: 'OK', style: 'cancel' }]
+                      );
                     }
                   }}
                 >

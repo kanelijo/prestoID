@@ -11,7 +11,7 @@ const BATCHES = ['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC'];
 
 export default function CreateTestScreen() {
   const router = useRouter();
-  const { user, verified } = useAuthStore();
+  const { user, verified, businessId } = useAuthStore();
   
   const [title, setTitle] = useState('');
   const [targetBatch, setTargetBatch] = useState('All');
@@ -30,11 +30,15 @@ export default function CreateTestScreen() {
       ]);
       setSelectedBank('demo-1');
     }
-  }, [verified]);
+  }, [verified, businessId]);
 
   const fetchBanks = async () => {
+    if (!businessId) return;
     try {
-      const { data } = await supabase.from('test_banks').select('id, name');
+      const { data } = await supabase
+        .from('test_banks')
+        .select('id, name')
+        .eq('business_id', businessId);
       if (data && data.length > 0) {
         setBanks(data);
         setSelectedBank(data[0].id);
@@ -53,7 +57,7 @@ export default function CreateTestScreen() {
     setIsGenerating(true);
 
     try {
-      if (!verified) {
+      if (!verified || !businessId) {
         // Simulate AI generation delay
         await new Promise(resolve => setTimeout(resolve, 2000));
         // Push to mock review
@@ -61,58 +65,60 @@ export default function CreateTestScreen() {
         return;
       }
 
-      // 1. Fetch institute_id
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('institute_id')
-        .eq('id', user?.id)
-        .single();
-
-      if (!profile?.institute_id) throw new Error("Could not find institute ID");
-
-      // 2. Create the test record (Draft)
+      // Create the test record (Draft)
       const { data: newTest, error: testErr } = await supabase
         .from('tests')
         .insert({
-          institute_id: profile.institute_id,
+          business_id: businessId,
           title,
-          target_batches: targetBatch === 'All' ? BATCHES.slice(1) : [targetBatch],
+          batch_name: targetBatch === 'All' ? null : targetBatch,
           duration_minutes: parseInt(duration),
+          total_marks: 5,
           status: 'draft',
-          // scheduled_at omitted for now, can be set later
         })
         .select()
         .single();
 
       if (testErr) throw testErr;
 
-      // 3. Simulate AI generating questions from the selected bank
-      // In a real app, this would trigger an Edge Function calling OpenAI/Gemini
-      // For MVP, we insert dummy AI-generated questions directly
+      // Simulate AI generating questions from the selected bank
       await new Promise(resolve => setTimeout(resolve, 1500)); // artificial delay
 
       const dummyQuestions = [
         {
           test_id: newTest.id,
           question_text: "What was the main feature of the Indus Valley Civilization?",
-          option_a: "Town Planning",
-          option_b: "Iron usage",
-          option_c: "Horse chariots",
-          option_d: "Temple architecture",
-          correct_option: "A",
+          options: ["Town Planning", "Iron usage", "Horse chariots", "Temple architecture"],
+          correct_option: 0,
           explanation: "The Indus Valley Civilization is best known for its advanced urban town planning and drainage systems.",
-          order_index: 1
         },
         {
           test_id: newTest.id,
           question_text: "Which of these was a major port city of Indus Valley?",
-          option_a: "Harappa",
-          option_b: "Lothal",
-          option_c: "Mohenjodaro",
-          option_d: "Kalibangan",
-          correct_option: "B",
+          options: ["Harappa", "Lothal", "Mohenjodaro", "Kalibangan"],
+          correct_option: 1,
           explanation: "Lothal was a prominent port city known for its massive dockyard.",
-          order_index: 2
+        },
+        {
+          test_id: newTest.id,
+          question_text: "Which metal was unknown to the Indus Valley people?",
+          options: ["Gold", "Silver", "Copper", "Iron"],
+          correct_option: 3,
+          explanation: "Iron was not used by the Harappans; it was introduced later in the Vedic period.",
+        },
+        {
+          test_id: newTest.id,
+          question_text: "Which of the following sites is located in India?",
+          options: ["Harappa", "Mohenjodaro", "Lothal", "Ganweriwala"],
+          correct_option: 2,
+          explanation: "Lothal is located in Gujarat, India, whereas Harappa and Mohenjodaro are in Pakistan.",
+        },
+        {
+          test_id: newTest.id,
+          question_text: "What was the seal of Indus Valley mainly made of?",
+          options: ["Steatite", "Clay", "Copper", "Bronze"],
+          correct_option: 0,
+          explanation: "Steatite was the most common material used to make seals in Harappan civilization.",
         }
       ];
 

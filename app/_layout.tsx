@@ -14,7 +14,7 @@ export default function RootLayout() {
       const data = response.notification.request.content.data;
       if (data && data.screen) {
         if (data.screen === 'community') {
-          router.push('/(student)/community');
+          router.push('/(student)/notifications?tab=community');
         } else if (data.screen === 'fees') {
           router.push('/(student)/profile');
         } else if (data.screen === 'test') {

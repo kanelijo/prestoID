@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Tabs } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 import { supabase } from '@/lib/supabase';
 
@@ -87,6 +88,14 @@ function TabIcon({ name, label, focused }: TabIconProps) {
 
 export default function AdminLayout() {
   const insets = useSafeAreaInsets();
+  const { user, businessId } = useAuthStore();
+  const { adminUnreadCount } = useNotificationStore();
+
+  useEffect(() => {
+    if (user?.id && businessId) {
+      useNotificationStore.getState().fetchAdminUnreadCount(user.id, businessId);
+    }
+  }, [user, businessId]);
 
   return (
     <>
@@ -145,6 +154,7 @@ export default function AdminLayout() {
       <Tabs.Screen
         name="notifications"
         options={{
+          tabBarBadge: adminUnreadCount > 0 ? adminUnreadCount : undefined,
           tabBarIcon: ({ focused }) => (
             <TabIcon
               name={focused ? 'notifications' : 'notifications-outline'}

@@ -14,6 +14,7 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -66,12 +67,11 @@ export default function ClaimProfileScreen() {
         return;
       }
 
-      // Step 2: Find the unclaimed student profile in the students table
+      // Step 2: Find the student profile in the students table
       let query = supabase
         .from('students')
-        .select('id, name')
-        .eq('business_id', business.id)
-        .is('user_id', null);
+        .select('id, name, user_id')
+        .eq('business_id', business.id);
 
       if (useAadhaar) {
         query = query.eq('aadhaar_number', cleanedPasscode);
@@ -81,15 +81,36 @@ export default function ClaimProfileScreen() {
 
       const { data: studentRecord, error: studentError } = await query.single();
 
+      console.log('[DEBUG] claim-profile query result:', studentRecord);
+      console.log('[DEBUG] claim-profile query error:', studentError);
+
       if (studentError || !studentRecord) {
         Alert.alert(
           'Student Record Not Found',
-          useAadhaar
-            ? 'No unclaimed student matches this Aadhaar. Please check with your teacher.'
-            : 'No unclaimed student matches this passcode. Please check with your teacher.'
+          (studentError ? `DB Code: ${studentError.code}\nMsg: ${studentError.message}\n\n` : '') +
+          (useAadhaar
+            ? 'No matches found for this Aadhaar number. Please check with your teacher.'
+            : 'No matches found for this passcode. Please check with your teacher.')
         );
         setIsLoading(false);
         return;
+      }
+
+      // Check if student record is already claimed by a different user
+      if (studentRecord.user_id && studentRecord.user_id !== user.id) {
+        Alert.alert(
+          'Already Claimed',
+          'This student record has already been linked to a different Google account. Please contact your teacher.'
+        );
+        setIsLoading(false);
+        return;
+      }
+
+      // Get or create persistent device ID
+      let deviceId = await AsyncStorage.getItem('device_id');
+      if (!deviceId) {
+        deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + '_' + Date.now().toString(36);
+        await AsyncStorage.setItem('device_id', deviceId);
       }
 
       // Step 3: Claim the profile — link auth user to the student record and update profiles
@@ -97,6 +118,8 @@ export default function ClaimProfileScreen() {
         .from('students')
         .update({
           user_id: user.id,
+          is_claimed: true,
+          device_id: deviceId,
         })
         .eq('id', studentRecord.id);
 
@@ -106,11 +129,14 @@ export default function ClaimProfileScreen() {
 
       const { error: updateProfileError } = await supabase
         .from('profiles')
-        .update({
+        .upsert({
+          id: user.id,
+          name: studentRecord.name,
+          email: user.email,
+          role: 'student',
           business_id: business.id,
           claimed: true,
-        })
-        .eq('id', user.id);
+        });
 
       if (updateProfileError) {
         throw updateProfileError;

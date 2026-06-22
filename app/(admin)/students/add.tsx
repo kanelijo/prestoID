@@ -36,7 +36,6 @@ export default function AddStudentScreen() {
     fatherName: '',
     studentPhone: '',
     parentPhone: '',
-    parentName: '',
     email: '',
     batch: '',
     feeAmount: '',
@@ -45,6 +44,8 @@ export default function AddStudentScreen() {
     aadhaarNumber: '',
     course: '',
     duration: '1 Year',
+    address: '',
+    validityPeriod: '1 Year',
   });
 
 
@@ -83,6 +84,10 @@ export default function AddStudentScreen() {
     }
     if (form.studentPhone.length !== 10 || form.parentPhone.length !== 10) {
       Alert.alert('Invalid Phone', 'Phone numbers must be exactly 10 digits');
+      return;
+    }
+    if (form.studentPhone.trim() === form.parentPhone.trim()) {
+      Alert.alert('Invalid Phone', 'Student phone number and Parent/Father phone number must be different');
       return;
     }
     if (form.aadhaarNumber.trim().length !== 12 || isNaN(Number(form.aadhaarNumber.trim()))) {
@@ -159,6 +164,24 @@ export default function AddStudentScreen() {
         secretCode += chars.charAt(Math.floor(Math.random() * chars.length));
       }
 
+      // Calculate MM/YY for valid_from and valid_till
+      const now = new Date();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const year = String(now.getFullYear()).slice(-2);
+      const validFrom = `${month}/${year}`;
+
+      let tillDate = new Date();
+      if (form.validityPeriod === '6 Months') {
+        tillDate.setMonth(tillDate.getMonth() + 6);
+      } else if (form.validityPeriod === '2 Years') {
+        tillDate.setFullYear(tillDate.getFullYear() + 2);
+      } else {
+        tillDate.setFullYear(tillDate.getFullYear() + 1);
+      }
+      const tillMonth = String(tillDate.getMonth() + 1).padStart(2, '0');
+      const tillYear = String(tillDate.getFullYear()).slice(-2);
+      const validTill = `${tillMonth}/${tillYear}`;
+
       const { error } = await supabase
         .from('students')
         .insert({
@@ -166,10 +189,10 @@ export default function AddStudentScreen() {
           father_name: form.fatherName.trim(),
           phone: form.studentPhone.trim(),
           parent_phone: form.parentPhone.trim(),
-          parent_name: form.parentName.trim() || null,
           email: form.email.trim() || null,
           batch_name: form.batch,
           fee_amount: Number(form.feeAmount),
+          fee_cycle: form.feeCycle,
           photo_url: finalPhotoUrl,
           enrollment_id: enrollId,
           fee_status: 'unpaid',
@@ -178,6 +201,9 @@ export default function AddStudentScreen() {
           secret_code: secretCode,
           course: form.course.trim() || null,
           duration: form.duration,
+          address: form.address.trim() || null,
+          valid_from: validFrom,
+          valid_till: validTill,
         });
 
       if (error) throw error;
@@ -267,10 +293,10 @@ export default function AddStudentScreen() {
             keyboardType="phone-pad"
           />
           <InputField
-            label="Parent Name"
-            placeholder="Parent's name (optional)"
-            value={form.parentName}
-            onChangeText={(v) => updateForm('parentName', v)}
+            label="Address"
+            placeholder="Residential address (optional)"
+            value={form.address}
+            onChangeText={(v) => updateForm('address', v)}
           />
           <InputField
             label="Email"
@@ -332,12 +358,48 @@ export default function AddStudentScreen() {
           </View>
 
           <InputField
-            label="Monthly Fee (₹) *"
+            label="Fee Amount (₹) *"
             placeholder="e.g. 2500"
             value={form.feeAmount}
             onChangeText={(v) => updateForm('feeAmount', v.replace(/[^0-9]/g, ''))}
             keyboardType="number-pad"
           />
+
+          {/* Fee Payment Cycle Selector */}
+          <View style={styles.fieldContainer}>
+            <Text style={styles.fieldLabel}>Fee Payment Cycle *</Text>
+            <View style={styles.dueDateRow}>
+              {['monthly', 'yearly', 'one time'].map((cycle) => (
+                <TouchableOpacity
+                  key={cycle}
+                  style={[styles.dueDateOption, form.feeCycle === cycle && styles.dueDateOptionActive]}
+                  onPress={() => updateForm('feeCycle', cycle)}
+                >
+                  <Text style={[styles.dueDateText, form.feeCycle === cycle && styles.dueDateTextActive]}>
+                    {cycle === 'monthly' ? 'Monthly' : cycle === 'yearly' ? 'Yearly' : 'One Time'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          {/* Validity Period Selector */}
+          <View style={styles.fieldContainer}>
+            <Text style={styles.fieldLabel}>Valid Till (Period) *</Text>
+            <View style={styles.dueDateRow}>
+              {['6 Months', '1 Year', '2 Years'].map((period) => (
+                <TouchableOpacity
+                  key={period}
+                  style={[styles.dueDateOption, form.validityPeriod === period && styles.dueDateOptionActive]}
+                  onPress={() => updateForm('validityPeriod', period)}
+                >
+                  <Text style={[styles.dueDateText, form.validityPeriod === period && styles.dueDateTextActive]}>
+                    {period}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
 
           {/* Fee Due Date */}
           <View style={styles.fieldContainer}>

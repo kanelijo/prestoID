@@ -27,15 +27,30 @@ import { decode } from 'base64-arraybuffer';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useFocusEffect } from 'expo-router';
 import { sendPushNotification, scheduleLocalNotification } from '@/lib/notifications';
 
-type Comment = {
+type Reply = {
+  author_id?: string;
   author: string;
+  author_avatar?: string;
   text: string;
+  timestamp: string;
+};
+
+type Comment = {
+  id: string;
+  author_id?: string;
+  author: string;
+  author_avatar?: string;
+  text: string;
+  timestamp: string;
+  replies: Reply[];
 };
 
 type Post = {
   id: string;
+  author_id?: string;
   author: string;
   category: 'announcement' | 'note' | 'schedule';
   text: string;
@@ -48,6 +63,9 @@ type Post = {
   media_url?: string;
   file_url?: string;
   file_name?: string;
+  target_batches?: string[];
+  author_avatar?: string | null;
+  is_edited?: boolean;
 };
 
 const CATEGORIES: { key: Post['category']; label: string }[] = [
@@ -69,46 +87,82 @@ const getCategoryStyle = (category: Post['category']) => {
 
 interface PostCardProps {
   item: Post;
+  avatarMap: Record<string, string>;
   onLike: (postId: string) => void;
   onAddComment: (postId: string, text: string) => void;
+  onAddReply: (postId: string, commentId: string, text: string) => void;
+  onEdit: (post: Post) => void;
   onDelete: (postId: string) => void;
 }
 
-function PostCard({ item, onLike, onAddComment, onDelete }: PostCardProps) {
+function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap }: PostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [showAllComments, setShowAllComments] = useState(false);
+  const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
 
-  const handleSend = () => {
+  const handleSendComment = () => {
     if (!commentText.trim()) return;
     onAddComment(item.id, commentText.trim());
     setCommentText('');
   };
 
+  const handleSendReply = (commentId: string) => {
+    if (!replyText.trim()) return;
+    onAddReply(item.id, commentId, replyText.trim());
+    setReplyText('');
+    setReplyingCommentId(null);
+  };
+
   const cat = getCategoryStyle(item.category);
+  const commentsToRender = showAllComments ? item.comments : item.comments.slice(0, 2);
+
+  const authorAvatarUri = item.author_id ? (avatarMap[item.author_id] || item.author_avatar) : item.author_avatar;
 
   return (
     <View style={styles.postCard}>
       {/* Post Header */}
       <View style={styles.postHeader}>
-        <View style={styles.postAuthorAvatar}>
-          <Text style={styles.postAuthorInitial}>
-            {item.author.charAt(0)}
-          </Text>
-        </View>
+        {authorAvatarUri ? (
+          <Image source={{ uri: authorAvatarUri }} style={styles.postAuthorAvatarImage} />
+        ) : (
+          <View style={styles.postAuthorAvatar}>
+            <Text style={styles.postAuthorInitial}>
+              {item.author.charAt(0)}
+            </Text>
+          </View>
+        )}
         <View style={{ flex: 1 }}>
           <Text style={styles.postAuthorName}>{item.author}</Text>
-          <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+            {item.is_edited && (
+              <Text style={styles.editedLabel}>• Edited</Text>
+            )}
+          </View>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={[styles.categoryBadge, { backgroundColor: cat.bg }]}>
             <Text style={styles.categoryBadgeText}>{cat.label}</Text>
           </View>
           <TouchableOpacity
-            onPress={() => onDelete(item.id)}
-            style={styles.deletePostButton}
+            onPress={() => {
+              Alert.alert(
+                'Post Options',
+                'Choose an action for this post:',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Edit Post', onPress: () => onEdit(item) },
+                  { text: 'Delete Post', style: 'destructive', onPress: () => onDelete(item.id) },
+                ]
+              );
+            }}
+            style={styles.optionsPostButton}
             activeOpacity={0.7}
           >
-            <Ionicons name="trash-outline" size={18} color={Colors.status.danger} />
+            <Ionicons name="ellipsis-vertical-outline" size={18} color={Colors.text.tertiary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -194,33 +248,129 @@ function PostCard({ item, onLike, onAddComment, onDelete }: PostCardProps) {
       </View>
 
       {/* Comments Section */}
-      {item.comments.length > 0 && !isExpanded && (
-        <TouchableOpacity
-          style={styles.viewCommentsButton}
-          onPress={() => setIsExpanded(true)}
-        >
-          <Text style={styles.viewCommentsText}>
-            View {item.comments.length} comment
-            {item.comments.length > 1 ? 's' : ''}
-          </Text>
-        </TouchableOpacity>
-      )}
-
       {isExpanded && (
         <View style={styles.commentsSection}>
-          {item.comments.map((comment, idx) => (
-            <View key={idx} style={styles.commentItem}>
-              <View style={styles.commentAvatar}>
-                <Text style={styles.commentAvatarText}>
-                  {comment.author.charAt(0)}
-                </Text>
+          {commentsToRender.map((comment, idx) => {
+            const commentId = comment.id || idx.toString();
+            const replies = comment.replies || [];
+            const isRepliesExpanded = !!expandedReplies[commentId];
+            const repliesToRender = isRepliesExpanded ? replies : replies.slice(0, 1);
+            const isReplying = replyingCommentId === commentId;
+
+            return (
+              <View key={commentId} style={styles.commentItemContainer}>
+                {/* Comment row */}
+                <View style={styles.commentItem}>
+                  {(() => {
+                    const commentAvatarUri = comment.author_id ? (avatarMap[comment.author_id] || comment.author_avatar) : comment.author_avatar;
+                    return commentAvatarUri ? (
+                      <Image source={{ uri: commentAvatarUri }} style={styles.commentAvatarImage} />
+                    ) : (
+                      <View style={styles.commentAvatar}>
+                        <Text style={styles.commentAvatarText}>
+                          {comment.author.charAt(0)}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+                  <View style={styles.commentContent}>
+                    <Text style={styles.commentAuthor}>{comment.author}</Text>
+                    <Text style={styles.commentText}>{comment.text}</Text>
+                    <TouchableOpacity 
+                      style={styles.replyButton}
+                      onPress={() => {
+                        setReplyingCommentId(isReplying ? null : commentId);
+                        setReplyText('');
+                      }}
+                    >
+                      <Text style={styles.replyButtonText}>Reply</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Nested Replies */}
+                {replies.length > 0 && (
+                  <View style={styles.repliesList}>
+                    {repliesToRender.map((reply, rIdx) => {
+                      const replyAvatarUri = reply.author_id ? (avatarMap[reply.author_id] || reply.author_avatar) : reply.author_avatar;
+                      return (
+                        <View key={rIdx} style={styles.replyItem}>
+                          {replyAvatarUri ? (
+                            <Image source={{ uri: replyAvatarUri }} style={styles.replyAvatarImage} />
+                          ) : (
+                            <View style={styles.replyAvatar}>
+                              <Text style={styles.replyAvatarText}>
+                                {reply.author.charAt(0)}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={styles.replyContent}>
+                            <Text style={styles.replyAuthor}>{reply.author}</Text>
+                            <Text style={styles.replyText}>{reply.text}</Text>
+                            <TouchableOpacity 
+                              style={styles.replyButton}
+                              onPress={() => {
+                                setReplyingCommentId(commentId);
+                                setReplyText(`@${reply.author} `);
+                              }}
+                            >
+                              <Text style={styles.replyButtonText}>Reply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+
+                    {/* View more replies */}
+                    {replies.length > 1 && (
+                      <TouchableOpacity
+                        style={styles.viewMoreRepliesButton}
+                        onPress={() => {
+                          setExpandedReplies(prev => ({
+                            ...prev,
+                            [commentId]: !isRepliesExpanded
+                          }));
+                        }}
+                      >
+                        <Text style={styles.viewMoreRepliesText}>
+                          {isRepliesExpanded ? 'Hide replies' : `View replies (${replies.length})`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+
+                {/* Reply Input row */}
+                {isReplying && (
+                  <View style={styles.replyInputRow}>
+                    <TextInput
+                      style={styles.replyInput}
+                      placeholder={`Reply to ${comment.author}...`}
+                      placeholderTextColor={Colors.text.tertiary}
+                      value={replyText}
+                      onChangeText={setReplyText}
+                      onSubmitEditing={() => handleSendReply(commentId)}
+                    />
+                    <TouchableOpacity style={styles.replySendButton} onPress={() => handleSendReply(commentId)}>
+                      <Ionicons name="send" size={14} color={Colors.accent.primary} />
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
-              <View style={styles.commentContent}>
-                <Text style={styles.commentAuthor}>{comment.author}</Text>
-                <Text style={styles.commentText}>{comment.text}</Text>
-              </View>
-            </View>
-          ))}
+            );
+          })}
+
+          {/* View more comments */}
+          {item.comments.length > 2 && (
+            <TouchableOpacity
+              style={styles.viewCommentsButton}
+              onPress={() => setShowAllComments(!showAllComments)}
+            >
+              <Text style={styles.viewCommentsText}>
+                {showAllComments ? 'Collapse comments' : `View more comments (${item.comments.length - 2})`}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -233,11 +383,11 @@ function PostCard({ item, onLike, onAddComment, onDelete }: PostCardProps) {
             placeholderTextColor={Colors.text.tertiary}
             value={commentText}
             onChangeText={setCommentText}
-            onSubmitEditing={handleSend}
+            onSubmitEditing={handleSendComment}
           />
           <TouchableOpacity
             style={styles.commentSendButton}
-            onPress={handleSend}
+            onPress={handleSendComment}
           >
             <Ionicons
               name="send"
@@ -263,6 +413,93 @@ export default function CommunityScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [editingPost, setEditingPost] = useState<Post | null>(null);
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+
+  const sendLikePushNotification = async (recipientId: string, likerName: string, postText: string) => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', recipientId)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        await sendPushNotification(
+          [profile.push_token],
+          'New Like',
+          `${likerName} liked your post: "${postText.substring(0, 40)}${postText.length > 40 ? '...' : ''}"`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send like push notification:', err);
+    }
+  };
+
+  const sendCommentPushNotification = async (recipientId: string, commentAuthorName: string, text: string) => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', recipientId)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        await sendPushNotification(
+          [profile.push_token],
+          'New Comment',
+          `${commentAuthorName} commented: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" on your post`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send comment push notification:', err);
+    }
+  };
+
+  const sendReplyPushNotification = async (recipientIds: string[], replyAuthorName: string, text: string) => {
+    try {
+      const uniqueIds = Array.from(new Set(recipientIds));
+      if (uniqueIds.length === 0) return;
+
+      const { data: profiles, error } = await supabase
+        .from('profiles')
+        .select('id, push_token')
+        .in('id', uniqueIds);
+
+      if (error || !profiles) return;
+
+      const tokens = profiles.map(p => p.push_token).filter(t => t);
+      if (tokens.length > 0) {
+        await sendPushNotification(
+          tokens,
+          'New Reply on Post',
+          `${replyAuthorName} replied: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send reply push notification:', err);
+    }
+  };
+
+  const handleEditInit = (post: Post) => {
+    setEditingPost(post);
+    setComposerCategory(post.category);
+    setComposerText(post.text);
+    setSelectedImage(post.media_url || null);
+    if (post.file_url) {
+      setSelectedFile({
+        assets: [{ uri: post.file_url, name: post.file_name || 'Document' }],
+      });
+    } else {
+      setSelectedFile(null);
+    }
+    const targetB = post.target_batches || [];
+    setSelectedBatches(targetB.length === 0 ? ['All'] : targetB);
+    setShowComposer(true);
+  };
 
   const handlePickImage = async () => {
     try {
@@ -356,6 +593,55 @@ export default function CommunityScreen() {
   };
 
   useEffect(() => {
+    const resolveAvatars = async () => {
+      if (posts.length === 0) return;
+      try {
+        const uniqueIds = new Set<string>();
+        posts.forEach((p) => {
+          if (p.author_id) uniqueIds.add(p.author_id);
+          p.comments.forEach((c) => {
+            if (c.author_id) uniqueIds.add(c.author_id);
+            c.replies?.forEach((r) => {
+              if (r.author_id) uniqueIds.add(r.author_id);
+            });
+          });
+        });
+
+        const idList = Array.from(uniqueIds);
+        if (idList.length === 0) return;
+
+        const newMap: Record<string, string> = {};
+
+        // 1. Fetch from profiles
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, avatar_url')
+          .in('id', idList);
+
+        profilesData?.forEach((p) => {
+          if (p.avatar_url) newMap[p.id] = p.avatar_url;
+        });
+
+        // 2. Fetch from students
+        const { data: studentsData } = await supabase
+          .from('students')
+          .select('user_id, photo_url')
+          .in('user_id', idList);
+
+        studentsData?.forEach((s) => {
+          if (s.user_id && s.photo_url) newMap[s.user_id] = s.photo_url;
+        });
+
+        setAvatarMap((prev) => ({ ...prev, ...newMap }));
+      } catch (err) {
+        console.warn('Failed to resolve avatars map:', err);
+      }
+    };
+
+    resolveAvatars();
+  }, [posts]);
+
+  useEffect(() => {
     const fetchBatches = async () => {
       if (!businessId) return;
       try {
@@ -406,6 +692,7 @@ export default function CommunityScreen() {
 
         return {
           id: String(p.id),
+          author_id: p.author_id,
           author: p.author_name || 'Upendra Sir',
           category: p.category,
           text: p.text,
@@ -418,6 +705,9 @@ export default function CommunityScreen() {
           media_url: p.media_url,
           file_url: p.file_url,
           file_name: p.file_name,
+          target_batches: Array.isArray(p.target_batches) ? p.target_batches : [],
+          author_avatar: p.author_avatar,
+          is_edited: p.is_edited,
         };
       });
       setPosts(loadedPosts);
@@ -429,8 +719,27 @@ export default function CommunityScreen() {
   }, [user, businessId]);
 
   useEffect(() => {
-    fetchPosts();
+    // Refresh user metadata in background exactly once on mount to get latest avatar
+    const refreshUser = async () => {
+      try {
+        const { data: { user: freshUser } } = await supabase.auth.getUser();
+        if (freshUser) {
+          useAuthStore.getState().setUser(freshUser);
+        }
+      } catch (e) {
+        console.warn('Failed to refresh user in community:', e);
+      }
+    };
+    refreshUser();
+  }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      fetchPosts();
+    }, [fetchPosts])
+  );
+
+  useEffect(() => {
     // Set up postgres realtime subscription for auto-syncing updates
     const channel = supabase
       .channel('admin-community-channel')
@@ -458,6 +767,8 @@ export default function CommunityScreen() {
                       media_url: updated.media_url,
                       file_url: updated.file_url,
                       file_name: updated.file_name,
+                      author_avatar: updated.author_avatar,
+                      is_edited: updated.is_edited,
                     }
                   : p
               )
@@ -483,13 +794,14 @@ export default function CommunityScreen() {
     setIsUploading(true);
     try {
       const adminName = businessName || user?.user_metadata?.name || 'Admin';
+      const adminAvatar = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
       const targetBatchesArray = selectedBatches.includes('All') ? [] : selectedBatches;
       
-      let mediaUrl = null;
-      let fileUrl = null;
-      let fileName = null;
+      let mediaUrl = editingPost ? editingPost.media_url : null;
+      let fileUrl = editingPost ? editingPost.file_url : null;
+      let fileName = editingPost ? editingPost.file_name : null;
 
-      if (selectedImage) {
+      if (selectedImage && selectedImage !== editingPost?.media_url) {
         try {
           mediaUrl = await uploadFileToSupabase(selectedImage, 'community', 'image.jpg');
         } catch (imgErr: any) {
@@ -500,7 +812,7 @@ export default function CommunityScreen() {
         }
       }
 
-      if (selectedFile && selectedFile.assets && selectedFile.assets.length > 0) {
+      if (selectedFile && selectedFile.assets && selectedFile.assets.length > 0 && selectedFile.assets[0].uri !== editingPost?.file_url) {
         const fileAsset = selectedFile.assets[0];
         try {
           fileUrl = await uploadFileToSupabase(fileAsset.uri, 'community', fileAsset.name || 'document');
@@ -513,53 +825,115 @@ export default function CommunityScreen() {
         }
       }
 
-      const { data, error } = await supabase
-        .from('community_posts')
-        .insert({
-          business_id: businessId,
-          author_name: adminName,
-          category: composerCategory,
-          text: composerText.trim(),
-          target_batches: targetBatchesArray,
-          likes: 0,
-          comments: [],
-          media_url: mediaUrl,
-          file_url: fileUrl,
-          file_name: fileName,
-        })
-        .select()
-        .single();
+      if (editingPost) {
+        // UPDATE Existing Post
+        const { error } = await supabase
+          .from('community_posts')
+          .update({
+            category: composerCategory,
+            text: composerText.trim(),
+            target_batches: targetBatchesArray,
+            media_url: mediaUrl,
+            file_url: fileUrl,
+            file_name: fileName,
+            author_avatar: adminAvatar,
+            is_edited: true,
+          })
+          .eq('id', Number(editingPost.id));
 
-      if (error) throw error;
+        if (error) throw error;
 
-      if (data) {
-        // Clear inputs immediately
+        // Reset
         setComposerText('');
         setSelectedImage(null);
         setSelectedFile(null);
         setShowComposer(false);
+        setEditingPost(null);
 
-        // Fetch student profiles for push notifications
-        try {
-          const { data: studentProfiles } = await supabase
-            .from('profiles')
-            .select('push_token')
-            .eq('role', 'student')
-            .not('push_token', 'is', null);
+        fetchPosts(true);
+        Alert.alert('Success', 'Post updated successfully.');
+      } else {
+        // INSERT New Post
+        const { data, error } = await supabase
+          .from('community_posts')
+          .insert({
+            business_id: businessId,
+            author_id: user?.id,
+            author_name: adminName,
+            author_avatar: adminAvatar,
+            category: composerCategory,
+            text: composerText.trim(),
+            target_batches: targetBatchesArray,
+            likes: 0,
+            comments: [],
+            media_url: mediaUrl,
+            file_url: fileUrl,
+            file_name: fileName,
+          })
+          .select()
+          .single();
 
-          if (studentProfiles && studentProfiles.length > 0) {
-            const tokens = studentProfiles.map(p => p.push_token).filter(Boolean) as string[];
-            if (tokens.length > 0) {
-              await sendPushNotification(
-                tokens,
-                `New ${composerCategory.charAt(0).toUpperCase() + composerCategory.slice(1)} by ${adminName}`,
-                composerText.trim(),
-                { screen: 'community', postId: data.id }
-              );
+        if (error) throw error;
+
+        if (data) {
+          setComposerText('');
+          setSelectedImage(null);
+          setSelectedFile(null);
+          setShowComposer(false);
+
+          fetchPosts(true);
+
+          // Fetch student profiles for push notifications scoped to this business and target batches
+          try {
+            let studentUserIds: string[] = [];
+
+            if (targetBatchesArray.length > 0) {
+              // Fetch students in the targeted batches
+              const { data: targetStudents } = await supabase
+                .from('students')
+                .select('user_id')
+                .eq('business_id', businessId)
+                .in('batch_name', targetBatchesArray)
+                .not('user_id', 'is', null);
+              
+              if (targetStudents) {
+                studentUserIds = targetStudents.map(s => s.user_id).filter(Boolean) as string[];
+              }
+            } else {
+              // General post, target all students in the business
+              const { data: allStudents } = await supabase
+                .from('students')
+                .select('user_id')
+                .eq('business_id', businessId)
+                .not('user_id', 'is', null);
+              
+              if (allStudents) {
+                studentUserIds = allStudents.map(s => s.user_id).filter(Boolean) as string[];
+              }
             }
+
+            if (studentUserIds.length > 0) {
+              const { data: studentProfiles } = await supabase
+                .from('profiles')
+                .select('push_token')
+                .in('id', studentUserIds)
+                .not('push_token', 'is', null);
+
+              if (studentProfiles && studentProfiles.length > 0) {
+                const tokens = studentProfiles.map(p => p.push_token).filter(Boolean) as string[];
+                if (tokens.length > 0) {
+                  await sendPushNotification(
+                    tokens,
+                    `New ${composerCategory.charAt(0).toUpperCase() + composerCategory.slice(1)} by ${adminName}`,
+                    composerText.trim(),
+                    { screen: 'community', postId: data.id }
+                  );
+                }
+              }
+            }
+          } catch (pushErr) {
+            console.warn('Failed to send push notifications:', pushErr);
           }
-        } catch (pushErr) {
-          console.warn('Failed to send push notifications:', pushErr);
         }
       }
     } catch (err: any) {
@@ -604,6 +978,11 @@ export default function CommunityScreen() {
         .eq('id', Number(postId));
 
       if (error) throw error;
+
+      if (nextLiked && post.author_id && post.author_id !== user.id) {
+        const adminName = businessName || user?.user_metadata?.name || 'Admin';
+        sendLikePushNotification(post.author_id, adminName, post.text);
+      }
     } catch (err) {
       // Revert if error
       setPosts((prev) =>
@@ -619,8 +998,22 @@ export default function CommunityScreen() {
     const post = posts.find((p) => p.id === postId);
     if (!post) return;
 
-    const adminName = user?.user_metadata?.name || 'Upendra Sir';
-    const newCommentList = [...post.comments, { author: adminName, text }];
+    const adminName = businessName || user?.user_metadata?.name || 'Admin';
+    const newComment: Comment = {
+      id: Math.random().toString(36).substring(2, 9),
+      author_id: user?.id,
+      author: adminName,
+      author_avatar: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      text,
+      timestamp: new Date().toLocaleDateString('en-US', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      replies: [],
+    };
+    const newCommentList = [...post.comments, newComment];
 
     // Optimistic Update
     setPosts((prev) =>
@@ -636,6 +1029,10 @@ export default function CommunityScreen() {
         .eq('id', Number(postId));
 
       if (error) throw error;
+
+      if (post.author_id && post.author_id !== user?.id) {
+        sendCommentPushNotification(post.author_id, adminName, text);
+      }
     } catch (err) {
       // Revert on error
       setPosts((prev) =>
@@ -644,6 +1041,89 @@ export default function CommunityScreen() {
         )
       );
       console.warn('Failed to add comment:', err);
+    }
+  };
+
+  const handleAddReply = async (postId: string, commentId: string, text: string) => {
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const adminName = businessName || user?.user_metadata?.name || 'Admin';
+    const newReply: Reply = {
+      author_id: user?.id,
+      author: adminName,
+      author_avatar: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      text,
+      timestamp: new Date().toLocaleDateString('en-US', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    };
+
+    const newCommentList = post.comments.map((comment, idx) => {
+      const cId = comment.id || idx.toString();
+      if (cId === commentId) {
+        return {
+          ...comment,
+          replies: [...(comment.replies || []), newReply],
+        };
+      }
+      return comment;
+    });
+
+    // Optimistic Update
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, comments: newCommentList } : p
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('community_posts')
+        .update({ comments: newCommentList })
+        .eq('id', Number(postId));
+
+      if (error) throw error;
+
+      // Notify relevant users (post author, comment author, and mentioned reply author)
+      const recipientIds: string[] = [];
+      if (post.author_id && post.author_id !== user?.id) {
+        recipientIds.push(post.author_id);
+      }
+      const comment = post.comments.find((c, idx) => (c.id || idx.toString()) === commentId);
+      if (comment) {
+        if (comment.author_id && comment.author_id !== user?.id) {
+          recipientIds.push(comment.author_id);
+        }
+        if (text.startsWith('@')) {
+          const firstSpace = text.indexOf(' ');
+          if (firstSpace !== -1) {
+            const mention = text.substring(1, firstSpace).toLowerCase().replace(/[^a-z0-9]/g, '');
+            const matchedReply = comment.replies?.find(r => 
+              r.author.toLowerCase().replace(/[^a-z0-9]/g, '').includes(mention) || 
+              mention.includes(r.author.toLowerCase().replace(/[^a-z0-9]/g, ''))
+            );
+            if (matchedReply && matchedReply.author_id && matchedReply.author_id !== user?.id) {
+              recipientIds.push(matchedReply.author_id);
+            }
+          }
+        }
+      }
+
+      if (recipientIds.length > 0) {
+        sendReplyPushNotification(recipientIds, adminName, text);
+      }
+    } catch (err) {
+      // Revert on error
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, comments: post.comments } : p
+        )
+      );
+      console.warn('Failed to add reply:', err);
     }
   };
 
@@ -858,8 +1338,11 @@ export default function CommunityScreen() {
           renderItem={({ item }) => (
             <PostCard
               item={item}
+              avatarMap={avatarMap}
               onLike={toggleLike}
               onAddComment={handleAddComment}
+              onAddReply={handleAddReply}
+              onEdit={handleEditInit}
               onDelete={handleDeletePost}
             />
           )}
@@ -867,6 +1350,8 @@ export default function CommunityScreen() {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           ListHeaderComponent={renderHeader()}
+          refreshing={isLoading}
+          onRefresh={() => fetchPosts()}
           ListEmptyComponent={
             isLoading ? (
               <View style={styles.emptyContainer}>
@@ -1052,6 +1537,11 @@ const styles = StyleSheet.create({
     color: Colors.text.tertiary,
     fontWeight: '500',
     marginTop: 1,
+  },
+  editedLabel: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    fontStyle: 'italic',
   },
   categoryBadge: {
     paddingHorizontal: 10,
@@ -1259,5 +1749,115 @@ const styles = StyleSheet.create({
   },
   removeFilePreviewButton: {
     padding: 2,
+  },
+  optionsPostButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: Colors.bg.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  commentItemContainer: {
+    marginBottom: 10,
+  },
+  replyButton: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  replyButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.accent.primary,
+  },
+  repliesList: {
+    marginLeft: 36,
+    marginTop: 8,
+    gap: 8,
+  },
+  replyItem: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  replyAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: Colors.bg.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  replyAvatarText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+  },
+  replyAvatarImage: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+  },
+  commentAvatarImage: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+  },
+  replyContent: {
+    flex: 1,
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 8,
+    padding: 8,
+  },
+  replyAuthor: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.text.primary,
+    marginBottom: 2,
+  },
+  replyText: {
+    fontSize: 11,
+    color: Colors.text.secondary,
+    fontWeight: '500',
+    lineHeight: 15,
+  },
+  viewMoreRepliesButton: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  viewMoreRepliesText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+  },
+  replyInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginLeft: 36,
+    marginTop: 8,
+  },
+  replyInput: {
+    flex: 1,
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: '500',
+    color: Colors.text.primary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  replySendButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: Colors.accent.primary + '12',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  postAuthorAvatarImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
   },
 });

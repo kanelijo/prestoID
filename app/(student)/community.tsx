@@ -12,20 +12,39 @@ import {
   ActivityIndicator,
   Image,
   Linking,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useNotificationStore } from '@/stores/useNotificationStore';
+import { useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { sendPushNotification } from '@/lib/notifications';
+
+type Reply = {
+  author_id?: string;
+  author: string;
+  author_avatar?: string;
+  text: string;
+  timestamp: string;
+};
 
 type Comment = {
+  id: string;
+  author_id?: string;
   author: string;
+  author_avatar?: string;
   text: string;
+  timestamp: string;
+  replies: Reply[];
 };
 
 type Post = {
   id: string;
+  author_id?: string;
   author: string;
   category: 'announcement' | 'note' | 'schedule';
   text: string;
@@ -34,9 +53,14 @@ type Post = {
   comments: Comment[];
   liked: boolean;
   liked_by: string[];
+  viewed_by_count: number;
+  target_batches?: string[];
   media_url?: string;
   file_url?: string;
   file_name?: string;
+  author_avatar?: string | null;
+  is_edited?: boolean;
+  is_new?: boolean;
 };
 
 const getCategoryStyle = (category: Post['category']) => {
@@ -53,32 +77,76 @@ const getCategoryStyle = (category: Post['category']) => {
 interface PostCardProps {
   item: Post;
   studentName: string;
+  studentPhotoUrl: string | null;
+  avatarMap: Record<string, string>;
   onLike: (postId: string) => void;
   onAddComment: (postId: string, text: string) => void;
+  onAddReply: (postId: string, commentId: string, text: string) => void;
 }
 
-function PostCard({ item, studentName, onLike, onAddComment }: PostCardProps) {
+function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, onAddReply, avatarMap }: PostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [commentText, setCommentText] = useState('');
+  const [showAllComments, setShowAllComments] = useState(false);
+  const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
+  const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
+  const [replyText, setReplyText] = useState('');
 
-  const handleSend = () => {
+  const handleSendComment = () => {
     if (!commentText.trim()) return;
     onAddComment(item.id, commentText.trim());
     setCommentText('');
   };
 
+  const handleSendReply = (commentId: string) => {
+    if (!replyText.trim()) return;
+    onAddReply(item.id, commentId, replyText.trim());
+    setReplyText('');
+    setReplyingCommentId(null);
+  };
+
+  const handleShare = async () => {
+    try {
+      const shareUrl = item.media_url || item.file_url;
+      await Share.share({
+        message: `${item.author} posted in PrestoID:\n\n"${item.text}"${shareUrl ? `\n\nAttachment: ${shareUrl}` : ''}\n\nShared via PrestoID App`,
+      });
+    } catch (err) {
+      console.warn('Share error:', err);
+    }
+  };
+
   const cat = getCategoryStyle(item.category);
+  const commentsToRender = showAllComments ? item.comments : item.comments.slice(0, 2);
+
+  const authorAvatarUri = item.author_id ? (avatarMap[item.author_id] || item.author_avatar) : item.author_avatar;
 
   return (
     <View style={styles.postCard}>
       {/* Post Header */}
       <View style={styles.postHeader}>
-        <View style={styles.postAuthorAvatar}>
-          <Text style={styles.postAuthorInitial}>{item.author.charAt(0)}</Text>
-        </View>
+        {authorAvatarUri ? (
+          <Image source={{ uri: authorAvatarUri }} style={styles.postAuthorAvatarImage} />
+        ) : (
+          <View style={styles.postAuthorAvatar}>
+            <Text style={styles.postAuthorInitial}>{item.author.charAt(0)}</Text>
+          </View>
+        )}
         <View style={{ flex: 1 }}>
-          <Text style={styles.postAuthorName}>{item.author}</Text>
-          <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.postAuthorName}>{item.author}</Text>
+            {item.is_new && (
+              <View style={{ backgroundColor: Colors.status.danger, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                <Text style={{ color: '#FFF', fontSize: 10, fontWeight: 'bold' }}>NEW</Text>
+              </View>
+            )}
+          </View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+            {item.is_edited && (
+              <Text style={styles.editedLabel}>• Edited</Text>
+            )}
+          </View>
         </View>
         <View style={[styles.categoryBadge, { backgroundColor: cat.bg }]}>
           <Text style={styles.categoryBadgeText}>{cat.label}</Text>
@@ -143,9 +211,18 @@ function PostCard({ item, studentName, onLike, onAddComment }: PostCardProps) {
           <Text style={styles.engagementCount}>{item.comments.length}</Text>
         </TouchableOpacity>
 
+        <View style={styles.engagementButton}>
+          <Ionicons name="eye-outline" size={20} color={Colors.text.tertiary} />
+          <Text style={styles.engagementCount}>{item.viewed_by_count}</Text>
+        </View>
+
+        <TouchableOpacity style={styles.engagementButton} onPress={handleShare}>
+          <Ionicons name="share-social-outline" size={18} color={Colors.text.tertiary} />
+        </TouchableOpacity>
+
         {(item.file_url || item.media_url) && (
           <TouchableOpacity
-            style={styles.engagementButton}
+            style={[styles.engagementButton, { marginLeft: 'auto' }]}
             onPress={() => {
               const url = item.file_url || item.media_url;
               if (url) Linking.openURL(url);
@@ -157,32 +234,128 @@ function PostCard({ item, studentName, onLike, onAddComment }: PostCardProps) {
       </View>
 
       {/* Comments Section */}
-      {item.comments.length > 0 && !isExpanded && (
-        <TouchableOpacity
-          style={styles.viewCommentsButton}
-          onPress={() => setIsExpanded(true)}
-        >
-          <Text style={styles.viewCommentsText}>
-            View {item.comments.length} comment{item.comments.length > 1 ? 's' : ''}
-          </Text>
-        </TouchableOpacity>
-      )}
-
       {isExpanded && (
         <View style={styles.commentsSection}>
-          {item.comments.map((comment, idx) => (
-            <View key={idx} style={styles.commentItem}>
-              <View style={styles.commentAvatar}>
-                <Text style={styles.commentAvatarText}>
-                  {comment.author.charAt(0)}
-                </Text>
+          {commentsToRender.map((comment, idx) => {
+            const replies = comment.replies || [];
+            const isRepliesExpanded = !!expandedReplies[comment.id];
+            const repliesToRender = isRepliesExpanded ? replies : replies.slice(0, 1);
+            const isReplying = replyingCommentId === comment.id;
+
+            return (
+              <View key={comment.id || idx.toString()} style={styles.commentItemContainer}>
+                {/* Comment row */}
+                <View style={styles.commentItem}>
+                  {(() => {
+                    const commentAvatarUri = comment.author_id ? (avatarMap[comment.author_id] || comment.author_avatar) : comment.author_avatar;
+                    return commentAvatarUri ? (
+                      <Image source={{ uri: commentAvatarUri }} style={styles.commentAvatarImage} />
+                    ) : (
+                      <View style={styles.commentAvatar}>
+                        <Text style={styles.commentAvatarText}>
+                          {comment.author.charAt(0)}
+                        </Text>
+                      </View>
+                    );
+                  })()}
+                  <View style={styles.commentContent}>
+                    <Text style={styles.commentAuthor}>{comment.author}</Text>
+                    <Text style={styles.commentText}>{comment.text}</Text>
+                    <TouchableOpacity 
+                      style={styles.replyButton}
+                      onPress={() => {
+                        setReplyingCommentId(isReplying ? null : comment.id);
+                        setReplyText('');
+                      }}
+                    >
+                      <Text style={styles.replyButtonText}>Reply</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Nested Replies */}
+                {replies.length > 0 && (
+                  <View style={styles.repliesList}>
+                    {repliesToRender.map((reply, rIdx) => {
+                      const replyAvatarUri = reply.author_id ? (avatarMap[reply.author_id] || reply.author_avatar) : reply.author_avatar;
+                      return (
+                        <View key={rIdx} style={styles.replyItem}>
+                          {replyAvatarUri ? (
+                            <Image source={{ uri: replyAvatarUri }} style={styles.replyAvatarImage} />
+                          ) : (
+                            <View style={styles.replyAvatar}>
+                              <Text style={styles.replyAvatarText}>
+                                {reply.author.charAt(0)}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={styles.replyContent}>
+                            <Text style={styles.replyAuthor}>{reply.author}</Text>
+                            <Text style={styles.replyText}>{reply.text}</Text>
+                            <TouchableOpacity 
+                              style={styles.replyButton}
+                              onPress={() => {
+                                setReplyingCommentId(comment.id);
+                                setReplyText(`@${reply.author} `);
+                              }}
+                            >
+                              <Text style={styles.replyButtonText}>Reply</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+
+                    {/* View more replies */}
+                    {replies.length > 1 && (
+                      <TouchableOpacity
+                        style={styles.viewMoreRepliesButton}
+                        onPress={() => {
+                          setExpandedReplies(prev => ({
+                            ...prev,
+                            [comment.id]: !isRepliesExpanded
+                          }));
+                        }}
+                      >
+                        <Text style={styles.viewMoreRepliesText}>
+                          {isRepliesExpanded ? 'Hide replies' : `View replies (${replies.length})`}
+                        </Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                )}
+
+                {/* Reply Input row */}
+                {isReplying && (
+                  <View style={styles.replyInputRow}>
+                    <TextInput
+                      style={styles.replyInput}
+                      placeholder={`Reply to ${comment.author}...`}
+                      placeholderTextColor={Colors.text.tertiary}
+                      value={replyText}
+                      onChangeText={setReplyText}
+                      onSubmitEditing={() => handleSendReply(comment.id)}
+                    />
+                    <TouchableOpacity style={styles.replySendButton} onPress={() => handleSendReply(comment.id)}>
+                      <Ionicons name="send" size={14} color={Colors.accent.primary} />
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
-              <View style={styles.commentContent}>
-                <Text style={styles.commentAuthor}>{comment.author}</Text>
-                <Text style={styles.commentText}>{comment.text}</Text>
-              </View>
-            </View>
-          ))}
+            );
+          })}
+
+          {/* View more comments */}
+          {item.comments.length > 2 && (
+            <TouchableOpacity
+              style={styles.viewCommentsButton}
+              onPress={() => setShowAllComments(!showAllComments)}
+            >
+              <Text style={styles.viewCommentsText}>
+                {showAllComments ? 'Collapse comments' : `View more comments (${item.comments.length - 2})`}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       )}
 
@@ -195,9 +368,9 @@ function PostCard({ item, studentName, onLike, onAddComment }: PostCardProps) {
             placeholderTextColor={Colors.text.tertiary}
             value={commentText}
             onChangeText={setCommentText}
-            onSubmitEditing={handleSend}
+            onSubmitEditing={handleSendComment}
           />
-          <TouchableOpacity style={styles.commentSendButton} onPress={handleSend}>
+          <TouchableOpacity style={styles.commentSendButton} onPress={handleSendComment}>
             <Ionicons name="send" size={18} color={Colors.accent.primary} />
           </TouchableOpacity>
         </View>
@@ -212,16 +385,147 @@ export default function StudentCommunityScreen() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [studentProfile, setStudentProfile] = useState<{name: string, business_id: string, batch_name: string, id: string} | null>(null);
+  const [studentProfile, setStudentProfile] = useState<{name: string, business_id: string, batch_name: string, id: string, photo_url?: string | null} | null>(null);
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+
+  const sendLikePushNotification = async (recipientId: string, likerName: string, postText: string) => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', recipientId)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        await sendPushNotification(
+          [profile.push_token],
+          'New Like',
+          `${likerName} liked your post: "${postText.substring(0, 40)}${postText.length > 40 ? '...' : ''}"`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send like push notification:', err);
+    }
+  };
+
+  const sendCommentPushNotification = async (recipientId: string, commentAuthorName: string, text: string) => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('push_token')
+        .eq('id', recipientId)
+        .maybeSingle();
+
+      if (profile?.push_token) {
+        await sendPushNotification(
+          [profile.push_token],
+          'New Comment',
+          `${commentAuthorName} commented: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" on your post`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send comment push notification:', err);
+    }
+  };
+
+  const sendReplyPushNotification = async (recipientIds: string[], replyAuthorName: string, text: string) => {
+    try {
+      const uniqueIds = Array.from(new Set(recipientIds));
+      if (uniqueIds.length === 0) return;
+
+      const { data: profiles, error } = await supabase
+        .from('profiles')
+        .select('id, push_token')
+        .in('id', uniqueIds);
+
+      if (error || !profiles) return;
+
+      const tokens = profiles.map(p => p.push_token).filter(t => t);
+      if (tokens.length > 0) {
+        await sendPushNotification(
+          tokens,
+          'New Reply on Post',
+          `${replyAuthorName} replied: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
+          { screen: 'community' }
+        );
+      }
+    } catch (err) {
+      console.warn('Failed to send reply push notification:', err);
+    }
+  };
+
+  useEffect(() => {
+    const resolveAvatars = async () => {
+      if (posts.length === 0) return;
+      try {
+        const uniqueIds = new Set<string>();
+        posts.forEach((p) => {
+          if (p.author_id) uniqueIds.add(p.author_id);
+          p.comments.forEach((c) => {
+            if (c.author_id) uniqueIds.add(c.author_id);
+            c.replies?.forEach((r) => {
+              if (r.author_id) uniqueIds.add(r.author_id);
+            });
+          });
+        });
+
+        const idList = Array.from(uniqueIds);
+        if (idList.length === 0) return;
+
+        const newMap: Record<string, string> = {};
+
+        // 1. Fetch from profiles
+        const { data: profilesData } = await supabase
+          .from('profiles')
+          .select('id, avatar_url')
+          .in('id', idList);
+
+        profilesData?.forEach((p) => {
+          if (p.avatar_url) newMap[p.id] = p.avatar_url;
+        });
+
+        // 2. Fetch from students
+        const { data: studentsData } = await supabase
+          .from('students')
+          .select('user_id, photo_url')
+          .in('user_id', idList);
+
+        studentsData?.forEach((s) => {
+          if (s.user_id && s.photo_url) newMap[s.user_id] = s.photo_url;
+        });
+
+        setAvatarMap((prev) => ({ ...prev, ...newMap }));
+      } catch (err) {
+        console.warn('Failed to resolve avatars map:', err);
+      }
+    };
+
+    resolveAvatars();
+  }, [posts]);
 
   const fetchStudentProfile = useCallback(async () => {
-    if (!user || !activeStudentId) return null;
+    if (!user) return null;
     try {
       const { data, error } = await supabase
         .from('students')
-        .select('id, name, business_id, batch_name')
-        .eq('id', activeStudentId)
+        .select('id, name, business_id, batch_name, photo_url')
+        .eq('user_id', user.id)
         .single();
+
+      console.log('[DEBUG] fetchStudentProfile result:', data);
+      if (error) {
+        console.log('[DEBUG] fetchStudentProfile error:', error);
+      }
+
+      // Debug check the profiles table for this user
+      const { data: profileRow } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .single();
+      console.log('[DEBUG] profiles row for student:', profileRow);
 
       if (!error && data) {
         setStudentProfile(data);
@@ -231,37 +535,16 @@ export default function StudentCommunityScreen() {
       console.warn('Failed to fetch student profile for community:', err);
     }
     return null;
-  }, [user, activeStudentId]);
-
-  const markPostAsViewed = async (postId: string, studentId: string) => {
-    try {
-      const { data: post } = await supabase
-        .from('community_posts')
-        .select('viewed_by')
-        .eq('id', Number(postId))
-        .single();
-        
-      if (post) {
-        const viewedBy = Array.isArray(post.viewed_by) ? post.viewed_by : [];
-        if (!viewedBy.includes(studentId)) {
-          viewedBy.push(studentId);
-          await supabase
-            .from('community_posts')
-            .update({ viewed_by: viewedBy })
-            .eq('id', Number(postId));
-        }
-      }
-    } catch (e) {
-      // Ignore background error
-    }
-  };
+  }, [user]);
 
   const fetchPosts = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
       const profile = studentProfile || await fetchStudentProfile();
+      console.log('[DEBUG] fetchPosts using profile:', profile);
       if (!profile) {
         setIsLoading(false);
+        console.log('[DEBUG] fetchPosts aborted because profile is null');
         return;
       }
 
@@ -272,21 +555,29 @@ export default function StudentCommunityScreen() {
         .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
         .order('created_at', { ascending: false });
 
+      console.log('[DEBUG] fetchPosts query result count:', data?.length);
+      if (error) {
+        console.log('[DEBUG] fetchPosts query error:', error);
+      }
+
       if (error) throw error;
+
+      // Load read posts to determine if NEW
+      const readPostsJSON = await AsyncStorage.getItem('@presto_student_read_posts');
+      const readPosts: string[] = readPostsJSON ? JSON.parse(readPostsJSON) : [];
 
       const loadedPosts: Post[] = [];
       
       for (const p of (data || [])) {
         // Filter by batch
         const targetBatches = p.target_batches || [];
+        console.log('[DEBUG] Post target_batches:', targetBatches, 'Student batch:', profile.batch_name);
         if (targetBatches.length > 0 && !targetBatches.includes(profile.batch_name)) {
+          console.log('[DEBUG] Post skipped due to batch mismatch');
           continue; // Skip post intended for another batch
         }
-        
-        // Mark as viewed
-        if (!p.viewed_by?.includes(profile.id)) {
-          markPostAsViewed(p.id, profile.id);
-        }
+
+        const isNewPost = !readPosts.includes(String(p.id));
 
         const createdDate = new Date(p.created_at);
         const timeLabel = createdDate.toLocaleDateString('en-US', {
@@ -299,8 +590,22 @@ export default function StudentCommunityScreen() {
         const likedByArray = Array.isArray(p.liked_by) ? p.liked_by : [];
         const isLiked = user ? likedByArray.includes(user.id) : false;
 
+        // Track post views by updating viewed_by list in background
+        const viewedByArray = Array.isArray(p.viewed_by) ? [...p.viewed_by] : [];
+        if (user && !viewedByArray.includes(user.id)) {
+          viewedByArray.push(user.id);
+          supabase
+            .from('community_posts')
+            .update({ viewed_by: viewedByArray })
+            .eq('id', p.id)
+            .then(({ error }) => {
+              if (error) console.log('Failed to update viewed_by in background:', error);
+            });
+        }
+
         loadedPosts.push({
           id: String(p.id),
+          author_id: p.author_id,
           author: p.author_name || 'Upendra Sir',
           category: p.category,
           text: p.text,
@@ -309,24 +614,54 @@ export default function StudentCommunityScreen() {
           comments: p.comments || [],
           liked: isLiked,
           liked_by: likedByArray,
+          viewed_by_count: viewedByArray.length,
           media_url: p.media_url,
           file_url: p.file_url,
           file_name: p.file_name,
+          target_batches: Array.isArray(p.target_batches) ? p.target_batches : [],
+          author_avatar: p.author_avatar,
+          is_edited: p.is_edited,
+          is_new: isNewPost,
         });
       }
       setPosts(loadedPosts);
+      if (loadedPosts.length > 0) {
+        const postIds = loadedPosts.map(p => p.id);
+        AsyncStorage.setItem('@presto_student_read_posts', JSON.stringify(postIds)).then(() => {
+          useNotificationStore.getState().setStudentCommunityUnreadCount(0);
+        }).catch(err => console.warn('Failed to save read posts:', err));
+      }
     } catch (err) {
       console.warn('Failed to fetch community posts:', err);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [user, activeStudentId, studentProfile, fetchStudentProfile]);
+  }, [user, fetchStudentProfile]);
 
   useEffect(() => {
-    fetchStudentProfile();
-    fetchPosts();
+    // Refresh user metadata in background exactly once on mount to get latest avatar
+    const refreshUser = async () => {
+      try {
+        const { data: { user: freshUser } } = await supabase.auth.getUser();
+        if (freshUser) {
+          useAuthStore.getState().setUser(freshUser);
+        }
+      } catch (e) {
+        console.warn('Failed to refresh user in community:', e);
+      }
+    };
+    refreshUser();
+  }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      fetchStudentProfile();
+      fetchPosts();
+    }, [fetchStudentProfile, fetchPosts])
+  );
+
+  useEffect(() => {
     // Set up postgres realtime subscription for auto-syncing updates
     const channel = supabase
       .channel('student-community-channel')
@@ -350,9 +685,13 @@ export default function StudentCommunityScreen() {
                       comments: updated.comments ?? [],
                       liked_by: updated.liked_by ?? [],
                       liked: user ? (updated.liked_by ?? []).includes(user.id) : false,
+                      viewed_by_count: Array.isArray(updated.viewed_by) ? updated.viewed_by.length : 0,
                       media_url: updated.media_url,
                       file_url: updated.file_url,
                       file_name: updated.file_name,
+                      author_avatar: updated.author_avatar,
+                      is_edited: updated.is_edited,
+                      author_id: updated.author_id,
                     }
                   : p
               )
@@ -367,7 +706,7 @@ export default function StudentCommunityScreen() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchPosts]);
+  }, [fetchPosts, user]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);
@@ -409,6 +748,10 @@ export default function StudentCommunityScreen() {
         .eq('id', Number(postId));
 
       if (error) throw error;
+
+      if (nextLiked && post.author_id && post.author_id !== user.id) {
+        sendLikePushNotification(post.author_id, studentProfile?.name || 'A student', post.text);
+      }
     } catch (err) {
       // Revert on failure
       setPosts((prev) =>
@@ -424,7 +767,21 @@ export default function StudentCommunityScreen() {
     const post = posts.find((p) => p.id === postId);
     if (!post) return;
 
-    const newCommentList = [...post.comments, { author: studentProfile?.name || 'Student', text }];
+    const newComment: Comment = {
+      id: Math.random().toString(36).substring(2, 9),
+      author_id: user?.id,
+      author: studentProfile?.name || 'Student',
+      author_avatar: studentProfile?.photo_url || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      text,
+      timestamp: new Date().toLocaleDateString('en-US', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+      replies: [],
+    };
+    const newCommentList = [...post.comments, newComment];
 
     // Optimistic Update
     setPosts((prev) =>
@@ -440,6 +797,10 @@ export default function StudentCommunityScreen() {
         .eq('id', Number(postId));
 
       if (error) throw error;
+
+      if (post.author_id && post.author_id !== user?.id) {
+        sendCommentPushNotification(post.author_id, studentProfile?.name || 'A student', text);
+      }
     } catch (err) {
       // Revert on failure
       setPosts((prev) =>
@@ -448,6 +809,88 @@ export default function StudentCommunityScreen() {
         )
       );
       console.warn('Failed to add comment:', err);
+    }
+  };
+
+  const handleAddReply = async (postId: string, commentId: string, text: string) => {
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const newReply: Reply = {
+      author_id: user?.id,
+      author: studentProfile?.name || 'Student',
+      author_avatar: studentProfile?.photo_url || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      text,
+      timestamp: new Date().toLocaleDateString('en-US', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    };
+
+    const newCommentList = post.comments.map((comment, idx) => {
+      const cId = comment.id || idx.toString();
+      if (cId === commentId) {
+        return {
+          ...comment,
+          replies: [...(comment.replies || []), newReply],
+        };
+      }
+      return comment;
+    });
+
+    // Optimistic Update
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, comments: newCommentList } : p
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('community_posts')
+        .update({ comments: newCommentList })
+        .eq('id', Number(postId));
+
+      if (error) throw error;
+
+      // Notify relevant users (post author, comment author, and mentioned reply author)
+      const recipientIds: string[] = [];
+      if (post.author_id && post.author_id !== user?.id) {
+        recipientIds.push(post.author_id);
+      }
+      const comment = post.comments.find((c, idx) => (c.id || idx.toString()) === commentId);
+      if (comment) {
+        if (comment.author_id && comment.author_id !== user?.id) {
+          recipientIds.push(comment.author_id);
+        }
+        if (text.startsWith('@')) {
+          const firstSpace = text.indexOf(' ');
+          if (firstSpace !== -1) {
+            const mention = text.substring(1, firstSpace).toLowerCase().replace(/[^a-z0-9]/g, '');
+            const matchedReply = comment.replies?.find(r => 
+              r.author.toLowerCase().replace(/[^a-z0-9]/g, '').includes(mention) || 
+              mention.includes(r.author.toLowerCase().replace(/[^a-z0-9]/g, ''))
+            );
+            if (matchedReply && matchedReply.author_id && matchedReply.author_id !== user?.id) {
+              recipientIds.push(matchedReply.author_id);
+            }
+          }
+        }
+      }
+
+      if (recipientIds.length > 0) {
+        sendReplyPushNotification(recipientIds, studentProfile?.name || 'A student', text);
+      }
+    } catch (err) {
+      // Revert on failure
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, comments: post.comments } : p
+        )
+      );
+      console.warn('Failed to add reply:', err);
     }
   };
 
@@ -469,8 +912,11 @@ export default function StudentCommunityScreen() {
             <PostCard
               item={item}
               studentName={studentProfile?.name || 'Student'}
+              studentPhotoUrl={studentProfile?.photo_url || null}
+              avatarMap={avatarMap}
               onLike={toggleLike}
               onAddComment={handleAddComment}
+              onAddReply={handleAddReply}
             />
           )}
           keyExtractor={(item) => item.id}
@@ -563,6 +1009,11 @@ const styles = StyleSheet.create({
     color: Colors.text.tertiary,
     fontWeight: '500',
     marginTop: 1,
+  },
+  editedLabel: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    fontStyle: 'italic',
   },
   categoryBadge: {
     paddingHorizontal: 10,
@@ -723,5 +1174,108 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: Colors.text.primary,
+  },
+  commentItemContainer: {
+    marginBottom: 10,
+  },
+  replyButton: {
+    marginTop: 4,
+    alignSelf: 'flex-start',
+  },
+  replyButtonText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.accent.primary,
+  },
+  repliesList: {
+    marginLeft: 36,
+    marginTop: 8,
+    gap: 8,
+  },
+  replyItem: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  replyAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: Colors.bg.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  replyAvatarText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+  },
+  replyAvatarImage: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+  },
+  commentAvatarImage: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+  },
+  replyContent: {
+    flex: 1,
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 8,
+    padding: 8,
+  },
+  replyAuthor: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.text.primary,
+    marginBottom: 2,
+  },
+  replyText: {
+    fontSize: 11,
+    color: Colors.text.secondary,
+    fontWeight: '500',
+    lineHeight: 15,
+  },
+  viewMoreRepliesButton: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  viewMoreRepliesText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+  },
+  replyInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginLeft: 36,
+    marginTop: 8,
+  },
+  replyInput: {
+    flex: 1,
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 12,
+    fontWeight: '500',
+    color: Colors.text.primary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  replySendButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: Colors.accent.primary + '12',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  postAuthorAvatarImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
   },
 });

@@ -10,21 +10,21 @@ import { useAuthStore } from '@/stores/useAuthStore';
 
 // Temporary mock data for UI
 const MOCK_TESTS = [
-  { id: '1', title: 'MPPSC Prelims Mock 1', target_batches: ['MPPSC'], duration_minutes: 60, status: 'published', scheduled_at: new Date(Date.now() + 86400000).toISOString(), created_at: new Date().toISOString() },
-  { id: '2', title: 'SSC CGL Tier 1', target_batches: ['SSC'], duration_minutes: 60, status: 'draft', scheduled_at: null, created_at: new Date(Date.now() - 10000).toISOString() },
-  { id: '3', title: 'Weekly Current Affairs', target_batches: ['All'], duration_minutes: 30, status: 'completed', scheduled_at: new Date(Date.now() - 86400000).toISOString(), created_at: new Date(Date.now() - 100000).toISOString() },
+  { id: '1', title: 'MPPSC Prelims Mock 1', batch_name: 'MPPSC', duration_minutes: 60, status: 'published', scheduled_at: new Date(Date.now() + 86400000).toISOString(), created_at: new Date().toISOString() },
+  { id: '2', title: 'SSC CGL Tier 1', batch_name: 'SSC', duration_minutes: 60, status: 'draft', scheduled_at: null, created_at: new Date(Date.now() - 10000).toISOString() },
+  { id: '3', title: 'Weekly Current Affairs', batch_name: 'All', duration_minutes: 30, status: 'completed', scheduled_at: new Date(Date.now() - 86400000).toISOString(), created_at: new Date(Date.now() - 100000).toISOString() },
 ];
 
 export default function AdminTestScreen() {
   const router = useRouter();
-  const { verified } = useAuthStore();
+  const { verified, businessId } = useAuthStore();
   const [tests, setTests] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchTests = async (silent = false) => {
     if (!silent) setIsLoading(true);
-    if (!verified) {
+    if (!verified || !businessId) {
       setTests(MOCK_TESTS);
       setIsLoading(false);
       return;
@@ -34,6 +34,7 @@ export default function AdminTestScreen() {
       const { data, error } = await supabase
         .from('tests')
         .select('*')
+        .eq('business_id', businessId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -51,7 +52,7 @@ export default function AdminTestScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchTests();
-    }, [verified])
+    }, [verified, businessId])
   );
 
   const onRefresh = async () => {
@@ -85,7 +86,7 @@ export default function AdminTestScreen() {
       >
         <View style={styles.cardHeader}>
           <View style={styles.batchBadge}>
-            <Text style={styles.batchText}>{item.target_batches.join(', ')}</Text>
+            <Text style={styles.batchText}>{item.batch_name || 'All'}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: statusColor + '15' }]}>
             <Text style={[styles.statusText, { color: statusColor }]}>{item.status.toUpperCase()}</Text>

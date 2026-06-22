@@ -6,6 +6,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
+
+let DocumentPicker: any = null;
+try {
+  DocumentPicker = require('expo-document-picker');
+} catch (e) {
+  console.warn('DocumentPicker native module not found:', e);
+}
 
 // Temporary mock data
 const MOCK_BANKS = [
@@ -16,7 +25,7 @@ const MOCK_BANKS = [
 export default function TestBanksScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { verified, user } = useAuthStore();
+  const { verified, user, businessId } = useAuthStore();
   const [banks, setBanks] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
@@ -24,10 +33,12 @@ export default function TestBanksScreen() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [newBankName, setNewBankName] = useState('');
   const [newBankDesc, setNewBankDesc] = useState('');
+  const [selectedFile, setSelectedFile] = useState<any>(null);
+  const [isUploading, setIsUploading] = useState(false);
 
   const fetchBanks = async () => {
     setIsLoading(true);
-    if (!verified) {
+    if (!verified || !businessId) {
       setBanks(MOCK_BANKS);
       setIsLoading(false);
       return;
@@ -37,6 +48,7 @@ export default function TestBanksScreen() {
       const { data, error } = await supabase
         .from('test_banks')
         .select('*')
+        .eq('business_id', businessId)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
@@ -51,7 +63,54 @@ export default function TestBanksScreen() {
 
   useEffect(() => {
     fetchBanks();
-  }, [verified]);
+  }, [verified, businessId]);
+
+  const handlePickDocument = async () => {
+    if (!DocumentPicker || !DocumentPicker.getDocumentAsync) {
+      Alert.alert('Unsupported', 'Document picking is not supported in this development build.');
+      return;
+    }
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        setSelectedFile(result.assets[0]);
+      }
+    } catch (err) {
+      console.warn('Pick document error:', err);
+    }
+  };
+
+  const uploadFileToSupabase = async (uri: string, folder: string, filename: string): Promise<string> => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    const filePath = `${folder}/${Date.now()}_${filename}`;
+    const ext = filename.split('.').pop()?.toLowerCase();
+    const contentType = ext === 'pdf' ? 'application/pdf' : 
+                        ext === 'png' ? 'image/png' :
+                        ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' :
+                        'application/octet-stream';
+                        
+    const { data, error } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, decode(base64), {
+        contentType,
+        upsert: true,
+      });
+      
+    if (error) throw error;
+    
+    const { data: publicUrlData } = supabase.storage
+      .from('avatars')
+      .getPublicUrl(filePath);
+      
+    return publicUrlData.publicUrl;
+  };
 
   const handleCreateBank = async () => {
     if (!newBankName.trim()) {
@@ -59,7 +118,7 @@ export default function TestBanksScreen() {
       return;
     }
 
-    if (!verified) {
+    if (!verified || !businessId) {
       const newBank = {
         id: Math.random().toString(),
         name: newBankName,
@@ -70,28 +129,29 @@ export default function TestBanksScreen() {
       setIsModalVisible(false);
       setNewBankName('');
       setNewBankDesc('');
+      setSelectedFile(null);
       return;
     }
 
+    setIsUploading(true);
     try {
-      // In a real app, we would upload the file to Supabase Storage here
-      // For MVP, we're just saving the text/metadata
-      
-      // Fetch institute_id
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('institute_id')
-        .eq('id', user?.id)
-        .single();
-        
-      if (!profile?.institute_id) throw new Error("Could not find institute ID");
+      let fileUrl = null;
+      if (selectedFile) {
+        try {
+          fileUrl = await uploadFileToSupabase(selectedFile.uri, 'test-banks', selectedFile.name);
+        } catch (uploadErr: any) {
+          console.warn('File upload failed, saving without file:', uploadErr);
+          Alert.alert('Upload Warning', 'File upload failed. Saving the test bank with text notes only.');
+        }
+      }
 
       const { data, error } = await supabase
         .from('test_banks')
         .insert({
-          institute_id: profile.institute_id,
+          business_id: businessId,
           name: newBankName,
           description: newBankDesc,
+          file_url: fileUrl,
         })
         .select()
         .single();
@@ -102,9 +162,12 @@ export default function TestBanksScreen() {
       setIsModalVisible(false);
       setNewBankName('');
       setNewBankDesc('');
+      setSelectedFile(null);
       Alert.alert('Success', 'Test bank created successfully. You can now use it to generate AI tests.');
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create test bank');
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -116,6 +179,12 @@ export default function TestBanksScreen() {
       <View style={styles.bankInfo}>
         <Text style={styles.bankName}>{item.name}</Text>
         <Text style={styles.bankDesc} numberOfLines={1}>{item.description || 'No description'}</Text>
+        {item.file_url && (
+          <View style={styles.fileLinkRow}>
+            <Ionicons name="document-outline" size={14} color={Colors.accent.primary} />
+            <Text style={styles.fileLinkText} numberOfLines={1}>Attached Document</Text>
+          </View>
+        )}
         <Text style={styles.bankDate}>
           Added on {new Date(item.created_at).toLocaleDateString()}
         </Text>
@@ -212,9 +281,11 @@ export default function TestBanksScreen() {
                   />
                 </View>
                 
-                <TouchableOpacity style={styles.uploadBtn}>
-                  <Ionicons name="document-attach-outline" size={20} color={Colors.text.secondary} />
-                  <Text style={styles.uploadBtnText}>Attach PDF / Image (Optional)</Text>
+                <TouchableOpacity style={styles.uploadBtn} onPress={handlePickDocument}>
+                  <Ionicons name={selectedFile ? "checkmark-circle" : "document-attach-outline"} size={20} color={selectedFile ? Colors.status.success : Colors.text.secondary} />
+                  <Text style={[styles.uploadBtnText, selectedFile && { color: Colors.status.success }]} numberOfLines={1}>
+                    {selectedFile ? selectedFile.name : 'Attach PDF / Image (Optional)'}
+                  </Text>
                 </TouchableOpacity>
               </View>
 
@@ -222,8 +293,12 @@ export default function TestBanksScreen() {
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setIsModalVisible(false)}>
                   <Text style={styles.cancelBtnText}>Cancel</Text>
                 </TouchableOpacity>
-                <TouchableOpacity style={styles.saveBtn} onPress={handleCreateBank}>
-                  <Text style={styles.saveBtnText}>Save Material</Text>
+                <TouchableOpacity style={styles.saveBtn} onPress={handleCreateBank} disabled={isUploading}>
+                  {isUploading ? (
+                    <ActivityIndicator color="#FFF" />
+                  ) : (
+                    <Text style={styles.saveBtnText}>Save Material</Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </View>
@@ -312,6 +387,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: Colors.text.secondary,
     marginTop: 4,
+  },
+  fileLinkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
+  },
+  fileLinkText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.accent.primary,
   },
   bankDate: {
     fontSize: 11,

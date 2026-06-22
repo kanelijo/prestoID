@@ -14,7 +14,7 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase } from '@/lib/supabase';
+import { supabase, signOutAll } from '@/lib/supabase';
 import { Colors, Gradients } from '@/constants/colors';
 
 export default function ResetPasswordScreen() {
@@ -94,7 +94,7 @@ export default function ResetPasswordScreen() {
         {
           text: 'Log In',
           onPress: async () => {
-            await supabase.auth.signOut();
+            await signOutAll();
             router.replace('/(auth)/login');
           },
         },

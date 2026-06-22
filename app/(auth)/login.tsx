@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 GoogleSignin.configure({
-  webClientId: '1025675193948-mqvpd8ibggabdk1kgar0bub55vkhbkur.apps.googleusercontent.com',
+  webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
   offlineAccess: true,
 });
 
@@ -79,6 +79,11 @@ export default function LoginScreen() {
     setIsLoading(true);
     try {
       await GoogleSignin.hasPlayServices();
+      try {
+        await GoogleSignin.signOut(); // Force clear previous session to show account chooser
+      } catch (e) {
+        // Ignore
+      }
       const userInfo = await GoogleSignin.signIn();
       const idToken = userInfo.data?.idToken || (userInfo as any).idToken;
 
@@ -128,8 +133,14 @@ export default function LoginScreen() {
     if (!userRole || (userRole !== role && !profile?.business_id && !profile?.claimed)) {
       const { error: roleUpdateError } = await supabase
         .from('profiles')
-        .update({ role: role })
-        .eq('id', user.id);
+        .upsert({
+          id: user.id,
+          name: role === 'student' ? 'Student' : (user.user_metadata?.name || 'User'),
+          email: user.email,
+          role: role,
+          business_id: profile?.business_id || null,
+          claimed: profile?.claimed || false,
+        });
 
       if (roleUpdateError) throw roleUpdateError;
       userRole = role;
