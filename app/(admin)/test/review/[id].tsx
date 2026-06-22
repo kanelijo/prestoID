@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Image } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system/legacy';
+import { decode } from 'base64-arraybuffer';
 
 // Mock test data for fallback
 const MOCK_QUESTIONS = [
@@ -38,11 +42,21 @@ export default function TestReviewScreen() {
 
   // Edit Modal State
   const [editingQuestion, setEditingQuestion] = useState<any | null>(null);
+  const [editorMode, setEditorMode] = useState<'text' | 'image'>('text');
   const [editQText, setEditQText] = useState('');
   const [editOptions, setEditOptions] = useState<string[]>(['', '', '', '']);
   const [editCorrectIdx, setEditCorrectIdx] = useState(0);
   const [editExplanation, setEditExplanation] = useState('');
   const [isSavingQuestion, setIsSavingQuestion] = useState(false);
+
+  // Image Cropping State
+  const [rawImageUri, setRawImageUri] = useState<string | null>(null);
+  const [imageWidth, setImageWidth] = useState(0);
+  const [imageHeight, setImageHeight] = useState(0);
+  const [cropYPercent, setCropYPercent] = useState(0);
+  const [cropHeightPercent, setCropHeightPercent] = useState(100);
+  const [croppedImageUri, setCroppedImageUri] = useState<string | null>(null);
+  const [isCropping, setIsCropping] = useState(false);
 
   useEffect(() => {
     fetchTestDetails();
@@ -87,66 +101,203 @@ export default function TestReviewScreen() {
 
   const openEditModal = (q: any) => {
     setEditingQuestion(q);
-    setEditQText(q.question_text);
-    setEditOptions(q.options && q.options.length === 4 ? [...q.options] : ['', '', '', '']);
-    setEditCorrectIdx(q.correct_option !== undefined ? q.correct_option : 0);
-    setEditExplanation(q.explanation || '');
+    if (q.id === 'new-q') {
+      setEditorMode('text');
+      setEditQText('');
+      setEditOptions(['', '', '', '']);
+      setEditCorrectIdx(0);
+      setEditExplanation('');
+      setRawImageUri(null);
+      setCroppedImageUri(null);
+    } else {
+      setEditorMode(q.question_image_url ? 'image' : 'text');
+      setEditQText(q.question_text || '');
+      setEditOptions(q.options && q.options.length === 4 ? [...q.options] : ['', '', '', '']);
+      setEditCorrectIdx(q.correct_option !== undefined ? q.correct_option : 0);
+      setEditExplanation(q.explanation || '');
+      setRawImageUri(q.question_image_url || null);
+      setCroppedImageUri(q.question_image_url || null);
+    }
   };
 
-  const handleSaveQuestion = async () => {
-    if (!editQText.trim() || editOptions.some(opt => !opt.trim())) {
-      Alert.alert('Error', 'Please fill the question and all 4 options.');
+  const handlePickImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission Denied', 'Please allow gallery access to pick photos.');
       return;
     }
 
-    if (!verified || id === 'demo-test-id') {
-      const updated = questions.map(q => {
-        if (q.id === editingQuestion.id) {
-          return {
-            ...q,
-            question_text: editQText,
-            options: [...editOptions],
-            correct_option: editCorrectIdx,
-            explanation: editExplanation
-          };
-        }
-        return q;
-      });
-      setQuestions(updated);
-      setEditingQuestion(null);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: false,
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      setRawImageUri(asset.uri);
+      setImageWidth(asset.width);
+      setImageHeight(asset.height);
+      setCropYPercent(0);
+      setCropHeightPercent(100);
+      setCroppedImageUri(asset.uri);
+    }
+  };
+
+  const handleTakePhoto = async () => {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Permission Denied', 'Please allow camera access to take photos.');
       return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 1,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const asset = result.assets[0];
+      setRawImageUri(asset.uri);
+      setImageWidth(asset.width);
+      setImageHeight(asset.height);
+      setCropYPercent(0);
+      setCropHeightPercent(100);
+      setCroppedImageUri(asset.uri);
+    }
+  };
+
+  const applyCrop = async () => {
+    if (!rawImageUri) return;
+    setIsCropping(true);
+    try {
+      const originY = Math.floor((cropYPercent / 100) * imageHeight);
+      const cropHeight = Math.floor((cropHeightPercent / 100) * imageHeight);
+      
+      const safeOriginY = Math.max(0, Math.min(originY, imageHeight - 10));
+      const safeHeight = Math.max(10, Math.min(cropHeight, imageHeight - safeOriginY));
+
+      const result = await ImageManipulator.manipulateAsync(
+        rawImageUri,
+        [
+          {
+            crop: {
+              originX: 0,
+              originY: safeOriginY,
+              width: imageWidth,
+              height: safeHeight,
+            },
+          },
+        ],
+        { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
+      );
+      setCroppedImageUri(result.uri);
+    } catch (e) {
+      console.warn('Cropping error:', e);
+      Alert.alert('Error', 'Failed to crop image.');
+    } finally {
+      setIsCropping(false);
+    }
+  };
+
+  const uploadCroppedImage = async (uri: string): Promise<string> => {
+    const base64 = await FileSystem.readAsStringAsync(uri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    
+    const filename = `question-${id}-${Math.floor(Date.now() / 1000)}.jpg`;
+    const filePath = `test-questions/${filename}`;
+                        
+    const { data, error } = await supabase.storage
+      .from('avatars')
+      .upload(filePath, decode(base64), {
+        contentType: 'image/jpeg',
+        upsert: true,
+      });
+      
+    if (error) throw error;
+    
+    const { data: publicUrlData } = supabase.storage
+      .from('avatars')
+      .getPublicUrl(filePath);
+      
+    return publicUrlData.publicUrl;
+  };
+
+  const handleSaveQuestion = async () => {
+    if (editorMode === 'text') {
+      if (!editQText.trim() || editOptions.some(opt => !opt.trim())) {
+        Alert.alert('Error', 'Please fill the question and all 4 options.');
+        return;
+      }
+    } else {
+      if (!croppedImageUri) {
+        Alert.alert('Error', 'Please select and crop a question image.');
+        return;
+      }
     }
 
     setIsSavingQuestion(true);
     try {
-      const { error } = await supabase
-        .from('test_questions')
-        .update({
-          question_text: editQText,
-          options: editOptions,
-          correct_option: editCorrectIdx,
-          explanation: editExplanation
-        })
-        .eq('id', editingQuestion.id);
-
-      if (error) throw error;
-
-      // Update local state
-      const updated = questions.map(q => {
-        if (q.id === editingQuestion.id) {
-          return {
-            ...q,
-            question_text: editQText,
-            options: [...editOptions],
-            correct_option: editCorrectIdx,
-            explanation: editExplanation
-          };
+      let finalImageUrl = null;
+      
+      if (editorMode === 'image' && croppedImageUri) {
+        if (croppedImageUri.startsWith('http')) {
+          finalImageUrl = croppedImageUri;
+        } else {
+          finalImageUrl = await uploadCroppedImage(croppedImageUri);
         }
-        return q;
-      });
-      setQuestions(updated);
+      }
+
+      const payload = {
+        question_text: editorMode === 'text' ? editQText : 'Image Question',
+        options: editorMode === 'text' ? editOptions : ['A', 'B', 'C', 'D'],
+        correct_option: editCorrectIdx,
+        explanation: editExplanation,
+        question_image_url: editorMode === 'text' ? null : finalImageUrl
+      };
+
+      if (!verified || id === 'demo-test-id') {
+        const mockQ = {
+          id: editingQuestion?.id === 'new-q' ? Math.random().toString() : editingQuestion.id,
+          test_id: id,
+          ...payload
+        };
+
+        if (editingQuestion?.id && editingQuestion.id !== 'new-q') {
+          setQuestions(questions.map(q => q.id === editingQuestion.id ? mockQ : q));
+        } else {
+          setQuestions([...questions, mockQ]);
+        }
+        setEditingQuestion(null);
+        return;
+      }
+
+      if (editingQuestion?.id && editingQuestion.id !== 'new-q') {
+        // Update
+        const { error } = await supabase
+          .from('test_questions')
+          .update(payload)
+          .eq('id', editingQuestion.id);
+
+        if (error) throw error;
+        setQuestions(questions.map(q => q.id === editingQuestion.id ? { ...q, ...payload } : q));
+      } else {
+        // Insert
+        const { data, error } = await supabase
+          .from('test_questions')
+          .insert({
+            test_id: id,
+            ...payload
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+        setQuestions([...questions, data]);
+      }
+
       setEditingQuestion(null);
-      Alert.alert('Success', 'Question updated successfully.');
+      Alert.alert('Success', 'Question saved successfully.');
     } catch (err: any) {
       Alert.alert('Save Failed', err.message);
     } finally {
@@ -228,7 +379,11 @@ export default function TestReviewScreen() {
               </TouchableOpacity>
             </View>
             
-            <Text style={styles.questionText}>{q.question_text}</Text>
+            {q.question_image_url ? (
+              <Image source={{ uri: q.question_image_url }} style={styles.questionPreviewImage} resizeMode="contain" />
+            ) : (
+              <Text style={styles.questionText}>{q.question_text}</Text>
+            )}
             
             <View style={styles.optionsList}>
               {(q.options || []).map((opt: string, oIdx: number) => {
@@ -251,6 +406,11 @@ export default function TestReviewScreen() {
             )}
           </View>
         ))}
+
+        <TouchableOpacity style={styles.addQuestionCardBtn} onPress={() => openEditModal({ id: 'new-q' })}>
+          <Ionicons name="add-circle-outline" size={24} color={Colors.accent.primary} />
+          <Text style={styles.addQuestionCardBtnText}>Add Question Manually</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       <View style={styles.footer}>
@@ -280,41 +440,131 @@ export default function TestReviewScreen() {
           >
             <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Edit MCQ Question</Text>
+                <Text style={styles.modalTitle}>
+                  {editingQuestion?.id === 'new-q' ? 'Add MCQ Question' : 'Edit MCQ Question'}
+                </Text>
                 <TouchableOpacity onPress={() => setEditingQuestion(null)}>
                   <Ionicons name="close" size={24} color={Colors.text.primary} />
                 </TouchableOpacity>
               </View>
 
-              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.inputLabel}>Question Text *</Text>
-                  <TextInput
-                    style={[styles.input, { height: 80 }]}
-                    multiline
-                    placeholder="Enter the question text"
-                    placeholderTextColor={Colors.text.tertiary}
-                    value={editQText}
-                    onChangeText={setEditQText}
-                  />
-                </View>
+              {/* Mode Toggle */}
+              <View style={styles.toggleRow}>
+                <TouchableOpacity 
+                  style={[styles.toggleBtn, editorMode === 'text' && styles.toggleBtnActive]}
+                  onPress={() => setEditorMode('text')}
+                >
+                  <Text style={[styles.toggleBtnText, editorMode === 'text' && styles.toggleBtnTextActive]}>Text Mode</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={[styles.toggleBtn, editorMode === 'image' && styles.toggleBtnActive]}
+                  onPress={() => setEditorMode('image')}
+                >
+                  <Text style={[styles.toggleBtnText, editorMode === 'image' && styles.toggleBtnTextActive]}>Image Mode</Text>
+                </TouchableOpacity>
+              </View>
 
-                {editOptions.map((opt, idx) => (
-                  <View key={idx} style={styles.inputContainer}>
-                    <Text style={styles.inputLabel}>Option {optLabels[idx]} *</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder={`Enter option ${optLabels[idx]}`}
-                      placeholderTextColor={Colors.text.tertiary}
-                      value={opt}
-                      onChangeText={(val) => {
-                        const newOpts = [...editOptions];
-                        newOpts[idx] = val;
-                        setEditOptions(newOpts);
-                      }}
-                    />
-                  </View>
-                ))}
+              <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
+                {editorMode === 'text' ? (
+                  <>
+                    <View style={styles.inputContainer}>
+                      <Text style={styles.inputLabel}>Question Text *</Text>
+                      <TextInput
+                        style={[styles.input, { height: 75 }]}
+                        multiline
+                        placeholder="Enter the question text"
+                        placeholderTextColor={Colors.text.tertiary}
+                        value={editQText}
+                        onChangeText={setEditQText}
+                      />
+                    </View>
+
+                    {editOptions.map((opt, idx) => (
+                      <View key={idx} style={styles.inputContainer}>
+                        <Text style={styles.inputLabel}>Option {optLabels[idx]} *</Text>
+                        <TextInput
+                          style={styles.input}
+                          placeholder={`Enter option ${optLabels[idx]}`}
+                          placeholderTextColor={Colors.text.tertiary}
+                          value={opt}
+                          onChangeText={(val) => {
+                            const newOpts = [...editOptions];
+                            newOpts[idx] = val;
+                            setEditOptions(newOpts);
+                          }}
+                        />
+                      </View>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    {/* Image Picking buttons */}
+                    <View style={styles.imagePickerRow}>
+                      <TouchableOpacity style={styles.imgPickerBtn} onPress={handlePickImage}>
+                        <Ionicons name="images-outline" size={18} color={Colors.accent.primary} />
+                        <Text style={styles.imgPickerBtnText}>Gallery</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.imgPickerBtn} onPress={handleTakePhoto}>
+                        <Ionicons name="camera-outline" size={18} color={Colors.accent.primary} />
+                        <Text style={styles.imgPickerBtnText}>Camera</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {rawImageUri && (
+                      <View style={styles.cropWorkspace}>
+                        <Text style={styles.cropTitle}>Crop Boundaries Preview</Text>
+                        <View style={styles.cropImageWrapper}>
+                          <Image source={{ uri: rawImageUri }} style={styles.cropImagePreview} resizeMode="contain" />
+                          <View 
+                            style={[
+                              styles.cropOverlayLine, 
+                              { 
+                                top: `${cropYPercent}%`, 
+                                height: `${cropHeightPercent}%` 
+                              }
+                            ]} 
+                          />
+                        </View>
+
+                        {/* Adjust buttons */}
+                        <View style={styles.cropControls}>
+                          <Text style={styles.controlLabel}>Crop Start Y: {cropYPercent}%</Text>
+                          <View style={styles.controlRow}>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropYPercent(prev => Math.max(0, prev - 10))}><Text style={styles.controlBtnText}>-10%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropYPercent(prev => Math.max(0, prev - 1))}><Text style={styles.controlBtnText}>-1%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropYPercent(prev => Math.min(100 - cropHeightPercent, prev + 1))}><Text style={styles.controlBtnText}>+1%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropYPercent(prev => Math.min(100 - cropHeightPercent, prev + 10))}><Text style={styles.controlBtnText}>+10%</Text></TouchableOpacity>
+                          </View>
+
+                          <Text style={styles.controlLabel}>Crop Height: {cropHeightPercent}%</Text>
+                          <View style={styles.controlRow}>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropHeightPercent(prev => Math.max(10, prev - 10))}><Text style={styles.controlBtnText}>-10%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropHeightPercent(prev => Math.max(10, prev - 1))}><Text style={styles.controlBtnText}>-1%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropHeightPercent(prev => Math.min(100 - cropYPercent, prev + 1))}><Text style={styles.controlBtnText}>+1%</Text></TouchableOpacity>
+                            <TouchableOpacity style={styles.controlBtn} onPress={() => setCropHeightPercent(prev => Math.min(100 - cropYPercent, prev + 10))}><Text style={styles.controlBtnText}>+10%</Text></TouchableOpacity>
+                          </View>
+
+                          <TouchableOpacity 
+                            style={styles.previewCropBtn} 
+                            onPress={applyCrop}
+                            disabled={isCropping}
+                          >
+                            <Text style={styles.previewCropBtnText}>
+                              {isCropping ? 'Cropping...' : 'Generate Crop Preview'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+
+                    {croppedImageUri && (
+                      <View style={styles.croppedPreviewCard}>
+                        <Text style={styles.cropTitle}>Cropped Preview (What students will see)</Text>
+                        <Image source={{ uri: croppedImageUri }} style={styles.croppedImage} resizeMode="contain" />
+                      </View>
+                    )}
+                  </>
+                )}
 
                 <View style={styles.inputContainer}>
                   <Text style={styles.inputLabel}>Correct Option *</Text>
@@ -336,7 +586,7 @@ export default function TestReviewScreen() {
                 <View style={[styles.inputContainer, { marginBottom: 30 }]}>
                   <Text style={styles.inputLabel}>Explanation</Text>
                   <TextInput
-                    style={[styles.input, { height: 70 }]}
+                    style={[styles.input, { height: 60 }]}
                     multiline
                     placeholder="Explain why this option is correct..."
                     placeholderTextColor={Colors.text.tertiary}
@@ -354,7 +604,7 @@ export default function TestReviewScreen() {
                   {isSavingQuestion ? (
                     <ActivityIndicator color="#FFF" />
                   ) : (
-                    <Text style={styles.saveBtnText}>Save Changes</Text>
+                    <Text style={styles.saveBtnText}>Save Question</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -457,6 +707,13 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     lineHeight: 22,
   },
+  questionPreviewImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+    marginBottom: 16,
+    backgroundColor: '#F3F4F6',
+  },
   optionsList: {
     gap: 8,
     marginBottom: 16,
@@ -511,6 +768,23 @@ const styles = StyleSheet.create({
     color: Colors.text.primary,
     lineHeight: 18,
   },
+  addQuestionCardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: Colors.accent.primary,
+    borderStyle: 'dashed',
+    borderRadius: 16,
+    padding: 16,
+    gap: 8,
+    marginVertical: 12,
+  },
+  addQuestionCardBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.accent.primary,
+  },
   footer: {
     padding: 16,
     borderTopWidth: 1,
@@ -539,7 +813,7 @@ const styles = StyleSheet.create({
   },
   modalContainer: {
     width: '100%',
-    maxHeight: '90%',
+    maxHeight: '92%',
   },
   modalContent: {
     backgroundColor: Colors.bg.primary,
@@ -551,19 +825,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '800',
     color: Colors.text.primary,
   },
+  toggleRow: {
+    flexDirection: 'row',
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 16,
+  },
+  toggleBtn: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  toggleBtnActive: {
+    backgroundColor: Colors.bg.secondary,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  toggleBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  toggleBtnTextActive: {
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
   modalBody: {
-    maxHeight: 400,
+    maxHeight: 380,
   },
   inputContainer: {
-    gap: 8,
-    marginBottom: 14,
+    gap: 6,
+    marginBottom: 12,
   },
   inputLabel: {
     fontSize: 14,
@@ -578,6 +882,119 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 15,
     color: Colors.text.primary,
+  },
+  imagePickerRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 16,
+  },
+  imgPickerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    height: 48,
+    borderWidth: 1.5,
+    borderColor: Colors.accent.primary,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: Colors.bg.secondary,
+  },
+  imgPickerBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.accent.primary,
+  },
+  cropWorkspace: {
+    backgroundColor: Colors.bg.secondary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 16,
+  },
+  cropTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+    marginBottom: 8,
+  },
+  cropImageWrapper: {
+    position: 'relative',
+    height: 180,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cropImagePreview: {
+    width: '100%',
+    height: '100%',
+  },
+  cropOverlayLine: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    borderWidth: 2,
+    borderColor: Colors.accent.primary,
+    borderStyle: 'dashed',
+    backgroundColor: 'rgba(175, 40, 0, 0.08)',
+  },
+  cropControls: {
+    marginTop: 12,
+    gap: 8,
+  },
+  controlLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  controlRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  controlBtn: {
+    flex: 1,
+    height: 32,
+    borderRadius: 6,
+    backgroundColor: Colors.bg.tertiary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  controlBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  previewCropBtn: {
+    height: 40,
+    backgroundColor: Colors.accent.primary,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  previewCropBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFF',
+  },
+  croppedPreviewCard: {
+    backgroundColor: Colors.bg.secondary,
+    borderWidth: 1,
+    borderColor: Colors.status.success,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 16,
+  },
+  croppedImage: {
+    width: '100%',
+    height: 120,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
   },
   correctSelectorRow: {
     flexDirection: 'row',
@@ -610,7 +1027,7 @@ const styles = StyleSheet.create({
   modalFooter: {
     flexDirection: 'row',
     gap: 12,
-    marginTop: 20,
+    marginTop: 16,
   },
   cancelBtn: {
     flex: 1,

@@ -19,6 +19,8 @@ export default function CreateTestScreen() {
   const [selectedBank, setSelectedBank] = useState<string | null>(null);
   const [banks, setBanks] = useState<any[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [questionCount, setQuestionCount] = useState(5);
+  const [difficulty, setDifficulty] = useState('Medium');
 
   useEffect(() => {
     if (verified) {
@@ -48,6 +50,63 @@ export default function CreateTestScreen() {
     }
   };
 
+  const generateQuestions = (subject: string, count: number, diff: string, testId: string) => {
+    const HISTORY_POOL = [
+      { question_text: "What was the main feature of the Indus Valley Civilization?", options: ["Town Planning", "Iron usage", "Horse chariots", "Temple architecture"], correct_option: 0, explanation: "Town planning with grid systems was the hallmark of Harappan civilization." },
+      { question_text: "Which of these was a major port city of Indus Valley?", options: ["Harappa", "Lothal", "Mohenjodaro", "Kalibangan"], correct_option: 1, explanation: "Lothal was a prominent port city with a massive dockyard." },
+      { question_text: "Which metal was unknown to the Indus Valley people?", options: ["Gold", "Silver", "Copper", "Iron"], correct_option: 3, explanation: "Iron was not used by the Harappans; it was introduced later in the Vedic period." },
+      { question_text: "Which of the following sites is located in India?", options: ["Harappa", "Mohenjodaro", "Lothal", "Ganweriwala"], correct_option: 2, explanation: "Lothal is located in Gujarat, India, whereas Harappa and Mohenjodaro are in Pakistan." },
+      { question_text: "What was the seal of Indus Valley mainly made of?", options: ["Steatite", "Clay", "Copper", "Bronze"], correct_option: 0, explanation: "Steatite was the most common material used to make seals in Harappan civilization." },
+      { question_text: "Which animal was not represented on the seals of Harappan culture?", options: ["Cow", "Elephant", "Tiger", "Rhinoceros"], correct_option: 0, explanation: "Cow was not represented on Harappan seals." },
+      { question_text: "The Harappan site at Kot Diji is close to which of the following?", options: ["Mohenjodaro", "Harappa", "Lothal", "Kalibangan"], correct_option: 0, explanation: "Kot Diji is near Mohenjodaro in Sindh, Pakistan." },
+      { question_text: "Which Harappan site showed evidence of double burial?", options: ["Lothal", "Kalibangan", "Ropar", "Dholavira"], correct_option: 0, explanation: "Joint or double burials were discovered at Lothal." },
+      { question_text: "A ploughed field was discovered at which site?", options: ["Kalibangan", "Harappa", "Mohenjodaro", "Lothal"], correct_option: 0, explanation: "Evidence of a ploughed field was found at Kalibangan." },
+      { question_text: "Which site has a unique water harvesting system?", options: ["Dholavira", "Harappa", "Lothal", "Banawali"], correct_option: 0, explanation: "Dholavira is famous for its elaborate water management system." },
+      { question_text: "Which site has yielded the famous bronze dancing girl?", options: ["Mohenjodaro", "Harappa", "Kalibangan", "Lothal"], correct_option: 0, explanation: "The bronze statue of the dancing girl was found in Mohenjodaro." },
+      { question_text: "Which crop was unknown to Harappans?", options: ["Sugarcane", "Wheat", "Barley", "Cotton"], correct_option: 0, explanation: "There is no direct evidence of sugarcane cultivation in Harappan sites." },
+      { question_text: "Which deity was worshipped by the Indus Valley people?", options: ["Pashupati Shiva", "Indra", "Varuna", "Vishnu"], correct_option: 0, explanation: "Pashupati (proto-Shiva) seals indicate he was worshipped." },
+      { question_text: "Who excavated the Mohenjodaro site first?", options: ["R. D. Banerji", "Daya Ram Sahni", "John Marshall", "Mortimer Wheeler"], correct_option: 0, explanation: "R. D. Banerji discovered Mohenjodaro in 1922." },
+      { question_text: "Which script was used by Harappans?", options: ["Pictographic", "Brahmi", "Kharosthi", "Cuneiform"], correct_option: 0, explanation: "The script was pictographic and remains undeciphered." }
+    ];
+
+    const SCIENCE_POOL = [
+      { question_text: "Which organelle is known as the powerhouse of the cell?", options: ["Mitochondria", "Nucleus", "Ribosome", "Golgi apparatus"], correct_option: 0, explanation: "Mitochondria generates chemical energy (ATP) for the cell." },
+      { question_text: "Which of the following is present in plant cells but not in animal cells?", options: ["Cell Wall", "Mitochondria", "Nucleus", "Cytoplasm"], correct_option: 0, explanation: "Cell walls are found in plants for structural support." },
+      { question_text: "Who discovered the cell first?", options: ["Robert Hooke", "Leeuwenhoek", "Purkinje", "Robert Brown"], correct_option: 0, explanation: "Robert Hooke discovered cells in cork in 1665." },
+      { question_text: "Which organelle is responsible for protein synthesis?", options: ["Ribosome", "Lysosome", "Mitochondria", "Centrosome"], correct_option: 0, explanation: "Ribosomes translate genetic codes into proteins." },
+      { question_text: "Which cell organelle is called the suicidal bag?", options: ["Lysosome", "Ribosome", "Golgi body", "Nucleolus"], correct_option: 0, explanation: "Lysosomes contain digestive enzymes that can destroy the cell." },
+      { question_text: "Which organelle control cell activities?", options: ["Nucleus", "Mitochondria", "Plastid", "Vacuole"], correct_option: 0, explanation: "The nucleus contains DNA and coordinates cell operations." },
+      { question_text: "Which of the following has a single membrane?", options: ["Lysosome", "Mitochondria", "Nucleus", "Chloroplast"], correct_option: 0, explanation: "Lysosomes have a single phospholipid membrane." },
+      { question_text: "Cellular respiration takes place in which organelle?", options: ["Mitochondria", "Ribosome", "Golgi complex", "Nucleus"], correct_option: 0, explanation: "Mitochondria is the primary site of aerobic cellular respiration." },
+      { question_text: "Which plastid gives green color to plants?", options: ["Chloroplast", "Chromoplast", "Leucoplast", "Amyloplast"], correct_option: 0, explanation: "Chloroplast contains chlorophyll which gives the green color." },
+      { question_text: "What is the structural unit of life?", options: ["Cell", "Tissue", "Organ", "Organism"], correct_option: 0, explanation: "A cell is the basic structural and functional unit of life." }
+    ];
+
+    const bankName = banks.find(b => b.id === selectedBank)?.name || '';
+    const pool = bankName.toLowerCase().includes('cell') || subject.toLowerCase().includes('cell') ? SCIENCE_POOL : HISTORY_POOL;
+
+    // Shuffle pool and slice
+    const shuffled = [...pool].sort(() => 0.5 - Math.random());
+    const selected = shuffled.slice(0, count);
+
+    // Apply difficulty modifiers
+    return selected.map(q => {
+      let modText = q.question_text;
+      if (diff === 'Easy') {
+        modText = `[Easy] Direct: ${q.question_text}`;
+      } else if (diff === 'Hard') {
+        modText = `[Hard] Analytical: ${q.question_text}`;
+      }
+      return {
+        test_id: testId,
+        question_text: modText,
+        options: q.options,
+        correct_option: q.correct_option,
+        explanation: q.explanation
+      };
+    });
+  };
+
   const handleGenerate = async () => {
     if (!title.trim() || !duration || !selectedBank) {
       Alert.alert('Error', 'Please fill all required fields');
@@ -73,7 +132,7 @@ export default function CreateTestScreen() {
           title,
           batch_name: targetBatch === 'All' ? null : targetBatch,
           duration_minutes: parseInt(duration),
-          total_marks: 5,
+          total_marks: questionCount,
           status: 'draft',
         })
         .select()
@@ -84,43 +143,8 @@ export default function CreateTestScreen() {
       // Simulate AI generating questions from the selected bank
       await new Promise(resolve => setTimeout(resolve, 1500)); // artificial delay
 
-      const dummyQuestions = [
-        {
-          test_id: newTest.id,
-          question_text: "What was the main feature of the Indus Valley Civilization?",
-          options: ["Town Planning", "Iron usage", "Horse chariots", "Temple architecture"],
-          correct_option: 0,
-          explanation: "The Indus Valley Civilization is best known for its advanced urban town planning and drainage systems.",
-        },
-        {
-          test_id: newTest.id,
-          question_text: "Which of these was a major port city of Indus Valley?",
-          options: ["Harappa", "Lothal", "Mohenjodaro", "Kalibangan"],
-          correct_option: 1,
-          explanation: "Lothal was a prominent port city known for its massive dockyard.",
-        },
-        {
-          test_id: newTest.id,
-          question_text: "Which metal was unknown to the Indus Valley people?",
-          options: ["Gold", "Silver", "Copper", "Iron"],
-          correct_option: 3,
-          explanation: "Iron was not used by the Harappans; it was introduced later in the Vedic period.",
-        },
-        {
-          test_id: newTest.id,
-          question_text: "Which of the following sites is located in India?",
-          options: ["Harappa", "Mohenjodaro", "Lothal", "Ganweriwala"],
-          correct_option: 2,
-          explanation: "Lothal is located in Gujarat, India, whereas Harappa and Mohenjodaro are in Pakistan.",
-        },
-        {
-          test_id: newTest.id,
-          question_text: "What was the seal of Indus Valley mainly made of?",
-          options: ["Steatite", "Clay", "Copper", "Bronze"],
-          correct_option: 0,
-          explanation: "Steatite was the most common material used to make seals in Harappan civilization.",
-        }
-      ];
+      const targetBankName = banks.find(b => b.id === selectedBank)?.name || '';
+      const dummyQuestions = generateQuestions(targetBankName, questionCount, difficulty, newTest.id);
 
       const { error: qErr } = await supabase.from('test_questions').insert(dummyQuestions);
       if (qErr) throw qErr;
@@ -148,7 +172,7 @@ export default function CreateTestScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Test Details</Text>
+          <Text style={sectionTitleStyle}>Test Details</Text>
           
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Test Title *</Text>
@@ -193,7 +217,45 @@ export default function CreateTestScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>AI Generation Source</Text>
+          <Text style={sectionTitleStyle}>AI Generation Options</Text>
+          
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>Number of Questions</Text>
+            <View style={styles.selectorRow}>
+              {[5, 10, 15, 20].map(count => (
+                <TouchableOpacity
+                  key={count}
+                  style={[styles.selectorChip, questionCount === count && styles.selectorChipActive]}
+                  onPress={() => setQuestionCount(count)}
+                >
+                  <Text style={[styles.selectorChipText, questionCount === count && styles.selectorChipTextActive]}>
+                    {count}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>Difficulty Level</Text>
+            <View style={styles.selectorRow}>
+              {['Easy', 'Medium', 'Hard'].map(level => (
+                <TouchableOpacity
+                  key={level}
+                  style={[styles.selectorChip, difficulty === level && styles.selectorChipActive]}
+                  onPress={() => setDifficulty(level)}
+                >
+                  <Text style={[styles.selectorChipText, difficulty === level && styles.selectorChipTextActive]}>
+                    {level}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={sectionTitleStyle}>AI Generation Source</Text>
           <Text style={styles.desc}>Select the uploaded material the AI should read to generate questions.</Text>
           
           {banks.length === 0 ? (
@@ -333,6 +395,33 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontWeight: '600',
   },
+  selectorRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  selectorChip: {
+    flex: 1,
+    height: 40,
+    borderRadius: 10,
+    backgroundColor: Colors.bg.primary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectorChipActive: {
+    backgroundColor: Colors.accent.primary,
+    borderColor: Colors.accent.primary,
+  },
+  selectorChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  selectorChipTextActive: {
+    color: '#FFF',
+    fontWeight: '700',
+  },
   bankOption: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -411,3 +500,5 @@ const styles = StyleSheet.create({
     color: '#FFF',
   },
 });
+
+const sectionTitleStyle = styles.sectionTitle;

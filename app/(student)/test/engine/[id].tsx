@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, AppState, AppStateStatus, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, AppState, AppStateStatus, ActivityIndicator, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -293,7 +293,11 @@ export default function TestEngineScreen() {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {/* Question */}
         <View style={styles.questionCard}>
-          <Text style={styles.questionText}>{currentQ.question_text}</Text>
+          {currentQ.question_image_url ? (
+            <Image source={{ uri: currentQ.question_image_url }} style={styles.questionImage} resizeMode="contain" />
+          ) : (
+            <Text style={styles.questionText}>{currentQ.question_text}</Text>
+          )}
         </View>
 
         {/* Options */}
@@ -311,7 +315,9 @@ export default function TestEngineScreen() {
                 <View style={[styles.optionLetter, isSelected && styles.optionLetterSelected]}>
                   <Text style={[styles.optionLetterText, isSelected && styles.optionLetterTextSelected]}>{optLabels[optIndex]}</Text>
                 </View>
-                <Text style={styles.optionText}>{optValue}</Text>
+                {!['A', 'B', 'C', 'D'].includes(optValue) && (
+                  <Text style={styles.optionText}>{optValue}</Text>
+                )}
               </TouchableOpacity>
             );
           })}
@@ -492,5 +498,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#FFF',
+  },
+  questionImage: {
+    width: '100%',
+    height: 240,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
   },
 });
