@@ -31,7 +31,6 @@ try {
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import * as Haptics from 'expo-haptics';
 import { decode } from 'base64-arraybuffer';
 import CachedImage from '@/components/CachedImage';
 import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
@@ -220,25 +219,51 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
   const authorAvatarUri = item.author_id ? (avatarMap[item.author_id] || item.author_avatar) : item.author_avatar;
 
   return (
-    <TouchableOpacity
-      style={styles.postCard}
-      activeOpacity={0.95}
-      onPress={async () => {
-        try {
-          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch (_) {}
-        Alert.alert(
-          'Post Options',
-          'Choose an action for this post:',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Share Post', onPress: handleShare },
-            { text: 'Edit Post', onPress: () => onEdit(item) },
-            { text: 'Delete Post', style: 'destructive', onPress: () => onDelete(item.id) },
-          ]
-        );
-      }}
-    >
+    <View style={styles.postCard}>
+      {/* Post Header */}
+      <View style={styles.postHeader}>
+        {authorAvatarUri ? (
+          <CachedImage uri={authorAvatarUri} style={styles.postAuthorAvatarImage} fallbackInitial={item.author} />
+        ) : (
+          <View style={styles.postAuthorAvatar}>
+            <Text style={styles.postAuthorInitial}>
+              {item.author.charAt(0)}
+            </Text>
+          </View>
+        )}
+        <View style={{ flex: 1 }}>
+          <Text style={styles.postAuthorName}>{item.author}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+            <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
+            {item.is_edited && (
+              <Text style={styles.editedLabel}>• Edited</Text>
+            )}
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <View style={[styles.categoryBadge, { backgroundColor: cat.bg }]}>
+            <Text style={styles.categoryBadgeText}>{cat.label}</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              Alert.alert(
+                'Post Options',
+                'Choose an action for this post:',
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Edit Post', onPress: () => onEdit(item) },
+                  { text: 'Delete Post', style: 'destructive', onPress: () => onDelete(item.id) },
+                ]
+              );
+            }}
+            style={styles.optionsPostButton}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="ellipsis-vertical-outline" size={18} color={Colors.text.tertiary} />
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Post Content & Poll support */}
       {(() => {
         const pollData = parsePollData(item.text);
@@ -315,63 +340,110 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
 
       {item.file_url && (() => {
         const isPDF = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
-        const thumbnailUrl = isPDF && item.file_url.startsWith('http')
-          ? `https://image.thum.io/get/pdfSource/${item.file_url}`
-          : null;
+        if (isPDF) {
+          const thumbnailUrl = item.file_url.startsWith('http')
+            ? `https://image.thum.io/get/pdfSource/${item.file_url}`
+            : null;
 
-        return (
-          <TouchableOpacity
-            style={styles.cohesivePdfBubble}
-            onPress={() => {
-              if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
-            }}
-            activeOpacity={0.85}
-          >
-            {isPDF && (
-              thumbnailUrl ? (
-                <View style={styles.cohesivePdfPreviewContainer}>
-                  <CachedImage uri={thumbnailUrl} style={styles.cohesivePdfPreview} contentFit="cover" />
+          return (
+            <TouchableOpacity
+              style={styles.pdfAttachmentCardContainer}
+              onPress={() => {
+                if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.pdfPreviewImageContainer}>
+                {thumbnailUrl ? (
+                  <View style={styles.pdfPreviewWrapper}>
+                    {/* Fallback mockup rendered behind the image in case of loading/offline */}
+                    <View style={[StyleSheet.absoluteFill, styles.pdfPlaceholderLayout]}>
+                      <View style={styles.pdfPlaceholderPage}>
+                        <View style={styles.pdfPlaceholderHeader}>
+                          <Ionicons name="document-text" size={14} color="#E53935" />
+                          <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                            {item.file_name || 'PDF Document'}
+                          </Text>
+                        </View>
+                        <View style={styles.pdfPlaceholderBody}>
+                          <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                        </View>
+                      </View>
+                    </View>
+                    <CachedImage
+                      uri={thumbnailUrl}
+                      style={styles.pdfPreviewImage}
+                      contentFit="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.pdfPlaceholderLayout}>
+                    <View style={styles.pdfPlaceholderPage}>
+                      <View style={styles.pdfPlaceholderHeader}>
+                        <Ionicons name="document-text" size={14} color="#E53935" />
+                        <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                          {item.file_name || 'PDF Document'}
+                        </Text>
+                      </View>
+                      <View style={styles.pdfPlaceholderBody}>
+                        <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Details banner */}
+              <View style={styles.pdfDetailsBanner}>
+                <View style={styles.pdfIconBadge}>
+                  <Ionicons name="document" size={12} color="#FFFFFF" />
+                  <Text style={styles.pdfIconBadgeText}>PDF</Text>
                 </View>
-              ) : (
-                <View style={styles.cohesivePdfPlaceholder}>
-                  <Ionicons name="document-text" size={32} color="#EF5350" />
-                  <Text style={styles.cohesivePdfPlaceholderText} numberOfLines={1}>
+                <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
+                  <Text style={styles.pdfDetailsFileName} numberOfLines={1}>
                     {item.file_name || 'PDF Document'}
                   </Text>
+                  <Text style={styles.pdfDetailsMeta}>
+                    Document • Tap to view
+                  </Text>
                 </View>
-              )
-            )}
-            
-            <View style={styles.cohesivePdfDetailsRow}>
-              <View style={[styles.docIconCircle, { backgroundColor: isPDF ? '#EF5350' : '#42A5F5' }]}>
-                <Ionicons name="document-text" size={20} color="#FFFFFF" />
-              </View>
-              <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
-                <Text style={styles.docBubbleName} numberOfLines={1}>
-                  {item.file_name || (isPDF ? 'Document.pdf' : 'Attachment')}
-                </Text>
-                <Text style={styles.docBubbleMeta}>
-                  {isPDF ? 'PDF Document' : 'File Attachment'} • Tap to view
-                </Text>
-              </View>
-              <View style={styles.docActionContainer}>
                 {downloadingFileId === item.id ? (
                   <ActivityIndicator size="small" color={Colors.accent.primary} />
                 ) : (
-                  <Ionicons name="arrow-down-circle" size={24} color={Colors.accent.primary} />
+                  <Ionicons name="arrow-down-circle-outline" size={20} color="#78909C" />
                 )}
               </View>
+            </TouchableOpacity>
+          );
+        }
+        return (
+          <TouchableOpacity
+            style={styles.fileAttachmentCard}
+            onPress={() => {
+              if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fileNameText} numberOfLines={1}>
+                {item.file_name || 'Document Attachment'}
+              </Text>
             </View>
+            {downloadingFileId === item.id ? (
+              <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : (
+              <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
+            )}
           </TouchableOpacity>
         );
       })()}
-
-      {/* Post Metadata row */}
-      <View style={styles.bubbleMetaRow}>
-        <Text style={styles.bubbleMetaText}>
-          {formatBubbleTime(item.timestamp)} • {cat.label} {item.is_edited ? '• Edited' : ''}
-        </Text>
-      </View>
 
       {/* Engagement Row */}
       <View style={styles.engagementRow}>
@@ -582,7 +654,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           </TouchableOpacity>
         </View>
       )}
-    </TouchableOpacity>
+    </View>
   );
 }
 function RotatingPlaceholderInput({ value, onChangeText, style, placeholderTextColor, multiline }: any) {
@@ -794,7 +866,7 @@ export default function CommunityScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 0.8,
       });
 
@@ -808,7 +880,7 @@ export default function CommunityScreen() {
         if (permissionResult.granted) {
           const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
-            allowsEditing: true,
+            allowsEditing: false,
             quality: 0.8,
           });
           if (!result.canceled && result.assets && result.assets.length > 0) {
@@ -825,7 +897,7 @@ export default function CommunityScreen() {
     try {
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ['images'],
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 0.8,
       });
 
@@ -839,7 +911,7 @@ export default function CommunityScreen() {
         if (permissionResult.granted) {
           const result = await ImagePicker.launchCameraAsync({
             mediaTypes: ['images'],
-            allowsEditing: true,
+            allowsEditing: false,
             quality: 0.8,
           });
           if (!result.canceled && result.assets && result.assets.length > 0) {
@@ -1137,10 +1209,10 @@ export default function CommunityScreen() {
     };
   }, [user, fetchPosts]);
 
-  const handlePost = async (customText?: string) => {
-    const postText = customText !== undefined ? customText : composerText;
-    if (!postText.trim()) {
-      Alert.alert('Empty Post', 'Please write something before posting.');
+  const handlePost = async (customText?: string | any) => {
+    const postText = typeof customText === 'string' ? customText : composerText;
+    if (!postText.trim() && !selectedImage && !selectedDocument) {
+      Alert.alert('Empty Post', 'Please write something or attach a file before posting.');
       return;
     }
     setIsLoading(true);
@@ -2579,16 +2651,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     ...Shadows.sm,
   },
-  bubbleMetaRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 6,
-    marginBottom: 6,
-  },
-  bubbleMetaText: {
-    fontSize: 11,
-    color: Colors.text.tertiary,
-  },
   postHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2642,73 +2704,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  cohesivePdfBubble: {
-    width: '100%',
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  cohesivePdfPreviewContainer: {
-    width: '100%',
-    height: 120,
-    borderRadius: 8,
-    overflow: 'hidden',
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-  },
-  cohesivePdfPreview: {
-    width: '100%',
-    height: '100%',
-  },
-  cohesivePdfPlaceholder: {
-    width: '100%',
-    height: 100,
-    borderRadius: 8,
-    backgroundColor: Colors.bg.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-    gap: 6,
-  },
-  cohesivePdfPlaceholderText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.text.secondary,
-    paddingHorizontal: 12,
-  },
-  cohesivePdfDetailsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.bg.primary,
-    borderRadius: 12,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-  },
-  docIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  docBubbleName: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.text.primary,
-  },
-  docBubbleMeta: {
-    fontSize: 11,
-    color: Colors.text.tertiary,
-    marginTop: 2,
-  },
-  docActionContainer: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingLeft: 4,
-  },
+  // Engagement Row
   engagementRow: {
     flexDirection: 'row',
     alignItems: 'center',
