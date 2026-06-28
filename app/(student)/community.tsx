@@ -647,6 +647,19 @@ export default function StudentCommunityScreen() {
   const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
 
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [studentProfile, setStudentProfile] = useState<any | null>(null);
+  const [coachingName, setCoachingName] = useState<string>('');
+  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
+  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'media' | 'docs' | 'links'>('all');
+  const [showSearch, setShowSearch] = useState(false);
+  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
+
   const { width: screenWidth } = Dimensions.get('window');
   const translateX = useRef(new Animated.Value(0)).current;
   const groupInfoAnim = useRef(new Animated.Value(0)).current;
@@ -707,18 +720,6 @@ export default function StudentCommunityScreen() {
     };
     fetchStudentCount();
   }, [studentProfile?.business_id]);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [studentProfile, setStudentProfile] = useState<any | null>(null);
-  const [coachingName, setCoachingName] = useState<string>('');
-  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
-  const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
-
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'media' | 'docs' | 'links'>('all');
-  const [showSearch, setShowSearch] = useState(false);
-  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
 
   const sendLikePushNotification = async (recipientId: string, likerName: string, postText: string) => {
     try {
