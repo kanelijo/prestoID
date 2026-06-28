@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android", "web"],
+  "apple": {
+    "modules": ["PrestostorageModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.prestostorage.PrestostorageModule"]
+  }
+}
