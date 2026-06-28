@@ -177,12 +177,15 @@ const handleDownload = async (post: Post) => {
   if (!downloadUrl) return;
 
   const isPDF = post.file_name?.toLowerCase().endsWith('.pdf') || downloadUrl.toLowerCase().includes('.pdf');
+  const isGoogleDrive = downloadUrl.includes('drive.google.com');
   
-  if (isPDF) {
+  // Only route to internal viewer if it's a PDF and NOT a Google Drive HTML link
+  if (isPDF && !isGoogleDrive) {
     router.push({ pathname: '/(admin)/pdf-viewer', params: { uri: downloadUrl, title: post.file_name || 'Document' } });
     return;
   }
 
+  // Otherwise (or if it's a GDrive HTML page), fallback to browser
   try {
     const finalUrl = downloadUrl.includes('?')
       ? `${downloadUrl}&download=${encodeURIComponent(post.file_name || '')}`

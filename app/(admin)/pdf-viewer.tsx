@@ -32,7 +32,7 @@ export default function PDFViewerScreen() {
           <Ionicons name="arrow-back" size={24} color="#333" />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{title}</Text>
-        <View style={{ width: 40 }} /> {/* balance for center alignment */}
+        <View style={{ width: 40 }} />
       </View>
 
       {/* PDF Viewer */}

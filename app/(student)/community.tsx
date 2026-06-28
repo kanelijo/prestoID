@@ -896,6 +896,13 @@ export default function StudentCommunityScreen() {
 
       if (!downloadUrl) throw new Error('No valid download link found.');
 
+      if (downloadUrl.includes('drive.google.com')) {
+        // It's a Google Drive HTML viewer link. We can't download this programmatically.
+        // Open it in the browser so the user can view/download it there.
+        await Linking.openURL(downloadUrl);
+        return;
+      }
+
       // 3. Download via our Native Module
       const result = await downloadAndOpenSaf(downloadUrl, post.file_name || 'document.pdf');
       
