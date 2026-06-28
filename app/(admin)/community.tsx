@@ -697,6 +697,8 @@ export default function CommunityScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [backgroundUploadUrl, setBackgroundUploadUrl] = useState<string | null>(null);
+  const [backgroundFileUrl, setBackgroundFileUrl] = useState<string | null>(null);
   const [editingPost, setEditingPost] = useState<Post | null>(null);
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
 
@@ -720,6 +722,8 @@ export default function CommunityScreen() {
   const groupInfoAnim = useRef(new Animated.Value(0)).current;
   const attachSheetAnim = useRef(new Animated.Value(0)).current;
   const [isAttachOpen, setIsAttachOpen] = useState(false);
+
+  const uploadPromiseRef = useRef<Promise<any> | null>(null);
 
   const postsLengthRef = useRef(0);
   useEffect(() => {
@@ -868,6 +872,33 @@ export default function CommunityScreen() {
     }
   };
 
+  const startPreUpload = (uri: string, type: 'image' | 'file', assetName?: string) => {
+    const bCode = businessCode || 'community';
+    const fName = assetName || `upload_${Date.now()}`;
+    
+    // Start background upload immediately
+    uploadPromiseRef.current = Promise.all([
+      uploadFileToGoogleDrive(uri, fName, bCode)
+        .then(res => {
+          // Pre-seed local cache so when CachedImage fetches the remote URL, it's instant!
+          if (res.fileUrl && type === 'image') {
+            const getCacheFilename = (url: string) => {
+              let hash = 0;
+              for (let i = 0; i < url.length; i++) { hash = (hash << 5) - hash + url.charCodeAt(i); hash |= 0; }
+              return `img_${Math.abs(hash)}`;
+            };
+            const cachePath = `${FileSystem.cacheDirectory}${getCacheFilename(res.fileUrl)}`;
+            FileSystem.copyAsync({ from: uri, to: cachePath }).catch(() => {});
+          }
+          return res.fileUrl;
+        })
+        .catch(err => { console.warn('Pre-upload GDrive failed', err); return null; }),
+      uploadToTelegramViaEdge(uri, fName)
+        .then(res => res)
+        .catch(err => { console.warn('Pre-upload Telegram failed', err); return null; })
+    ]);
+  };
+
   const handlePickImage = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -878,6 +909,7 @@ export default function CommunityScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         setSelectedImage(result.assets[0].uri);
+        startPreUpload(result.assets[0].uri, 'image');
       }
     } catch (err) {
       console.warn('Direct pick image failed, trying with permission request:', err);
@@ -891,6 +923,7 @@ export default function CommunityScreen() {
           });
           if (!result.canceled && result.assets && result.assets.length > 0) {
             setSelectedImage(result.assets[0].uri);
+            startPreUpload(result.assets[0].uri, 'image');
           }
         }
       } catch (innerErr) {
@@ -909,6 +942,7 @@ export default function CommunityScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         setSelectedImage(result.assets[0].uri);
+        startPreUpload(result.assets[0].uri, 'image');
       }
     } catch (err) {
       console.warn('Direct take photo failed, trying with permission request:', err);
@@ -922,6 +956,7 @@ export default function CommunityScreen() {
           });
           if (!result.canceled && result.assets && result.assets.length > 0) {
             setSelectedImage(result.assets[0].uri);
+            startPreUpload(result.assets[0].uri, 'image');
           }
         }
       } catch (innerErr) {
@@ -943,6 +978,7 @@ export default function CommunityScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         setSelectedFile(result);
+        startPreUpload(result.assets[0].uri, 'file', result.assets[0].name);
       }
     } catch (err) {
       console.warn('Pick document error:', err);
@@ -1210,56 +1246,6 @@ export default function CommunityScreen() {
     };
   }, [user, fetchPosts]);
 
-  const processBackgroundUpload = async (postId: string, imageUri: string | null, fileAsset: any | null, bCode: string, fName: string | null) => {
-    try {
-      let finalMediaUrl: string | null = null;
-      let finalFileUrl: string | null = null;
-      let finalTgFileId: string | null = null;
-
-      const uploadTasks = [];
-
-      if (imageUri) {
-        uploadTasks.push(
-          Promise.all([
-            uploadFileToGoogleDrive(imageUri, `image_${Date.now()}.jpg`, bCode)
-              .then(res => { finalMediaUrl = res.fileUrl; })
-              .catch(err => console.warn('GDrive image upload failed', err)),
-            uploadToTelegramViaEdge(imageUri, `image_${Date.now()}.jpg`)
-              .then(res => { finalTgFileId = res; })
-              .catch(err => console.warn('Telegram image upload failed', err))
-          ])
-        );
-      }
-
-      if (fileAsset) {
-        uploadTasks.push(
-          Promise.all([
-            uploadFileToGoogleDrive(fileAsset.uri, fileAsset.name || `doc_${Date.now()}`, bCode)
-              .then(res => { finalFileUrl = res.fileUrl; })
-              .catch(err => console.warn('GDrive file upload failed', err)),
-            uploadToTelegramViaEdge(fileAsset.uri, fileAsset.name || `doc_${Date.now()}`)
-              .then(res => { finalTgFileId = res; }) // Assuming one file per post for now
-              .catch(err => console.warn('Telegram file upload failed', err))
-          ])
-        );
-      }
-
-      await Promise.all(uploadTasks);
-
-      // Update Supabase row with final URLs
-      await supabase.from('community_posts').update({
-        media_url: finalMediaUrl,
-        file_url: finalFileUrl,
-        tg_file_id: finalTgFileId,
-        backup_url: finalFileUrl, // Use GDrive as backup
-      }).eq('id', postId);
-
-      fetchPosts(true);
-    } catch (e) {
-      console.warn('Background upload failed', e);
-    }
-  };
-
   const handlePost = async (customText?: string | any) => {
     const postText = typeof customText === 'string' ? customText : composerText;
     if (!postText.trim() && !selectedImage && !selectedFile) {
@@ -1301,7 +1287,28 @@ export default function CommunityScreen() {
         fetchPosts(true);
         Alert.alert('Success', 'Post updated successfully.');
       } else {
-        // INSERT New Post immediately
+        // Wait for pre-upload to finish if active
+        let finalMediaUrl: string | null = null;
+        let finalFileUrl: string | null = null;
+        let finalTgFileId: string | null = null;
+
+        if (uploadPromiseRef.current) {
+          try {
+            const results = await uploadPromiseRef.current;
+            if (selectedImage) {
+              finalMediaUrl = results[0];
+              finalTgFileId = results[1];
+            } else if (selectedFile) {
+              finalFileUrl = results[0];
+              finalTgFileId = results[1];
+            }
+          } catch (e) {
+            console.warn('Wait for pre-upload failed:', e);
+          }
+          uploadPromiseRef.current = null; // reset
+        }
+
+        // INSERT New Post immediately WITH final URLs
         const { data, error } = await supabase
           .from('community_posts')
           .insert({
@@ -1314,11 +1321,11 @@ export default function CommunityScreen() {
             target_batches: targetBatchesArray,
             likes: 0,
             comments: [],
-            media_url: null,
-            file_url: null,
+            media_url: finalMediaUrl,
+            file_url: finalFileUrl,
             file_name: fileName,
-            tg_file_id: null,
-            backup_url: null,
+            tg_file_id: finalTgFileId,
+            backup_url: finalFileUrl,
           })
           .select()
           .single();
@@ -1326,14 +1333,6 @@ export default function CommunityScreen() {
         if (error) throw error;
 
         if (data) {
-          // Trigger background uploads
-          const imageUri = selectedImage;
-          const fileAsset = selectedFile?.assets?.[0] || null;
-          
-          if (imageUri || fileAsset) {
-            processBackgroundUpload(data.id, imageUri, fileAsset, bCode, fileName);
-          }
-
           setComposerText('');
           setSelectedImage(null);
           setSelectedFile(null);
@@ -1843,7 +1842,10 @@ export default function CommunityScreen() {
               <Image source={{ uri: selectedImage }} style={styles.previewImage} />
               <TouchableOpacity
                 style={styles.removePreviewButton}
-                onPress={() => setSelectedImage(null)}
+                onPress={() => {
+                  setSelectedImage(null);
+                  uploadPromiseRef.current = null;
+                }}
               >
                 <Ionicons name="close-circle" size={24} color={Colors.status.danger} />
               </TouchableOpacity>
@@ -1858,7 +1860,10 @@ export default function CommunityScreen() {
               </Text>
               <TouchableOpacity
                 style={styles.removeFilePreviewButton}
-                onPress={() => setSelectedFile(null)}
+                onPress={() => {
+                  setSelectedFile(null);
+                  uploadPromiseRef.current = null;
+                }}
               >
                 <Ionicons name="close-circle" size={24} color={Colors.status.danger} />
               </TouchableOpacity>
