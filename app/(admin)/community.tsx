@@ -950,22 +950,14 @@ export default function CommunityScreen() {
 
   const handleViewDocument = async (url: string, fileName: string, id: string) => {
     if (!url) return;
-    const safeName = fileName ? fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_') : 'document.pdf';
-    const localUri = `${FileSystem.documentDirectory}${safeName}`;
+    setDownloadingFileId(id);
     try {
-      const info = await FileSystem.getInfoAsync(localUri);
-      if (info.exists) {
-        await Sharing.shareAsync(localUri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
-        return;
-      }
-      setDownloadingFileId(id);
-      const downloadRes = await FileSystem.downloadAsync(url, localUri);
-      setDownloadingFileId(null);
-      await Sharing.shareAsync(downloadRes.uri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+      await Linking.openURL(url);
     } catch (err) {
-      setDownloadingFileId(null);
       console.warn('Failed to download or view document:', err);
       Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
+    } finally {
+      setDownloadingFileId(null);
     }
   };
 
@@ -1266,14 +1258,13 @@ export default function CommunityScreen() {
 
   const handlePost = async (customText?: string | any) => {
     const postText = typeof customText === 'string' ? customText : composerText;
-    if (!postText.trim() && !selectedImage && !selectedDocument) {
+    if (!postText.trim() && !selectedImage && !selectedFile) {
       Alert.alert('Empty Post', 'Please write something or attach a file before posting.');
       return;
     }
     
     setIsLoading(true);
-    // Optimistic UI: Don't wait for upload to finish
-    setIsUploading(false); 
+    setIsUploading(true); 
     
     try {
       const adminName = businessName || user?.user_metadata?.name || 'Admin';
@@ -1393,6 +1384,7 @@ export default function CommunityScreen() {
       Alert.alert('Post Failed', err.message || 'Failed to publish post.');
     } finally {
       setIsLoading(false);
+      setIsUploading(false);
     }
   };
 

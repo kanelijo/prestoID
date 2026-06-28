@@ -837,23 +837,11 @@ export default function StudentCommunityScreen() {
   }, [posts]);
 
   const handleViewDocument = async (post: Post) => {
-    const fileName = post.file_name || 'document.pdf';
-    const safeName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-    const localUri = `${FileSystem.documentDirectory}${safeName}`;
-    
-    try {
-      // 1. Check phone memory first (0ms Latency)
-      const info = await FileSystem.getInfoAsync(localUri);
-      if (info.exists) {
-        await Sharing.shareAsync(localUri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
-        return;
-      }
-      
-      setDownloadingFileId(post.id);
-      
-      let downloadUrl = '';
+    let downloadUrl = '';
+    setDownloadingFileId(post.id);
 
-      // 2. Try Telegram (The Fast Path)
+    try {
+      // 1. Try Telegram (The Fast Path)
       if (post.tg_file_id) {
         try {
           downloadUrl = await getTelegramFastLink(post.tg_file_id);
@@ -862,7 +850,7 @@ export default function StudentCommunityScreen() {
         }
       }
 
-      // 3. Failover to Google Drive (The Safety Path)
+      // 2. Failover to Google Drive (The Safety Path)
       if (!downloadUrl && post.backup_url) {
         downloadUrl = post.backup_url;
       } else if (!downloadUrl && post.file_url) {
@@ -873,13 +861,15 @@ export default function StudentCommunityScreen() {
         throw new Error('No valid download link found.');
       }
 
-      const downloadRes = await FileSystem.downloadAsync(downloadUrl, localUri);
-      setDownloadingFileId(null);
-      await Sharing.shareAsync(downloadRes.uri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+      // 3. Literally download the file into the device using the native browser handler
+      // This bypasses the share sheet completely and saves to the user's Downloads folder
+      await Linking.openURL(downloadUrl);
+      
     } catch (err) {
-      setDownloadingFileId(null);
       console.warn('Failed to download or view document:', err);
       Alert.alert('Error', 'Failed to open document. Please check your internet connection or try again later.');
+    } finally {
+      setDownloadingFileId(null);
     }
   };
 

@@ -19,19 +19,25 @@ serve(async (req) => {
       throw new Error('Telegram Bot Token or Channel ID is not configured in Supabase Secrets.');
     }
 
-    // Expecting a multipart/form-data payload with 'document' (the file) and 'fileName'
-    const formData = await req.formData();
-    const document = formData.get('document');
-    const fileName = formData.get('fileName') || 'upload.file';
+    // Expecting a JSON payload with fileBase64, fileName, mimeType
+    const { fileBase64, fileName, mimeType } = await req.json();
 
-    if (!document) {
-      throw new Error('No document provided in formData.');
+    if (!fileBase64) {
+      throw new Error('No fileBase64 provided in payload.');
     }
+
+    // Convert base64 to Blob
+    const binaryStr = atob(fileBase64);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+    const documentBlob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
 
     // Forward to Telegram
     const telegramFormData = new FormData();
     telegramFormData.append('chat_id', CHANNEL_ID);
-    telegramFormData.append('document', document, fileName as string);
+    telegramFormData.append('document', documentBlob, fileName || 'upload.file');
 
     const telegramRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, {
       method: 'POST',

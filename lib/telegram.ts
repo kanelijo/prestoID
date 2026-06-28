@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 /**
@@ -20,16 +20,16 @@ export async function uploadToTelegramViaEdge(fileUri: string, fileName: string)
   else if (ext === 'png') mimeType = 'image/png';
   else if (ext === 'mp4') mimeType = 'video/mp4';
 
-  const formData = new FormData();
-  formData.append('document', {
-    uri: Platform.OS === 'android' ? fileUri : fileUri.replace('file://', ''),
-    name: fileName,
-    type: mimeType,
-  } as any);
-  formData.append('fileName', fileName);
+  const fileBase64 = await FileSystem.readAsStringAsync(fileUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
 
   const { data, error } = await supabase.functions.invoke('telegram-upload', {
-    body: formData,
+    body: {
+      fileName,
+      mimeType,
+      fileBase64,
+    },
   });
 
   if (error) {
