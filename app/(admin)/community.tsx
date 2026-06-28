@@ -157,23 +157,40 @@ const formatBubbleTime = (dateString: string) => {
   }
 };
 
-const handleDownload = async (url: string, fileName?: string) => {
-  if (!url) return;
-  const isPDF = fileName?.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf');
+import { getTelegramFastLink } from '@/lib/telegram';
+
+const handleDownload = async (post: Post) => {
+  let downloadUrl = '';
+  
+  if (post.tg_file_id) {
+    try {
+      downloadUrl = await getTelegramFastLink(post.tg_file_id);
+    } catch (e) {
+      console.warn('Failed to resolve telegram link', e);
+    }
+  }
+
+  if (!downloadUrl && post.backup_url) downloadUrl = post.backup_url;
+  if (!downloadUrl && post.file_url) downloadUrl = post.file_url;
+  if (!downloadUrl && post.media_url) downloadUrl = post.media_url;
+
+  if (!downloadUrl) return;
+
+  const isPDF = post.file_name?.toLowerCase().endsWith('.pdf') || downloadUrl.toLowerCase().includes('.pdf');
   
   if (isPDF) {
-    router.push({ pathname: '/(admin)/pdf-viewer', params: { uri: url, title: fileName || 'Document' } });
+    router.push({ pathname: '/(admin)/pdf-viewer', params: { uri: downloadUrl, title: post.file_name || 'Document' } });
     return;
   }
 
   try {
-    const downloadUrl = url.includes('?')
-      ? `${url}&download=${encodeURIComponent(fileName || '')}`
-      : `${url}?download=${encodeURIComponent(fileName || '')}`;
-    await Linking.openURL(downloadUrl);
+    const finalUrl = downloadUrl.includes('?')
+      ? `${downloadUrl}&download=${encodeURIComponent(post.file_name || '')}`
+      : `${downloadUrl}?download=${encodeURIComponent(post.file_name || '')}`;
+    await Linking.openURL(finalUrl);
   } catch (err: any) {
     try {
-      await Linking.openURL(url);
+      await Linking.openURL(downloadUrl);
     } catch (e) {
       Alert.alert('Error', 'Could not open or download the file.');
     }
@@ -190,7 +207,7 @@ interface PostCardProps {
   onDelete: (postId: string) => void;
   onVote: (postId: string, optionIndex: number) => void;
   downloadingFileId?: string | null;
-  onViewDocument?: (url: string, fileName: string, id: string) => void;
+  onViewDocument?: (post: Post) => void;
 }
 
 function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap, onVote, downloadingFileId, onViewDocument }: PostCardProps) {
@@ -363,7 +380,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
             <TouchableOpacity
               style={styles.pdfAttachmentCardContainer}
               onPress={() => {
-                if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+                if (item.file_url && onViewDocument) onViewDocument(item);
               }}
               activeOpacity={0.8}
             >
@@ -440,7 +457,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           <TouchableOpacity
             style={styles.fileAttachmentCard}
             onPress={() => {
-              if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              if (item.file_url && onViewDocument) onViewDocument(item);
             }}
             activeOpacity={0.7}
           >
@@ -505,8 +522,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           <TouchableOpacity
             style={[styles.engagementButton, { marginLeft: 'auto' }]}
             onPress={() => {
-              const url = item.file_url || item.media_url;
-              if (url) handleDownload(url, item.file_name);
+              handleDownload(item);
             }}
           >
             <Ionicons
@@ -993,16 +1009,13 @@ export default function CommunityScreen() {
     }
   };
 
-  const handleViewDocument = async (url: string, fileName: string, id: string) => {
-    if (!url) return;
-    setDownloadingFileId(id);
+  const handleViewDocument = async (post: Post) => {
+    if (!post) return;
+    setDownloadingFileId(post.id);
     try {
-      const result = await downloadAndOpenSaf(url, fileName || 'document.pdf');
-      if (!result.success && result.error !== 'No directory selected.') {
-        throw new Error(result.error);
-      }
+      await handleDownload(post);
     } catch (err) {
-      console.warn('Failed to download or view document:', err);
+      console.warn('Failed to view document:', err);
       Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
     } finally {
       setDownloadingFileId(null);
