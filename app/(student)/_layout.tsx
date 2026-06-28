@@ -173,6 +173,7 @@ export default function StudentLayout() {
       <Tabs.Screen name="test/engine/[id]" options={{ href: null }} />
       <Tabs.Screen name="test/result/[id]" options={{ href: null }} />
       <Tabs.Screen name="notes" options={{ href: null }} />
+      <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
       </Tabs>
     </>
   );

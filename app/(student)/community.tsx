@@ -872,12 +872,8 @@ export default function StudentCommunityScreen() {
         const fileInfo = await FileSystem.getInfoAsync(existingLocalUri);
         if (fileInfo.exists) {
           // It's local! Open it natively (for PDFs we will route to our internal viewer later, but for now we route to pdf-viewer if we have one)
-          if (post.file_name?.toLowerCase().endsWith('.pdf') || post.file_url?.toLowerCase().endsWith('.pdf')) {
-            router.push({ pathname: '/(student)/pdf-viewer', params: { uri: existingLocalUri, title: post.file_name || 'Document' } });
-            return;
-          }
-          // For images/videos, we can just use intent or custom viewer. Since it's local, we might need intent.
-          // Since we removed intent from kotlin, let's just open PDF internally for now.
+          router.push({ pathname: '/(student)/pdf-viewer', params: { uri: existingLocalUri, title: post.file_name || 'Document' } });
+          return;
         }
       } catch (e) {
         console.warn("Local file check failed, re-downloading", e);
@@ -909,10 +905,8 @@ export default function StudentCommunityScreen() {
          // Mark as downloaded for offline access!
          markAsDownloaded(post.id.toString(), result.uri);
          
-         // Now that it's downloaded, open it internally if it's a PDF
-         if (post.file_name?.toLowerCase().endsWith('.pdf') || post.file_url?.toLowerCase().endsWith('.pdf')) {
-            router.push({ pathname: '/(student)/pdf-viewer', params: { uri: result.uri, title: post.file_name || 'Document' } });
-         }
+         // Now that it's downloaded, open it internally
+         router.push({ pathname: '/(student)/pdf-viewer', params: { uri: result.uri, title: post.file_name || 'Document' } });
       }
       
     } catch (err) {
