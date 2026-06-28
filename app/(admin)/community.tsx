@@ -174,9 +174,11 @@ interface PostCardProps {
   onEdit: (post: Post) => void;
   onDelete: (postId: string) => void;
   onVote: (postId: string, optionIndex: number) => void;
+  downloadingFileId?: string | null;
+  onViewDocument?: (url: string, fileName: string, id: string) => void;
 }
 
-function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap, onVote }: PostCardProps) {
+function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap, onVote, downloadingFileId, onViewDocument }: PostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showAllComments, setShowAllComments] = useState(false);
@@ -346,7 +348,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
             <TouchableOpacity
               style={styles.pdfAttachmentCardContainer}
               onPress={() => {
-                if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+                if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
               }}
               activeOpacity={0.8}
             >
@@ -423,7 +425,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           <TouchableOpacity
             style={styles.fileAttachmentCard}
             onPress={() => {
-              if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
             }}
             activeOpacity={0.7}
           >
@@ -2048,6 +2050,8 @@ export default function CommunityScreen() {
                   onEdit={handleEditInit}
                   onDelete={handleDeletePost}
                   onVote={handleVote}
+                  downloadingFileId={downloadingFileId}
+                  onViewDocument={handleViewDocument}
                 />
               </View>
             );
