@@ -183,8 +183,25 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
   const [replyText, setReplyText] = useState('');
   const [showFullImage, setShowFullImage] = useState(false);
   const { user } = useAuthStore();
-  const { downloadedFiles } = useDownloadStore();
+  const { downloadedFiles, removeDownload } = useDownloadStore();
   const isDownloaded = !!downloadedFiles[item.id.toString()];
+
+  useEffect(() => {
+    const verifyFile = async () => {
+      if (isDownloaded) {
+        const localUri = downloadedFiles[item.id.toString()];
+        try {
+          const info = await FileSystem.getInfoAsync(localUri);
+          if (!info.exists) {
+            removeDownload(item.id.toString());
+          }
+        } catch (e) {
+          // Ignore
+        }
+      }
+    };
+    verifyFile();
+  }, [isDownloaded, item.id]);
 
   const handleSendComment = () => {
     if (!commentText.trim()) return;
