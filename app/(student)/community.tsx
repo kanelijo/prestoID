@@ -293,31 +293,52 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
 
       {item.file_url && (() => {
         const isPDF = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
+        const thumbnailUrl = isPDF && item.file_url.startsWith('http')
+          ? `https://image.thum.io/get/pdfSource/${item.file_url}`
+          : null;
+
         return (
           <TouchableOpacity
-            style={styles.telegramDocBubble}
+            style={styles.cohesivePdfBubble}
             onPress={() => {
               if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
             }}
-            activeOpacity={0.8}
+            activeOpacity={0.85}
           >
-            <View style={[styles.docIconCircle, { backgroundColor: isPDF ? '#EF5350' : '#42A5F5' }]}>
-              <Ionicons name="document-text" size={20} color="#FFFFFF" />
-            </View>
-            <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
-              <Text style={styles.docBubbleName} numberOfLines={1}>
-                {item.file_name || (isPDF ? 'Document.pdf' : 'Attachment')}
-              </Text>
-              <Text style={styles.docBubbleMeta}>
-                {isPDF ? 'PDF Document' : 'File Attachment'} • Tap to view
-              </Text>
-            </View>
-            <View style={styles.docActionContainer}>
-              {downloadingFileId === item.id ? (
-                <ActivityIndicator size="small" color={Colors.accent.primary} />
+            {isPDF && (
+              thumbnailUrl ? (
+                <View style={styles.cohesivePdfPreviewContainer}>
+                  <CachedImage uri={thumbnailUrl} style={styles.cohesivePdfPreview} contentFit="cover" />
+                </View>
               ) : (
-                <Ionicons name="arrow-down-circle" size={24} color={Colors.accent.primary} />
-              )}
+                <View style={styles.cohesivePdfPlaceholder}>
+                  <Ionicons name="document-text" size={32} color="#EF5350" />
+                  <Text style={styles.cohesivePdfPlaceholderText} numberOfLines={1}>
+                    {item.file_name || 'PDF Document'}
+                  </Text>
+                </View>
+              )
+            )}
+            
+            <View style={styles.cohesivePdfDetailsRow}>
+              <View style={[styles.docIconCircle, { backgroundColor: isPDF ? '#EF5350' : '#42A5F5' }]}>
+                <Ionicons name="document-text" size={20} color="#FFFFFF" />
+              </View>
+              <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
+                <Text style={styles.docBubbleName} numberOfLines={1}>
+                  {item.file_name || (isPDF ? 'Document.pdf' : 'Attachment')}
+                </Text>
+                <Text style={styles.docBubbleMeta}>
+                  {isPDF ? 'PDF Document' : 'File Attachment'} • Tap to view
+                </Text>
+              </View>
+              <View style={styles.docActionContainer}>
+                {downloadingFileId === item.id ? (
+                  <ActivityIndicator size="small" color={Colors.accent.primary} />
+                ) : (
+                  <Ionicons name="arrow-down-circle" size={24} color={Colors.accent.primary} />
+                )}
+              </View>
             </View>
           </TouchableOpacity>
         );
@@ -1754,14 +1775,48 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  telegramDocBubble: {
+  cohesivePdfBubble: {
+    width: '100%',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  cohesivePdfPreviewContainer: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  cohesivePdfPreview: {
+    width: '100%',
+    height: '100%',
+  },
+  cohesivePdfPlaceholder: {
+    width: '100%',
+    height: 100,
+    borderRadius: 8,
+    backgroundColor: Colors.bg.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    gap: 6,
+  },
+  cohesivePdfPlaceholderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+    paddingHorizontal: 12,
+  },
+  cohesivePdfDetailsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Colors.bg.primary,
     borderRadius: 12,
     padding: 10,
-    marginTop: 8,
-    marginBottom: 8,
     borderWidth: 1,
     borderColor: Colors.card.border,
   },
