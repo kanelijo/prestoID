@@ -34,7 +34,7 @@ export default function StudentSettingsScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [studentName, setStudentName] = useState('Student User');
   const [studentDetails, setStudentDetails] = useState<any>(null);
-  const [completeness, setCompleteness] = useState({ percentage: 0, missing: [] as string[], filled: [] as string[] });
+
 
   // Dynamic DB states
   const [attendanceLogs, setAttendanceLogs] = useState<any[]>([]);
@@ -104,37 +104,7 @@ export default function StudentSettingsScreen() {
         setStudentName(data.name);
         setStudentDetails(data);
         
-        // Calculate completeness
-        const fields = [
-          { key: 'name', label: 'Name' },
-          { key: 'phone', label: 'Phone' },
-          { key: 'email', label: 'Email' },
-          { key: 'father_name', label: 'Father\'s Name' },
-          { key: 'parent_name', label: 'Mother\'s Name' },
-          { key: 'parent_phone', label: 'Parent Phone' },
-          { key: 'dob', label: 'Date of Birth' },
-          { key: 'address', label: 'Address' },
-          { key: 'photo_url', label: 'Photo' },
-        ];
-        
-        let filledCount = 0;
-        let missing: string[] = [];
-        let filled: string[] = [];
-        
-        fields.forEach(f => {
-          if (data[f.key] && data[f.key] !== '') {
-            filledCount++;
-            filled.push(f.label);
-          } else {
-            missing.push(f.label);
-          }
-        });
-        
-        setCompleteness({
-          percentage: Math.round((filledCount / fields.length) * 100),
-          missing,
-          filled
-        });
+
 
         // Fetch attendance logs & calculate rate
         const { data: attLogs, error: attError } = await supabase
@@ -366,34 +336,6 @@ export default function StudentSettingsScreen() {
 
         {activeTab === 'profile' && (
           <View>
-        {/* Profile Completeness Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Profile Completeness</Text>
-          <View style={styles.card}>
-            <View style={styles.completenessHeader}>
-              <Text style={styles.completenessTitle}>{completeness.percentage}% Complete</Text>
-              <Text style={styles.completenessSubtitle}>Fill all fields to secure your ID</Text>
-            </View>
-            <View style={styles.progressBarBg}>
-              <View style={[styles.progressBarFill, { width: `${completeness.percentage}%` }]} />
-            </View>
-            <View style={styles.checklistContainer}>
-              {completeness.filled.map((item, idx) => (
-                <View key={`filled-${idx}`} style={styles.checklistItem}>
-                  <Ionicons name="checkmark-circle" size={16} color={Colors.status.success} />
-                  <Text style={[styles.checklistText, { color: Colors.text.secondary }]}>{item}</Text>
-                </View>
-              ))}
-              {completeness.missing.map((item, idx) => (
-                <View key={`missing-${idx}`} style={styles.checklistItem}>
-                  <Ionicons name="ellipse-outline" size={16} color={Colors.status.danger} />
-                  <Text style={[styles.checklistText, { color: Colors.status.danger }]}>{item} (Tap to add)</Text>
-                </View>
-              ))}
-            </View>
-          </View>
-        </View>
-
         {/* Notification Settings */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Notifications</Text>
@@ -875,56 +817,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 12,
     fontWeight: '500',
-  },
-  
-  // Completeness UI
-  completenessHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 10,
-  },
-  completenessTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: Colors.accent.primary,
-  },
-  completenessSubtitle: {
-    fontSize: 12,
-    color: Colors.text.tertiary,
-    fontWeight: '500',
-  },
-  progressBarBg: {
-    height: 8,
-    backgroundColor: Colors.bg.tertiary,
-    borderRadius: 4,
-    marginBottom: 16,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: Colors.accent.primary,
-    borderRadius: 4,
-  },
-  checklistContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  checklistItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.bg.primary,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-    gap: 4,
-  },
-  checklistText: {
-    fontSize: 11,
-    fontWeight: '600',
   },
 
   // Fees UI
