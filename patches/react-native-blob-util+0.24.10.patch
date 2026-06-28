@@ -1,0 +1,342 @@
+diff --git a/node_modules/react-native-blob-util/.claude/settings.local.json b/node_modules/react-native-blob-util/.claude/settings.local.json
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/.eslintrc.json b/node_modules/react-native-blob-util/.eslintrc.json
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/LICENSE b/node_modules/react-native-blob-util/LICENSE
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/Migration.md b/node_modules/react-native-blob-util/Migration.md
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/NuGet.config b/node_modules/react-native-blob-util/NuGet.config
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/README.md b/node_modules/react-native-blob-util/README.md
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android.js b/node_modules/react-native-blob-util/android.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/build.gradle b/node_modules/react-native-blob-util/android/build.gradle
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/gradle.properties b/node_modules/react-native-blob-util/android/gradle.properties
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/AndroidManifest.xml b/node_modules/react-native-blob-util/android/src/main/AndroidManifest.xml
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilBody.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilBody.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilConfig.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilConfig.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilConst.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilConst.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilFS.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilFS.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilFileTransformer.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilFileTransformer.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilImpl.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilMediaCollection.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilMediaCollection.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilPackage.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilPackage.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilProgressConfig.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilProgressConfig.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilReq.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilReq.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilStream.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilStream.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilUtils.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/ReactNativeBlobUtilUtils.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Response/ReactNativeBlobUtilDefaultResp.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Response/ReactNativeBlobUtilDefaultResp.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Response/ReactNativeBlobUtilFileResp.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Response/ReactNativeBlobUtilFileResp.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/FileDescription.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/FileDescription.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/FileProvider.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/FileProvider.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/MimeType.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/MimeType.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/PathResolver.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/PathResolver.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/Tls12SocketFactory.java b/node_modules/react-native-blob-util/android/src/main/java/com/ReactNativeBlobUtil/Utils/Tls12SocketFactory.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/res/values/strings.xml b/node_modules/react-native-blob-util/android/src/main/res/values/strings.xml
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/main/res/xml/provider_paths.xml b/node_modules/react-native-blob-util/android/src/main/res/xml/provider_paths.xml
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/newarch/java/com/ReactNativeBlobUtil/ReactNativeBlobUtil.java b/node_modules/react-native-blob-util/android/src/newarch/java/com/ReactNativeBlobUtil/ReactNativeBlobUtil.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/android/src/oldarch/java/com/ReactNativeBlobUtil/ReactNativeBlobUtil.java b/node_modules/react-native-blob-util/android/src/oldarch/java/com/ReactNativeBlobUtil/ReactNativeBlobUtil.java
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilBlobResponse.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilBlobResponse.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilCanceledFetchError.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilCanceledFetchError.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilFile.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilFile.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilReadStream.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilReadStream.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilSession.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilSession.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/ReactNativeBlobUtilWriteStream.js b/node_modules/react-native-blob-util/class/ReactNativeBlobUtilWriteStream.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/class/StatefulPromise.js b/node_modules/react-native-blob-util/class/StatefulPromise.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js b/node_modules/react-native-blob-util/codegenSpecs/NativeBlobUtils.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/components/Fetch.onPress.js b/node_modules/react-native-blob-util/components/Fetch.onPress.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/components/Fetch.when.js b/node_modules/react-native-blob-util/components/Fetch.when.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/fetch.js b/node_modules/react-native-blob-util/fetch.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/fs.js b/node_modules/react-native-blob-util/fs.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/index.d.ts b/node_modules/react-native-blob-util/index.d.ts
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/index.js b/node_modules/react-native-blob-util/index.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/index.js.flow b/node_modules/react-native-blob-util/index.js.flow
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/index.web.js b/node_modules/react-native-blob-util/index.web.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios.js b/node_modules/react-native-blob-util/ios.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/PrivacyInfo.xcprivacy b/node_modules/react-native-blob-util/ios/PrivacyInfo.xcprivacy
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil.xcodeproj/project.pbxproj b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil.xcodeproj/project.pbxproj
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil/ReactNativeBlobUtil.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil/ReactNativeBlobUtil.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil/ReactNativeBlobUtil.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtil/ReactNativeBlobUtil.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilConst.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilConst.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilConst.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilConst.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFS.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFS.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFS.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFS.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFileTransformer.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFileTransformer.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFileTransformer.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilFileTransformer.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilNetwork.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilNetwork.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilNetwork.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilNetwork.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilProgress.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilProgress.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilProgress.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilProgress.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilReqBuilder.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilReqBuilder.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilReqBuilder.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilReqBuilder.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilRequest.h b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilRequest.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilRequest.mm b/node_modules/react-native-blob-util/ios/ReactNativeBlobUtilRequest.mm
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/json-stream.js b/node_modules/react-native-blob-util/json-stream.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/lib/oboe-browser.js b/node_modules/react-native-blob-util/lib/oboe-browser.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/lib/oboe-browser.min.js b/node_modules/react-native-blob-util/lib/oboe-browser.min.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/mediacollection.js b/node_modules/react-native-blob-util/mediacollection.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/Blob.js b/node_modules/react-native-blob-util/polyfill/Blob.js
+old mode 100644
+new mode 100755
+index 14fcc71..08beb0b
+--- a/node_modules/react-native-blob-util/polyfill/Blob.js
++++ b/node_modules/react-native-blob-util/polyfill/Blob.js
+@@ -6,7 +6,7 @@ import fs from '../fs.js';
+ import getUUID from '../utils/uuid';
+ import Log from '../utils/log.js';
+ import URIUtil from "../utils/uri";
+-import EventTarget from './EventTarget';
++import EventTarget from './EventTarget.js';
+ 
+ const log = new Log('Blob');
+ const blobCacheDir = fs.dirs.DocumentDir + '/ReactNativeBlobUtil-blobs/';
+diff --git a/node_modules/react-native-blob-util/polyfill/Event.js b/node_modules/react-native-blob-util/polyfill/Event.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/EventTarget.js b/node_modules/react-native-blob-util/polyfill/EventTarget.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/Fetch.js b/node_modules/react-native-blob-util/polyfill/Fetch.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/File.js b/node_modules/react-native-blob-util/polyfill/File.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/FileReader.js b/node_modules/react-native-blob-util/polyfill/FileReader.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/ProgressEvent.js b/node_modules/react-native-blob-util/polyfill/ProgressEvent.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/XMLHttpRequest.js b/node_modules/react-native-blob-util/polyfill/XMLHttpRequest.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/XMLHttpRequestEventTarget.js b/node_modules/react-native-blob-util/polyfill/XMLHttpRequestEventTarget.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/polyfill/index.js b/node_modules/react-native-blob-util/polyfill/index.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/react-native-blob-util.podspec b/node_modules/react-native-blob-util/react-native-blob-util.podspec
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/types.js b/node_modules/react-native-blob-util/types.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/utils/log.js b/node_modules/react-native-blob-util/utils/log.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/utils/unicode.js b/node_modules/react-native-blob-util/utils/unicode.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/utils/uri.js b/node_modules/react-native-blob-util/utils/uri.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/utils/uuid.js b/node_modules/react-native-blob-util/utils/uuid.js
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ExperimentalFeatures.props b/node_modules/react-native-blob-util/windows/ExperimentalFeatures.props
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/README.md b/node_modules/react-native-blob-util/windows/README.md
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil.sln b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil.sln
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/PropertySheet.props b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/PropertySheet.props
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.cpp b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.cpp
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.def b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.def
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.rc b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.rc
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.vcxproj b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.vcxproj
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.vcxproj.filters b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactNativeBlobUtil.vcxproj.filters
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.cpp b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.cpp
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.idl b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/ReactPackageProvider.idl
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/.clang-format b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/.clang-format
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/NativeBlobUtilsDataTypes.g.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/NativeBlobUtilsDataTypes.g.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/NativeBlobUtilsSpec.g.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/codegen/NativeBlobUtilsSpec.g.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/packages.config b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/packages.config
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/packages.lock.json b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/packages.lock.json
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/pch.cpp b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/pch.cpp
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/pch.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/pch.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/resource.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/resource.h
+old mode 100644
+new mode 100755
+diff --git a/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/targetver.h b/node_modules/react-native-blob-util/windows/ReactNativeBlobUtil/targetver.h
+old mode 100644
+new mode 100755
