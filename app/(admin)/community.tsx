@@ -256,23 +256,11 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
     <View style={styles.postCard}>
       {/* Post Header */}
       <View style={styles.postHeader}>
-        {authorAvatarUri ? (
-          <CachedImage uri={authorAvatarUri} style={styles.postAuthorAvatarImage} fallbackInitial={item.author} />
-        ) : (
-          <View style={styles.postAuthorAvatar}>
-            <Text style={styles.postAuthorInitial}>
-              {item.author.charAt(0)}
-            </Text>
-          </View>
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.postAuthorName}>{item.author}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
-            {item.is_edited && (
-              <Text style={styles.editedLabel}>• Edited</Text>
-            )}
-          </View>
+        <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
+          {item.is_edited && (
+            <Text style={styles.editedLabel}>• Edited</Text>
+          )}
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <View style={[styles.categoryBadge, { backgroundColor: cat.bg }]}>
