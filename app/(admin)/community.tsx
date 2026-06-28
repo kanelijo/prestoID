@@ -30,13 +30,14 @@ try {
 }
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
+import { router } from 'expo-router';
+import { supabase } from '@/lib/supabase';
 import * as Sharing from 'expo-sharing';
 import { downloadAndOpenSaf } from '@/lib/saf';
 import { decode } from 'base64-arraybuffer';
 import CachedImage from '@/components/CachedImage';
 import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
 import { Colors, Shadows } from '@/constants/colors';
-import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { sendPushNotification, scheduleLocalNotification, CHANNELS } from '@/lib/notifications';
@@ -158,6 +159,13 @@ const formatBubbleTime = (dateString: string) => {
 
 const handleDownload = async (url: string, fileName?: string) => {
   if (!url) return;
+  const isPDF = fileName?.toLowerCase().endsWith('.pdf') || url.toLowerCase().includes('.pdf');
+  
+  if (isPDF) {
+    router.push({ pathname: '/(admin)/pdf-viewer', params: { uri: url, title: fileName || 'Document' } });
+    return;
+  }
+
   try {
     const downloadUrl = url.includes('?')
       ? `${url}&download=${encodeURIComponent(fileName || '')}`

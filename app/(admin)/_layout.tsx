@@ -182,6 +182,7 @@ export default function AdminLayout() {
       <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
       <Tabs.Screen name="test/analytics/[id]" options={{ href: null }} />
       <Tabs.Screen name="notebank" options={{ href: null }} />
+      <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
       </Tabs>
     </>
   );

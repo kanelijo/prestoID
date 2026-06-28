@@ -1092,7 +1092,8 @@ export default function StudentCommunityScreen() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [user, fetchStudentProfile, studentProfile]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, fetchStudentProfile]);
 
   useEffect(() => {
     // 1. Pre-load cached student profile from AsyncStorage immediately
