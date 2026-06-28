@@ -16,7 +16,7 @@ class PrestostorageModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("Prestostorage")
 
-    AsyncFunction("saveAndOpenDocument") { localUriString: String, fileName: String, promise: Promise ->
+    AsyncFunction("saveDocument") { localUriString: String, fileName: String, promise: Promise ->
       val context = appContext.reactContext ?: throw Exception("React context not available")
       
       try {
@@ -40,9 +40,9 @@ class PrestostorageModule : Module() {
 
         // Determine destination path based on file type
         val relativePath = when (ext) {
-            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/PrestoID"
-            "mp4" -> Environment.DIRECTORY_MOVIES + "/PrestoID"
-            else -> Environment.DIRECTORY_DOWNLOADS + "/PrestoID"
+            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/PrestoID/PrestoID Images"
+            "mp4" -> Environment.DIRECTORY_MOVIES + "/PrestoID/PrestoID Videos"
+            else -> Environment.DIRECTORY_DOWNLOADS + "/PrestoID/PrestoID Documents"
         }
 
         val contentValues = ContentValues().apply {
@@ -94,21 +94,6 @@ class PrestostorageModule : Module() {
             resolver.update(uri, contentValues, null, null)
           }
 
-          // Open the file using ACTION_VIEW natively, skipping Share Sheet
-          val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, mimeType)
-            flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
-          }
-          
-          try {
-            context.startActivity(intent)
-          } catch (e: Exception) {
-            // No default app found, fallback to chooser
-            val chooser = Intent.createChooser(intent, "Open File")
-            chooser.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            context.startActivity(chooser)
-          }
-          
           promise.resolve(mapOf("success" to true, "uri" to uri.toString(), "legacy" to false))
         } catch (e: Exception) {
           resolver.delete(uri, null, null)

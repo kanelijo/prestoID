@@ -13,8 +13,7 @@ export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) 
         await FileSystem.downloadAsync(downloadUrl, tempUri);
 
         // 2. Call our custom native module to insert it into MediaStore (Downloads/PrestoID)
-        // and instantly open it using Android Intent.
-        const result = await PrestostorageModule.saveAndOpenDocument(tempUri, safeName);
+        const result = await PrestostorageModule.saveDocument(tempUri, safeName);
         
         // 3. Clean up cache
         await FileSystem.deleteAsync(tempUri, { idempotent: true });

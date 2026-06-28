@@ -33,6 +33,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 import CachedImage from '@/components/CachedImage';
+import { useDownloadStore } from '@/stores/useDownloadStore';
 import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
 import VirtualIDCard from '@/components/VirtualIDCard';
 
@@ -182,6 +183,8 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
   const [replyText, setReplyText] = useState('');
   const [showFullImage, setShowFullImage] = useState(false);
   const { user } = useAuthStore();
+  const { downloadedFiles } = useDownloadStore();
+  const isDownloaded = !!downloadedFiles[item.id.toString()];
 
   const handleSendComment = () => {
     if (!commentText.trim()) return;
@@ -387,6 +390,8 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
                 </View>
                 {downloadingFileId === item.id ? (
                   <ActivityIndicator size="small" color={Colors.accent.primary} />
+                ) : isDownloaded ? (
+                  <Ionicons name="checkmark-circle" size={20} color="#4CAF50" />
                 ) : (
                   <Ionicons name="arrow-down-circle-outline" size={20} color="#78909C" />
                 )}
@@ -410,6 +415,8 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
             </View>
             {downloadingFileId === item.id ? (
               <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : isDownloaded ? (
+              <Ionicons name="checkmark-circle" size={18} color="#4CAF50" />
             ) : (
               <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
             )}
@@ -660,6 +667,8 @@ export default function StudentCommunityScreen() {
   const [showSearch, setShowSearch] = useState(false);
   const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
 
+  const { downloadedFiles, markAsDownloaded } = useDownloadStore();
+
   const { width: screenWidth } = Dimensions.get('window');
   const translateX = useRef(new Animated.Value(0)).current;
   const groupInfoAnim = useRef(new Animated.Value(0)).current;
@@ -839,40 +848,59 @@ export default function StudentCommunityScreen() {
   }, [posts]);
 
   const handleViewDocument = async (post: Post) => {
+    // 1. OFFLINE FAST PATH: Check if already downloaded
+    const existingLocalUri = downloadedFiles[post.id.toString()];
+    if (existingLocalUri) {
+      try {
+        const fileInfo = await FileSystem.getInfoAsync(existingLocalUri);
+        if (fileInfo.exists) {
+          // It's local! Open it natively (for PDFs we will route to our internal viewer later, but for now we route to pdf-viewer if we have one)
+          if (post.file_name?.toLowerCase().endsWith('.pdf') || post.file_url?.toLowerCase().endsWith('.pdf')) {
+            router.push({ pathname: '/(student)/pdf-viewer', params: { uri: existingLocalUri, title: post.file_name || 'Document' } });
+            return;
+          }
+          // For images/videos, we can just use intent or custom viewer. Since it's local, we might need intent.
+          // Since we removed intent from kotlin, let's just open PDF internally for now.
+        }
+      } catch (e) {
+        console.warn("Local file check failed, re-downloading", e);
+      }
+    }
+
     let downloadUrl = '';
     setDownloadingFileId(post.id);
 
     try {
-      // 1. Try Telegram (The Fast Path)
       if (post.tg_file_id) {
         try {
           downloadUrl = await getTelegramFastLink(post.tg_file_id);
         } catch (tgError) {
-          console.warn("Telegram link resolve failed, switching to Google Drive Backup", tgError);
+          console.warn("Telegram link resolve failed", tgError);
         }
       }
+      if (!downloadUrl && post.backup_url) downloadUrl = post.backup_url;
+      else if (!downloadUrl && post.file_url) downloadUrl = post.file_url;
 
-      // 2. Failover to Google Drive (The Safety Path)
-      if (!downloadUrl && post.backup_url) {
-        downloadUrl = post.backup_url;
-      } else if (!downloadUrl && post.file_url) {
-        downloadUrl = post.file_url; // Legacy support
-      }
+      if (!downloadUrl) throw new Error('No valid download link found.');
 
-      if (!downloadUrl) {
-        throw new Error('No valid download link found.');
-      }
-
-      // 3. Download via Storage Access Framework to save in a custom PrestoID folder
+      // 3. Download via our Native Module
       const result = await downloadAndOpenSaf(downloadUrl, post.file_name || 'document.pdf');
       
       if (!result.success && result.error !== 'No directory selected.') {
          throw new Error(result.error);
+      } else if (result.success && result.uri) {
+         // Mark as downloaded for offline access!
+         markAsDownloaded(post.id.toString(), result.uri);
+         
+         // Now that it's downloaded, open it internally if it's a PDF
+         if (post.file_name?.toLowerCase().endsWith('.pdf') || post.file_url?.toLowerCase().endsWith('.pdf')) {
+            router.push({ pathname: '/(student)/pdf-viewer', params: { uri: result.uri, title: post.file_name || 'Document' } });
+         }
       }
       
     } catch (err) {
-      console.warn('Failed to download or view document:', err);
-      Alert.alert('Error', 'Failed to open document. Please check your internet connection or try again later.');
+      console.warn('Failed to download document:', err);
+      Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
     } finally {
       setDownloadingFileId(null);
     }
