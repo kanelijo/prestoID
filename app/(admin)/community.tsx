@@ -218,51 +218,21 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
   const authorAvatarUri = item.author_id ? (avatarMap[item.author_id] || item.author_avatar) : item.author_avatar;
 
   return (
-    <View style={styles.postCard}>
-      {/* Post Header */}
-      <View style={styles.postHeader}>
-        {authorAvatarUri ? (
-          <CachedImage uri={authorAvatarUri} style={styles.postAuthorAvatarImage} fallbackInitial={item.author} />
-        ) : (
-          <View style={styles.postAuthorAvatar}>
-            <Text style={styles.postAuthorInitial}>
-              {item.author.charAt(0)}
-            </Text>
-          </View>
-        )}
-        <View style={{ flex: 1 }}>
-          <Text style={styles.postAuthorName}>{item.author}</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
-            {item.is_edited && (
-              <Text style={styles.editedLabel}>• Edited</Text>
-            )}
-          </View>
-        </View>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <View style={[styles.categoryBadge, { backgroundColor: cat.bg }]}>
-            <Text style={styles.categoryBadgeText}>{cat.label}</Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => {
-              Alert.alert(
-                'Post Options',
-                'Choose an action for this post:',
-                [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Edit Post', onPress: () => onEdit(item) },
-                  { text: 'Delete Post', style: 'destructive', onPress: () => onDelete(item.id) },
-                ]
-              );
-            }}
-            style={styles.optionsPostButton}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="ellipsis-vertical-outline" size={18} color={Colors.text.tertiary} />
-          </TouchableOpacity>
-        </View>
-      </View>
-
+    <TouchableOpacity
+      style={styles.postCard}
+      activeOpacity={0.9}
+      onLongPress={() => {
+        Alert.alert(
+          'Post Options',
+          'Choose an action for this post:',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Edit Post', onPress: () => onEdit(item) },
+            { text: 'Delete Post', style: 'destructive', onPress: () => onDelete(item.id) },
+          ]
+        );
+      }}
+    >
       {/* Post Content & Poll support */}
       {(() => {
         const pollData = parsePollData(item.text);
@@ -443,6 +413,13 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           </TouchableOpacity>
         );
       })()}
+
+      {/* Post Metadata row */}
+      <View style={styles.bubbleMetaRow}>
+        <Text style={styles.bubbleMetaText}>
+          {formatBubbleTime(item.timestamp)} • {cat.label} {item.is_edited ? '• Edited' : ''}
+        </Text>
+      </View>
 
       {/* Engagement Row */}
       <View style={styles.engagementRow}>
@@ -653,7 +630,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           </TouchableOpacity>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 function RotatingPlaceholderInput({ value, onChangeText, style, placeholderTextColor, multiline }: any) {
@@ -2651,6 +2628,16 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 14,
     ...Shadows.sm,
+  },
+  bubbleMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  bubbleMetaText: {
+    fontSize: 11,
+    color: Colors.text.tertiary,
   },
   postHeader: {
     flexDirection: 'row',
