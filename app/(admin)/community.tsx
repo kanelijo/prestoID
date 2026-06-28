@@ -31,6 +31,7 @@ try {
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
+import { downloadAndOpenSaf } from '@/lib/saf';
 import { decode } from 'base64-arraybuffer';
 import CachedImage from '@/components/CachedImage';
 import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
@@ -952,7 +953,10 @@ export default function CommunityScreen() {
     if (!url) return;
     setDownloadingFileId(id);
     try {
-      await Linking.openURL(url);
+      const result = await downloadAndOpenSaf(url, fileName || 'document.pdf');
+      if (!result.success && result.error !== 'No directory selected.') {
+        throw new Error(result.error);
+      }
     } catch (err) {
       console.warn('Failed to download or view document:', err);
       Alert.alert('Error', 'Failed to open document. Please check your internet connection.');

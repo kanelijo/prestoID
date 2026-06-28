@@ -16,7 +16,18 @@ serve(async (req) => {
       throw new Error('Telegram Bot Token is not configured in Supabase Secrets.');
     }
 
-    const { file_id } = await req.json();
+    const url = new URL(req.url);
+    
+    // Support both GET (for browser direct download) and POST (for API resolution)
+    let file_id = url.searchParams.get('file_id');
+    let file_name = url.searchParams.get('file_name') || 'document.pdf';
+
+    if (!file_id && req.method === 'POST') {
+      const body = await req.json();
+      file_id = body.file_id;
+      if (body.file_name) file_name = body.file_name;
+    }
+
     if (!file_id) {
       throw new Error('No file_id provided.');
     }
@@ -30,10 +41,24 @@ serve(async (req) => {
     }
 
     const filePath = pathResult.result.file_path;
-    
-    // 2. Construct the high-speed direct download link
     const downloadUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePath}`;
 
+    // If it's a GET request, we securely proxy the file stream to force a clean download!
+    if (req.method === 'GET') {
+      const fileResponse = await fetch(downloadUrl);
+      
+      // Stream the response directly to the client, hiding the BOT_TOKEN
+      return new Response(fileResponse.body, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': fileResponse.headers.get('Content-Type') || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${file_name}"`,
+        }
+      });
+    }
+
+    // If it's a POST request (legacy resolver), return the URL (Warning: exposes BOT_TOKEN)
+    // We keep this just in case, but frontend should use the GET proxy.
     return new Response(
       JSON.stringify({ success: true, downloadUrl }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },

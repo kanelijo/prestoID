@@ -24,6 +24,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Colors, Shadows } from '@/constants/colors';
+import { downloadAndOpenSaf } from '@/lib/saf';
 import { supabase } from '@/lib/supabase';
 import { getTelegramFastLink } from '@/lib/telegram';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -861,9 +862,12 @@ export default function StudentCommunityScreen() {
         throw new Error('No valid download link found.');
       }
 
-      // 3. Literally download the file into the device using the native browser handler
-      // This bypasses the share sheet completely and saves to the user's Downloads folder
-      await Linking.openURL(downloadUrl);
+      // 3. Download via Storage Access Framework to save in a custom PrestoID folder
+      const result = await downloadAndOpenSaf(downloadUrl, post.file_name || 'document.pdf');
+      
+      if (!result.success && result.error !== 'No directory selected.') {
+         throw new Error(result.error);
+      }
       
     } catch (err) {
       console.warn('Failed to download or view document:', err);
