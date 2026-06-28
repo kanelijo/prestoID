@@ -25,6 +25,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
+import { getTelegramFastLink } from '@/lib/telegram';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -68,6 +69,10 @@ type Post = {
   media_url?: string;
   file_url?: string;
   file_name?: string;
+  tg_file_id?: string;
+  backup_url?: string;
+  file_type?: string;
+  local_sync_id?: string;
   author_avatar?: string | null;
   is_edited?: boolean;
   is_new?: boolean;
@@ -164,7 +169,7 @@ interface PostCardProps {
   onAddReply: (postId: string, commentId: string, text: string) => void;
   onVote: (postId: string, optionIndex: number) => void;
   downloadingFileId?: string | null;
-  onViewDocument?: (url: string, fileName: string, id: string) => void;
+  onViewDocument?: (post: Post) => void;
 }
 
 function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, onAddReply, avatarMap, onVote, downloadingFileId, onViewDocument }: PostCardProps) {
@@ -315,7 +320,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
             <TouchableOpacity
               style={styles.pdfAttachmentCardContainer}
               onPress={() => {
-                if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+                if (item.file_url && onViewDocument) onViewDocument(item);
               }}
               activeOpacity={0.8}
             >
@@ -392,7 +397,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
           <TouchableOpacity
             style={styles.fileAttachmentCard}
             onPress={() => {
-              if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              if (item.file_url && onViewDocument) onViewDocument(item);
             }}
             activeOpacity={0.7}
           >
@@ -831,24 +836,50 @@ export default function StudentCommunityScreen() {
     resolveAvatars();
   }, [posts]);
 
-  const handleViewDocument = async (url: string, fileName: string, id: string) => {
-    if (!url) return;
-    const safeName = fileName ? fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_') : 'document.pdf';
+  const handleViewDocument = async (post: Post) => {
+    const fileName = post.file_name || 'document.pdf';
+    const safeName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
     const localUri = `${FileSystem.documentDirectory}${safeName}`;
+    
     try {
+      // 1. Check phone memory first (0ms Latency)
       const info = await FileSystem.getInfoAsync(localUri);
       if (info.exists) {
         await Sharing.shareAsync(localUri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
         return;
       }
-      setDownloadingFileId(id);
-      const downloadRes = await FileSystem.downloadAsync(url, localUri);
+      
+      setDownloadingFileId(post.id);
+      
+      let downloadUrl = '';
+
+      // 2. Try Telegram (The Fast Path)
+      if (post.tg_file_id) {
+        try {
+          downloadUrl = await getTelegramFastLink(post.tg_file_id);
+        } catch (tgError) {
+          console.warn("Telegram link resolve failed, switching to Google Drive Backup", tgError);
+        }
+      }
+
+      // 3. Failover to Google Drive (The Safety Path)
+      if (!downloadUrl && post.backup_url) {
+        downloadUrl = post.backup_url;
+      } else if (!downloadUrl && post.file_url) {
+        downloadUrl = post.file_url; // Legacy support
+      }
+
+      if (!downloadUrl) {
+        throw new Error('No valid download link found.');
+      }
+
+      const downloadRes = await FileSystem.downloadAsync(downloadUrl, localUri);
       setDownloadingFileId(null);
       await Sharing.shareAsync(downloadRes.uri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
     } catch (err) {
       setDownloadingFileId(null);
       console.warn('Failed to download or view document:', err);
-      Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
+      Alert.alert('Error', 'Failed to open document. Please check your internet connection or try again later.');
     }
   };
 

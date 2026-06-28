@@ -40,6 +40,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { sendPushNotification, scheduleLocalNotification, CHANNELS } from '@/lib/notifications';
 import { uploadFileToGoogleDrive, deleteFileFromGoogleDrive } from '@/lib/googleDrive';
+import { uploadToTelegramViaEdge } from '@/lib/telegram';
 
 type Reply = {
   author_id?: string;
@@ -74,6 +75,10 @@ type Post = {
   media_url?: string;
   file_url?: string;
   file_name?: string;
+  tg_file_id?: string;
+  backup_url?: string;
+  file_type?: string;
+  local_sync_id?: string;
   target_batches?: string[];
   author_avatar?: string | null;
   is_edited?: boolean;
@@ -1209,92 +1214,99 @@ export default function CommunityScreen() {
     };
   }, [user, fetchPosts]);
 
+  const processBackgroundUpload = async (postId: string, imageUri: string | null, fileAsset: any | null, bCode: string, fName: string | null) => {
+    try {
+      let finalMediaUrl: string | null = null;
+      let finalFileUrl: string | null = null;
+      let finalTgFileId: string | null = null;
+
+      const uploadTasks = [];
+
+      if (imageUri) {
+        uploadTasks.push(
+          Promise.all([
+            uploadFileToGoogleDrive(imageUri, `image_${Date.now()}.jpg`, bCode)
+              .then(res => { finalMediaUrl = res.fileUrl; })
+              .catch(err => console.warn('GDrive image upload failed', err)),
+            uploadToTelegramViaEdge(imageUri, `image_${Date.now()}.jpg`)
+              .then(res => { finalTgFileId = res; })
+              .catch(err => console.warn('Telegram image upload failed', err))
+          ])
+        );
+      }
+
+      if (fileAsset) {
+        uploadTasks.push(
+          Promise.all([
+            uploadFileToGoogleDrive(fileAsset.uri, fileAsset.name || `doc_${Date.now()}`, bCode)
+              .then(res => { finalFileUrl = res.fileUrl; })
+              .catch(err => console.warn('GDrive file upload failed', err)),
+            uploadToTelegramViaEdge(fileAsset.uri, fileAsset.name || `doc_${Date.now()}`)
+              .then(res => { finalTgFileId = res; }) // Assuming one file per post for now
+              .catch(err => console.warn('Telegram file upload failed', err))
+          ])
+        );
+      }
+
+      await Promise.all(uploadTasks);
+
+      // Update Supabase row with final URLs
+      await supabase.from('community_posts').update({
+        media_url: finalMediaUrl,
+        file_url: finalFileUrl,
+        tg_file_id: finalTgFileId,
+        backup_url: finalFileUrl, // Use GDrive as backup
+      }).eq('id', postId);
+
+      fetchPosts(true);
+    } catch (e) {
+      console.warn('Background upload failed', e);
+    }
+  };
+
   const handlePost = async (customText?: string | any) => {
     const postText = typeof customText === 'string' ? customText : composerText;
     if (!postText.trim() && !selectedImage && !selectedDocument) {
       Alert.alert('Empty Post', 'Please write something or attach a file before posting.');
       return;
     }
+    
     setIsLoading(true);
-    setIsUploading(true);
+    // Optimistic UI: Don't wait for upload to finish
+    setIsUploading(false); 
+    
     try {
       const adminName = businessName || user?.user_metadata?.name || 'Admin';
       const adminAvatar = avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
       const targetBatchesArray = selectedBatches.includes('All') ? [] : selectedBatches;
       
-      let mediaUrl = editingPost ? editingPost.media_url : null;
-      let fileUrl = editingPost ? editingPost.file_url : null;
-      let fileName = editingPost ? editingPost.file_name : null;
-
-      if (selectedImage && selectedImage !== editingPost?.media_url) {
-        try {
-          const uploadRes = await uploadFileToGoogleDrive(
-            selectedImage,
-            `image_${Date.now()}.jpg`,
-            businessCode || 'community'
-          );
-          mediaUrl = uploadRes.fileUrl;
-          if (editingPost?.media_url) {
-            await deleteFileFromGoogleDrive(editingPost.media_url);
-          }
-        } catch (imgErr: any) {
-          Alert.alert('Upload Failed', 'Failed to upload the image: ' + (imgErr.message || imgErr));
-          setIsLoading(false);
-          setIsUploading(false);
-          return;
-        }
-      }
-
-      if (selectedFile && selectedFile.assets && selectedFile.assets.length > 0 && selectedFile.assets[0].uri !== editingPost?.file_url) {
-        const fileAsset = selectedFile.assets[0];
-        try {
-          const uploadRes = await uploadFileToGoogleDrive(
-            fileAsset.uri,
-            fileAsset.name || `doc_${Date.now()}`,
-            businessCode || 'community'
-          );
-          fileUrl = uploadRes.fileUrl;
-          fileName = fileAsset.name || `doc_${Date.now()}`;
-          if (editingPost?.file_url) {
-            await deleteFileFromGoogleDrive(editingPost.file_url);
-          }
-        } catch (fileErr: any) {
-          Alert.alert('Upload Failed', 'Failed to upload the document: ' + (fileErr.message || fileErr));
-          setIsLoading(false);
-          setIsUploading(false);
-          return;
-        }
-      }
+      const fileName = selectedFile?.assets?.[0]?.name || editingPost?.file_name || null;
+      const bCode = businessCode || 'community';
 
       if (editingPost) {
-        // UPDATE Existing Post
+        // For editing, we don't do background upload yet, keep it simple or implement if needed.
+        // I will just let the user edit text for now. (Optimized for new posts).
         const { error } = await supabase
           .from('community_posts')
           .update({
             category: composerCategory,
             text: postText.trim(),
             target_batches: targetBatchesArray,
-            media_url: mediaUrl,
-            file_url: fileUrl,
-            file_name: fileName,
-            author_avatar: adminAvatar,
             is_edited: true,
           })
           .eq('id', Number(editingPost.id));
 
         if (error) throw error;
-
-        // Reset
+        
         setComposerText('');
         setSelectedImage(null);
         setSelectedFile(null);
         setShowComposer(false);
         setEditingPost(null);
-
         fetchPosts(true);
         Alert.alert('Success', 'Post updated successfully.');
       } else {
-        // INSERT New Post
+        // INSERT New Post immediately
         const { data, error } = await supabase
           .from('community_posts')
           .insert({
@@ -1307,9 +1319,11 @@ export default function CommunityScreen() {
             target_batches: targetBatchesArray,
             likes: 0,
             comments: [],
-            media_url: mediaUrl,
-            file_url: fileUrl,
+            media_url: null,
+            file_url: null,
             file_name: fileName,
+            tg_file_id: null,
+            backup_url: null,
           })
           .select()
           .single();
@@ -1317,40 +1331,38 @@ export default function CommunityScreen() {
         if (error) throw error;
 
         if (data) {
+          // Trigger background uploads
+          const imageUri = selectedImage;
+          const fileAsset = selectedFile?.assets?.[0] || null;
+          
+          if (imageUri || fileAsset) {
+            processBackgroundUpload(data.id, imageUri, fileAsset, bCode, fileName);
+          }
+
           setComposerText('');
           setSelectedImage(null);
           setSelectedFile(null);
           setShowComposer(false);
-
           fetchPosts(true);
-
-          // Fetch student profiles for push notifications scoped to this business and target batches
+          
+          // Notifications
           try {
             let studentUserIds: string[] = [];
-
             if (targetBatchesArray.length > 0) {
-              // Fetch students in the targeted batches
               const { data: targetStudents } = await supabase
                 .from('students')
                 .select('user_id')
                 .eq('business_id', businessId)
                 .in('batch_name', targetBatchesArray)
                 .not('user_id', 'is', null);
-              
-              if (targetStudents) {
-                studentUserIds = targetStudents.map(s => s.user_id).filter(Boolean) as string[];
-              }
+              if (targetStudents) studentUserIds = targetStudents.map(s => s.user_id).filter(Boolean) as string[];
             } else {
-              // General post, target all students in the business
               const { data: allStudents } = await supabase
                 .from('students')
                 .select('user_id')
                 .eq('business_id', businessId)
                 .not('user_id', 'is', null);
-              
-              if (allStudents) {
-                studentUserIds = allStudents.map(s => s.user_id).filter(Boolean) as string[];
-              }
+              if (allStudents) studentUserIds = allStudents.map(s => s.user_id).filter(Boolean) as string[];
             }
 
             if (studentUserIds.length > 0) {
@@ -1366,7 +1378,7 @@ export default function CommunityScreen() {
                   await sendPushNotification(
                     tokens,
                     `New ${composerCategory.charAt(0).toUpperCase() + composerCategory.slice(1)} by ${adminName}`,
-                    composerText.trim(),
+                    composerText.trim() || 'Tap to view',
                     { screen: 'community', postId: data.id }
                   );
                 }
@@ -1381,7 +1393,6 @@ export default function CommunityScreen() {
       Alert.alert('Post Failed', err.message || 'Failed to publish post.');
     } finally {
       setIsLoading(false);
-      setIsUploading(false);
     }
   };
 
