@@ -1830,7 +1830,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.card.border,
     padding: 16,
-    marginBottom: 14,
+    marginBottom: 10,
     ...Shadows.sm,
   },
   postHeader: {
@@ -2179,7 +2179,7 @@ const styles = StyleSheet.create({
   },
   dateDividerContainer: {
     alignItems: 'center',
-    marginVertical: 16,
+    marginVertical: 8,
   },
   dateDividerBubble: {
     backgroundColor: 'rgba(220, 248, 198, 0.85)',
