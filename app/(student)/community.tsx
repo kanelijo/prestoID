@@ -23,6 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import * as Haptics from 'expo-haptics';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -207,7 +208,23 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
   const authorAvatarUri = item.author_id ? (avatarMap[item.author_id] || item.author_avatar) : item.author_avatar;
 
   return (
-    <View style={styles.postCard}>
+    <TouchableOpacity
+      style={styles.postCard}
+      activeOpacity={0.95}
+      onPress={async () => {
+        try {
+          await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        } catch (_) {}
+        Alert.alert(
+          'Post Options',
+          'Choose an action:',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Share Post', onPress: handleShare },
+          ]
+        );
+      }}
+    >
       {/* Post Content */}
       {(() => {
         const pollData = parsePollData(item.text);
@@ -276,107 +293,32 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
 
       {item.file_url && (() => {
         const isPDF = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
-        if (isPDF) {
-          const thumbnailUrl = item.file_url.startsWith('http')
-            ? `https://image.thum.io/get/pdfSource/${item.file_url}`
-            : null;
-
-          return (
-            <TouchableOpacity
-              style={styles.pdfAttachmentCardContainer}
-              onPress={() => {
-                if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
-              }}
-              activeOpacity={0.8}
-            >
-              <View style={styles.pdfPreviewImageContainer}>
-                {thumbnailUrl ? (
-                  <View style={styles.pdfPreviewWrapper}>
-                    {/* Fallback mockup rendered behind the image in case of loading/offline */}
-                    <View style={[StyleSheet.absoluteFill, styles.pdfPlaceholderLayout]}>
-                      <View style={styles.pdfPlaceholderPage}>
-                        <View style={styles.pdfPlaceholderHeader}>
-                          <Ionicons name="document-text" size={14} color="#E53935" />
-                          <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
-                            {item.file_name || 'PDF Document'}
-                          </Text>
-                        </View>
-                        <View style={styles.pdfPlaceholderBody}>
-                          <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
-                          <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
-                          <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
-                          <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
-                        </View>
-                      </View>
-                    </View>
-                    <CachedImage
-                      uri={thumbnailUrl}
-                      style={styles.pdfPreviewImage}
-                      contentFit="cover"
-                    />
-                  </View>
-                ) : (
-                  <View style={styles.pdfPlaceholderLayout}>
-                    <View style={styles.pdfPlaceholderPage}>
-                      <View style={styles.pdfPlaceholderHeader}>
-                        <Ionicons name="document-text" size={14} color="#E53935" />
-                        <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
-                          {item.file_name || 'PDF Document'}
-                        </Text>
-                      </View>
-                      <View style={styles.pdfPlaceholderBody}>
-                        <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
-                        <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
-                        <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
-                        <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
-                      </View>
-                    </View>
-                  </View>
-                )}
-              </View>
-
-              {/* Details banner */}
-              <View style={styles.pdfDetailsBanner}>
-                <View style={styles.pdfIconBadge}>
-                  <Ionicons name="document" size={12} color="#FFFFFF" />
-                  <Text style={styles.pdfIconBadgeText}>PDF</Text>
-                </View>
-                <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
-                  <Text style={styles.pdfDetailsFileName} numberOfLines={1}>
-                    {item.file_name || 'PDF Document'}
-                  </Text>
-                  <Text style={styles.pdfDetailsMeta}>
-                    Document • Tap to view
-                  </Text>
-                </View>
-                {downloadingFileId === item.id ? (
-                  <ActivityIndicator size="small" color={Colors.accent.primary} />
-                ) : (
-                  <Ionicons name="arrow-down-circle-outline" size={20} color="#78909C" />
-                )}
-              </View>
-            </TouchableOpacity>
-          );
-        }
         return (
           <TouchableOpacity
-            style={styles.fileAttachmentCard}
+            style={styles.telegramDocBubble}
             onPress={() => {
               if (item.file_url && onViewDocument) onViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
             }}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
           >
-            <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.fileNameText} numberOfLines={1}>
-                {item.file_name || 'Document Attachment'}
+            <View style={[styles.docIconCircle, { backgroundColor: isPDF ? '#EF5350' : '#42A5F5' }]}>
+              <Ionicons name="document-text" size={20} color="#FFFFFF" />
+            </View>
+            <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
+              <Text style={styles.docBubbleName} numberOfLines={1}>
+                {item.file_name || (isPDF ? 'Document.pdf' : 'Attachment')}
+              </Text>
+              <Text style={styles.docBubbleMeta}>
+                {isPDF ? 'PDF Document' : 'File Attachment'} • Tap to view
               </Text>
             </View>
-            {downloadingFileId === item.id ? (
-              <ActivityIndicator size="small" color={Colors.accent.primary} />
-            ) : (
-              <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
-            )}
+            <View style={styles.docActionContainer}>
+              {downloadingFileId === item.id ? (
+                <ActivityIndicator size="small" color={Colors.accent.primary} />
+              ) : (
+                <Ionicons name="arrow-down-circle" size={24} color={Colors.accent.primary} />
+              )}
+            </View>
           </TouchableOpacity>
         );
       })()}
@@ -585,7 +527,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
           </TouchableOpacity>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 function RotatingPlaceholderInput({ value, onChangeText, style, placeholderTextColor, multiline }: any) {
@@ -1812,7 +1754,39 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
 
-  // Engagement Row
+  telegramDocBubble: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bg.primary,
+    borderRadius: 12,
+    padding: 10,
+    marginTop: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  docIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  docBubbleName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.text.primary,
+  },
+  docBubbleMeta: {
+    fontSize: 11,
+    color: Colors.text.tertiary,
+    marginTop: 2,
+  },
+  docActionContainer: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingLeft: 4,
+  },
   engagementRow: {
     flexDirection: 'row',
     alignItems: 'center',
