@@ -99,7 +99,7 @@ export default function AdminLayout() {
 
   return (
     <>
-      <TrialBanner />
+      {/* <TrialBanner /> */}
       <OfflineBanner />
       <Tabs
         backBehavior="history"
@@ -130,6 +130,7 @@ export default function AdminLayout() {
       <Tabs.Screen
         name="community"
         options={{
+          tabBarStyle: { display: 'none' },
           tabBarIcon: ({ focused }) => (
             <TabIcon
               name={focused ? 'megaphone' : 'megaphone-outline'}
@@ -179,6 +180,8 @@ export default function AdminLayout() {
       <Tabs.Screen name="test/create" options={{ href: null }} />
       <Tabs.Screen name="test/banks" options={{ href: null }} />
       <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
+      <Tabs.Screen name="test/analytics/[id]" options={{ href: null }} />
+      <Tabs.Screen name="notebank" options={{ href: null }} />
       </Tabs>
     </>
   );

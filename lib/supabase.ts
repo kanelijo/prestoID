@@ -35,5 +35,10 @@ export const signOutAll = async () => {
     console.log('GoogleSignin.signOut ignored/failed:', e);
   }
   await supabase.auth.signOut();
+  try {
+    await AsyncStorage.removeItem('@user_profile');
+  } catch (err) {
+    console.warn('Failed to clear cached profile:', err);
+  }
   useAuthStore.getState().reset();
 };

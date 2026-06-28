@@ -8,6 +8,10 @@
     "newArchEnabled": true,
     "scheme": "prestoid",
     "icon": "./assets/images/icon.png",
+    "notification": {
+      "icon": "./assets/images/icon.png",
+      "color": "#AF2800"
+    },
     "splash": {
       "backgroundColor": "#FFF8F6"
     },
@@ -15,7 +19,8 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.kanelijo.prestoid",
       "infoPlist": {
-        "NSCameraUsageDescription": "PrestoID needs camera access to scan student QR codes for attendance."
+        "NSCameraUsageDescription": "PrestoID needs camera access to scan student QR codes for attendance.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -47,7 +52,9 @@
       "expo-splash-screen",
       "expo-status-bar",
       "expo-sharing",
-      "@react-native-google-signin/google-signin"
+      "@react-native-google-signin/google-signin",
+      "expo-image",
+      "expo-sqlite"
     ],
     "extra": {
       "router": {},

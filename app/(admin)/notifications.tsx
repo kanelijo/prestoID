@@ -65,11 +65,11 @@ export default function AdminNotificationsScreen() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeTab, setActiveTab] = useState<FilterTab>('All');
   const [refreshing, setRefreshing] = useState(false);
-  const { user, verified, businessId } = useAuthStore();
+  const { user, verified, businessId, avatarUrl } = useAuthStore();
   const [deletionRequests, setDeletionRequests] = useState<any[]>([]);
   const [claimRequests, setClaimRequests] = useState<any[]>([]);
   const [adminName, setAdminName] = useState('Admin');
-  const logoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const logoUrl = avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
   const [hasNotificationPermission, setHasNotificationPermission] = useState(true);
 
   const checkPermissions = async () => {

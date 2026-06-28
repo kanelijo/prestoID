@@ -29,6 +29,7 @@ import { useNotificationStore } from '@/stores/useNotificationStore';
 import { supabase, signOutAll } from '@/lib/supabase';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { registerForPushNotificationsAsync } from '@/lib/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get('window');
 
@@ -123,14 +124,36 @@ export default function StudentStudentIDCardScreen() {
       }
 
       setStudentData(data);
+      if (data) {
+        AsyncStorage.setItem('@presto_cached_student_data', JSON.stringify(data)).catch(_ => {});
+      }
     } catch (err: any) {
       console.warn('Failed to fetch student:', err);
     }
   };
 
   useEffect(() => {
+    // Try to load cached student data immediately
+    AsyncStorage.getItem('@presto_cached_student_data').then(cached => {
+      if (cached) {
+        setStudentData(JSON.parse(cached));
+        setIsLoading(false);
+      }
+    }).catch(_ => {});
+
+    // Pre-request picker permissions in background for 0ms latency launch
+    ImagePicker.getMediaLibraryPermissionsAsync().then(status => {
+      if (!status.granted) ImagePicker.requestMediaLibraryPermissionsAsync().catch(_ => {});
+    }).catch(_ => {});
+    ImagePicker.getCameraPermissionsAsync().then(status => {
+      if (!status.granted) ImagePicker.requestCameraPermissionsAsync().catch(_ => {});
+    }).catch(_ => {});
+
     const initFetch = async () => {
-      setIsLoading(true);
+      const cached = await AsyncStorage.getItem('@presto_cached_student_data');
+      if (!cached) {
+        setIsLoading(true);
+      }
       await fetchStudent();
       if (user) {
         registerForPushNotificationsAsync(user.id);
@@ -353,36 +376,60 @@ export default function StudentStudentIDCardScreen() {
       {
         text: 'Camera',
         onPress: async () => {
-          const { status } = await ImagePicker.requestCameraPermissionsAsync();
-          if (status !== 'granted') {
-            Alert.alert('Permission Denied', 'Camera permissions are required.');
-            return;
-          }
-          const result = await ImagePicker.launchCameraAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.6,
-          });
-          if (!result.canceled && result.assets[0]) {
-            uploadPhoto(result.assets[0].uri);
+          try {
+            const result = await ImagePicker.launchCameraAsync({
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.6,
+            });
+            if (!result.canceled && result.assets[0]) {
+              uploadPhoto(result.assets[0].uri);
+            }
+          } catch (err) {
+            console.warn('Direct launch camera failed, requesting permission:', err);
+            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+            if (status === 'granted') {
+              const result = await ImagePicker.launchCameraAsync({
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.6,
+              });
+              if (!result.canceled && result.assets[0]) {
+                uploadPhoto(result.assets[0].uri);
+              }
+            } else {
+              Alert.alert('Permission Denied', 'Camera permissions are required.');
+            }
           }
         }
       },
       {
         text: 'Gallery',
         onPress: async () => {
-          const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-          if (status !== 'granted') {
-            Alert.alert('Permission Denied', 'Gallery permissions are required.');
-            return;
-          }
-          const result = await ImagePicker.launchImageLibraryAsync({
-            allowsEditing: true,
-            aspect: [1, 1],
-            quality: 0.6,
-          });
-          if (!result.canceled && result.assets[0]) {
-            uploadPhoto(result.assets[0].uri);
+          try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              allowsEditing: true,
+              aspect: [1, 1],
+              quality: 0.6,
+            });
+            if (!result.canceled && result.assets[0]) {
+              uploadPhoto(result.assets[0].uri);
+            }
+          } catch (err) {
+            console.warn('Direct launch library failed, requesting permission:', err);
+            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+            if (status === 'granted') {
+              const result = await ImagePicker.launchImageLibraryAsync({
+                allowsEditing: true,
+                aspect: [1, 1],
+                quality: 0.6,
+              });
+              if (!result.canceled && result.assets[0]) {
+                uploadPhoto(result.assets[0].uri);
+              }
+            } else {
+              Alert.alert('Permission Denied', 'Gallery permissions are required.');
+            }
           }
         }
       },
@@ -827,7 +874,7 @@ export default function StudentStudentIDCardScreen() {
                 <TouchableOpacity
                   style={styles.liveActionButton}
                   activeOpacity={0.85}
-                  onPress={() => Alert.alert('Class Notes', 'Loading class notes...')}
+                  onPress={() => router.push('/(student)/notes')}
                 >
                   <Text style={styles.liveActionText}>Get Notes</Text>
                   <Ionicons name="arrow-forward" size={12} color={Colors.accent.primary} />

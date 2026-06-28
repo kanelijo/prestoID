@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,8 +10,14 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Image,
   Linking,
+  Share,
+  Modal,
+  ScrollView,
+  Image,
+  PanResponder,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,12 +29,16 @@ try {
   console.warn('DocumentPicker native module not found:', e);
 }
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { decode } from 'base64-arraybuffer';
+import CachedImage from '@/components/CachedImage';
+import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { useFocusEffect } from 'expo-router';
-import { sendPushNotification, scheduleLocalNotification } from '@/lib/notifications';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { sendPushNotification, scheduleLocalNotification, CHANNELS } from '@/lib/notifications';
+import { uploadFileToGoogleDrive, deleteFileFromGoogleDrive } from '@/lib/googleDrive';
 
 type Reply = {
   author_id?: string;
@@ -85,6 +95,76 @@ const getCategoryStyle = (category: Post['category']) => {
   }
 };
 
+const parsePollData = (text: string) => {
+  if (!text) return null;
+  const startIdx = text.indexOf('{"isPoll":true');
+  if (startIdx !== -1) {
+    const endIdx = text.lastIndexOf('}');
+    if (endIdx !== -1 && endIdx > startIdx) {
+      const jsonStr = text.substring(startIdx, endIdx + 1);
+      try {
+        return JSON.parse(jsonStr);
+      } catch (e) {
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const getFormattedDividerDate = (dateString: string) => {
+  if (!dateString) return 'Today';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    return 'Today';
+  }
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) {
+    return 'Today';
+  } else if (date.toDateString() === yesterday.toDateString()) {
+    return 'Yesterday';
+  } else {
+    const day = date.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[date.getMonth()];
+    const year = date.getFullYear();
+    return `${day} ${month} ${year}`;
+  }
+};
+
+const formatBubbleTime = (dateString: string) => {
+  try {
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return dateString;
+    return d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch (e) {
+    return dateString;
+  }
+};
+
+const handleDownload = async (url: string, fileName?: string) => {
+  if (!url) return;
+  try {
+    const downloadUrl = url.includes('?')
+      ? `${url}&download=${encodeURIComponent(fileName || '')}`
+      : `${url}?download=${encodeURIComponent(fileName || '')}`;
+    await Linking.openURL(downloadUrl);
+  } catch (err: any) {
+    try {
+      await Linking.openURL(url);
+    } catch (e) {
+      Alert.alert('Error', 'Could not open or download the file.');
+    }
+  }
+};
+
 interface PostCardProps {
   item: Post;
   avatarMap: Record<string, string>;
@@ -93,15 +173,18 @@ interface PostCardProps {
   onAddReply: (postId: string, commentId: string, text: string) => void;
   onEdit: (post: Post) => void;
   onDelete: (postId: string) => void;
+  onVote: (postId: string, optionIndex: number) => void;
 }
 
-function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap }: PostCardProps) {
+function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, avatarMap, onVote }: PostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showAllComments, setShowAllComments] = useState(false);
   const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
   const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [showFullImage, setShowFullImage] = useState(false);
+  const { user } = useAuthStore();
 
   const handleSendComment = () => {
     if (!commentText.trim()) return;
@@ -116,6 +199,17 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
     setReplyingCommentId(null);
   };
 
+  const handleShare = async () => {
+    try {
+      const shareUrl = item.media_url || item.file_url;
+      await Share.share({
+        message: `${item.author} posted in PrestoID:\n\n"${item.text}"${shareUrl ? `\n\nAttachment: ${shareUrl}` : ''}\n\nShared via PrestoID App`,
+      });
+    } catch (err) {
+      console.warn('Share error:', err);
+    }
+  };
+
   const cat = getCategoryStyle(item.category);
   const commentsToRender = showAllComments ? item.comments : item.comments.slice(0, 2);
 
@@ -126,7 +220,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
       {/* Post Header */}
       <View style={styles.postHeader}>
         {authorAvatarUri ? (
-          <Image source={{ uri: authorAvatarUri }} style={styles.postAuthorAvatarImage} />
+          <CachedImage uri={authorAvatarUri} style={styles.postAuthorAvatarImage} fallbackInitial={item.author} />
         ) : (
           <View style={styles.postAuthorAvatar}>
             <Text style={styles.postAuthorInitial}>
@@ -137,7 +231,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
         <View style={{ flex: 1 }}>
           <Text style={styles.postAuthorName}>{item.author}</Text>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+            <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
             {item.is_edited && (
               <Text style={styles.editedLabel}>• Edited</Text>
             )}
@@ -167,30 +261,186 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
         </View>
       </View>
 
-      {/* Post Content */}
-      <Text style={styles.postText}>{item.text}</Text>
+      {/* Post Content & Poll support */}
+      {(() => {
+        const pollData = parsePollData(item.text);
+        if (pollData) {
+          const votes = pollData.votes || {};
+          const totalVotes = Object.keys(votes).length;
+          const userVote = user ? votes[user.id]?.option : undefined;
+
+          return (
+            <View style={styles.pollContainer}>
+              <Text style={styles.pollQuestionText}>{pollData.question}</Text>
+              
+              {pollData.options.map((opt: string, optIdx: number) => {
+                const optVotes = Object.values(votes).filter((v: any) => v.option === optIdx);
+                const voteCount = optVotes.length;
+                const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                const isSelected = userVote === optIdx;
+
+                const voterNames = optVotes.map((v: any) => v.name).join(', ');
+
+                return (
+                  <View key={optIdx} style={styles.pollOptionWrapper}>
+                    <TouchableOpacity
+                      style={[
+                        styles.pollOptionButton,
+                        isSelected && styles.pollOptionButtonSelected,
+                      ]}
+                      onPress={() => onVote(item.id, optIdx)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.pollOptionProgress, { width: `${pct}%` }, isSelected && styles.pollOptionProgressSelected]} />
+                      
+                      <View style={styles.pollOptionTextRow}>
+                        <Text style={[styles.pollOptionText, isSelected && styles.pollOptionTextSelected]}>
+                          {opt}
+                        </Text>
+                        <Text style={styles.pollOptionPctText}>{pct}%</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {voteCount > 0 && (
+                      <Text style={styles.pollVotersText} numberOfLines={1}>
+                        Voted: {voterNames}
+                      </Text>
+                    )}
+                  </View>
+                );
+              })}
+
+              <Text style={styles.pollTotalVotesText}>{totalVotes} votes</Text>
+            </View>
+          );
+        }
+
+        return <Text style={styles.postText}>{item.text}</Text>;
+      })()}
 
       {item.media_url && (
-        <Image source={{ uri: item.media_url }} style={styles.postImage} resizeMode="cover" />
+        <>
+          <TouchableOpacity activeOpacity={0.9} onPress={() => setShowFullImage(true)}>
+            <CachedImage uri={item.media_url} style={styles.postImage} contentFit="cover" priority="high" />
+          </TouchableOpacity>
+
+          <Modal visible={showFullImage} transparent={true} animationType="fade" onRequestClose={() => setShowFullImage(false)}>
+            <View style={styles.fullImageModalOverlay}>
+              <TouchableOpacity style={styles.fullImageCloseButton} onPress={() => setShowFullImage(false)}>
+                <Ionicons name="close" size={28} color="#FFFFFF" />
+              </TouchableOpacity>
+              <CachedImage uri={item.media_url} style={styles.fullImageStyle} contentFit="contain" priority="high" />
+            </View>
+          </Modal>
+        </>
       )}
 
-      {item.file_url && (
-        <TouchableOpacity
-          style={styles.fileAttachmentCard}
-          onPress={() => {
-            if (item.file_url) Linking.openURL(item.file_url);
-          }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fileNameText} numberOfLines={1}>
-              {item.file_name || 'Document Attachment'}
-            </Text>
-          </View>
-          <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
-        </TouchableOpacity>
-      )}
+      {item.file_url && (() => {
+        const isPDF = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
+        if (isPDF) {
+          const thumbnailUrl = item.file_url.startsWith('http')
+            ? `https://image.thum.io/get/pdfSource/${item.file_url}`
+            : null;
+
+          return (
+            <TouchableOpacity
+              style={styles.pdfAttachmentCardContainer}
+              onPress={() => {
+                if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.pdfPreviewImageContainer}>
+                {thumbnailUrl ? (
+                  <View style={styles.pdfPreviewWrapper}>
+                    {/* Fallback mockup rendered behind the image in case of loading/offline */}
+                    <View style={[StyleSheet.absoluteFill, styles.pdfPlaceholderLayout]}>
+                      <View style={styles.pdfPlaceholderPage}>
+                        <View style={styles.pdfPlaceholderHeader}>
+                          <Ionicons name="document-text" size={14} color="#E53935" />
+                          <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                            {item.file_name || 'PDF Document'}
+                          </Text>
+                        </View>
+                        <View style={styles.pdfPlaceholderBody}>
+                          <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                        </View>
+                      </View>
+                    </View>
+                    <CachedImage
+                      uri={thumbnailUrl}
+                      style={styles.pdfPreviewImage}
+                      contentFit="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.pdfPlaceholderLayout}>
+                    <View style={styles.pdfPlaceholderPage}>
+                      <View style={styles.pdfPlaceholderHeader}>
+                        <Ionicons name="document-text" size={14} color="#E53935" />
+                        <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                          {item.file_name || 'PDF Document'}
+                        </Text>
+                      </View>
+                      <View style={styles.pdfPlaceholderBody}>
+                        <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Details banner */}
+              <View style={styles.pdfDetailsBanner}>
+                <View style={styles.pdfIconBadge}>
+                  <Ionicons name="document" size={12} color="#FFFFFF" />
+                  <Text style={styles.pdfIconBadgeText}>PDF</Text>
+                </View>
+                <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
+                  <Text style={styles.pdfDetailsFileName} numberOfLines={1}>
+                    {item.file_name || 'PDF Document'}
+                  </Text>
+                  <Text style={styles.pdfDetailsMeta}>
+                    Document • Tap to view
+                  </Text>
+                </View>
+                {downloadingFileId === item.id ? (
+                  <ActivityIndicator size="small" color={Colors.accent.primary} />
+                ) : (
+                  <Ionicons name="arrow-down-circle-outline" size={20} color="#78909C" />
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        }
+        return (
+          <TouchableOpacity
+            style={styles.fileAttachmentCard}
+            onPress={() => {
+              if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fileNameText} numberOfLines={1}>
+                {item.file_name || 'Document Attachment'}
+              </Text>
+            </View>
+            {downloadingFileId === item.id ? (
+              <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : (
+              <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
+            )}
+          </TouchableOpacity>
+        );
+      })()}
 
       {/* Engagement Row */}
       <View style={styles.engagementRow}>
@@ -230,12 +480,16 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
           <Text style={styles.engagementCount}>{item.viewed_by_count}</Text>
         </View>
 
+        <TouchableOpacity style={styles.engagementButton} onPress={handleShare}>
+          <Ionicons name="share-social-outline" size={18} color={Colors.text.tertiary} />
+        </TouchableOpacity>
+
         {(item.file_url || item.media_url) && (
           <TouchableOpacity
-            style={styles.engagementButton}
+            style={[styles.engagementButton, { marginLeft: 'auto' }]}
             onPress={() => {
               const url = item.file_url || item.media_url;
-              if (url) Linking.openURL(url);
+              if (url) handleDownload(url, item.file_name);
             }}
           >
             <Ionicons
@@ -264,7 +518,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
                   {(() => {
                     const commentAvatarUri = comment.author_id ? (avatarMap[comment.author_id] || comment.author_avatar) : comment.author_avatar;
                     return commentAvatarUri ? (
-                      <Image source={{ uri: commentAvatarUri }} style={styles.commentAvatarImage} />
+                      <CachedImage uri={commentAvatarUri} style={styles.commentAvatarImage} fallbackInitial={comment.author} />
                     ) : (
                       <View style={styles.commentAvatar}>
                         <Text style={styles.commentAvatarText}>
@@ -296,7 +550,7 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
                       return (
                         <View key={rIdx} style={styles.replyItem}>
                           {replyAvatarUri ? (
-                            <Image source={{ uri: replyAvatarUri }} style={styles.replyAvatarImage} />
+                            <CachedImage uri={replyAvatarUri} style={styles.replyAvatarImage} fallbackInitial={reply.author} />
                           ) : (
                             <View style={styles.replyAvatar}>
                               <Text style={styles.replyAvatarText}>
@@ -400,11 +654,32 @@ function PostCard({ item, onLike, onAddComment, onAddReply, onEdit, onDelete, av
     </View>
   );
 }
+function RotatingPlaceholderInput({ value, onChangeText, style, placeholderTextColor, multiline }: any) {
+  const placeholders = ['Message', 'Announcement', 'Notes'];
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPlaceholderIndex((prev) => (prev + 1) % placeholders.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <TextInput
+      style={style}
+      value={value}
+      onChangeText={onChangeText}
+      placeholder={placeholders[placeholderIndex]}
+      placeholderTextColor={placeholderTextColor}
+      multiline={multiline}
+    />
+  );
+}
 export default function CommunityScreen() {
-  const { user, businessId, businessName } = useAuthStore();
+  const { user, businessId, businessCode, businessName, avatarUrl } = useAuthStore();
   const [posts, setPosts] = useState<Post[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [showComposer, setShowComposer] = useState(false);
   const [composerCategory, setComposerCategory] = useState<Post['category']>('announcement');
   const [composerText, setComposerText] = useState('');
@@ -416,6 +691,82 @@ export default function CommunityScreen() {
   const [editingPost, setEditingPost] = useState<Post | null>(null);
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'media' | 'docs' | 'links'>('all');
+  const [showSearch, setShowSearch] = useState(false);
+  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showPollCreator, setShowPollCreator] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
+  const router = useRouter();
+  const [studentCount, setStudentCount] = useState<number>(0);
+  const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+  const [showBatchPicker, setShowBatchPicker] = useState(false);
+  const [showAttachmentSheet, setShowAttachmentSheet] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+
+  const { width: screenWidth } = Dimensions.get('window');
+  const translateX = useRef(new Animated.Value(0)).current;
+  const groupInfoAnim = useRef(new Animated.Value(0)).current;
+  const attachSheetAnim = useRef(new Animated.Value(0)).current;
+  const [isAttachOpen, setIsAttachOpen] = useState(false);
+
+  const postsLengthRef = useRef(0);
+  useEffect(() => {
+    postsLengthRef.current = posts.length;
+  }, [posts]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        return gestureState.dx > 10 && Math.abs(gestureState.dy) < 15;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        if (gestureState.dx > 0) {
+          translateX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (gestureState.dx > screenWidth * 0.35 || gestureState.vx > 0.4) {
+          Animated.timing(translateX, {
+            toValue: screenWidth,
+            duration: 150,
+            useNativeDriver: true,
+          }).start(() => {
+            router.back();
+            setTimeout(() => translateX.setValue(0), 300);
+          });
+        } else {
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 50,
+            friction: 7,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    const fetchStudentCount = async () => {
+      if (!businessId) return;
+      try {
+        const { count, error } = await supabase
+          .from('students')
+          .select('*', { count: 'exact', head: true })
+          .eq('business_id', businessId);
+        if (!error && count !== null) {
+          setStudentCount(count);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch student count:', err);
+      }
+    };
+    fetchStudentCount();
+  }, [businessId]);
   const sendLikePushNotification = async (recipientId: string, likerName: string, postText: string) => {
     try {
       const { data: profile } = await supabase
@@ -427,9 +778,9 @@ export default function CommunityScreen() {
       if (profile?.push_token) {
         await sendPushNotification(
           [profile.push_token],
-          'New Like',
+          '❤️ New Like',
           `${likerName} liked your post: "${postText.substring(0, 40)}${postText.length > 40 ? '...' : ''}"`,
-          { screen: 'community' }
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -448,9 +799,9 @@ export default function CommunityScreen() {
       if (profile?.push_token) {
         await sendPushNotification(
           [profile.push_token],
-          'New Comment',
-          `${commentAuthorName} commented: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" on your post`,
-          { screen: 'community' }
+          '💬 New Comment',
+          `${commentAuthorName}: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`,
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -474,9 +825,9 @@ export default function CommunityScreen() {
       if (tokens.length > 0) {
         await sendPushNotification(
           tokens,
-          'New Reply on Post',
-          `${replyAuthorName} replied: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
-          { screen: 'community' }
+          '💬 New Reply',
+          `${replyAuthorName}: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`,
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -486,31 +837,32 @@ export default function CommunityScreen() {
 
   const handleEditInit = (post: Post) => {
     setEditingPost(post);
-    setComposerCategory(post.category);
-    setComposerText(post.text);
-    setSelectedImage(post.media_url || null);
-    if (post.file_url) {
-      setSelectedFile({
-        assets: [{ uri: post.file_url, name: post.file_name || 'Document' }],
-      });
+    const pollData = parsePollData(post.text);
+    if (pollData) {
+      setPollQuestion(pollData.question);
+      setPollOptions(pollData.options);
+      setShowPollCreator(true);
     } else {
-      setSelectedFile(null);
+      setComposerCategory(post.category);
+      setComposerText(post.text);
+      setSelectedImage(post.media_url || null);
+      if (post.file_url) {
+        setSelectedFile({
+          assets: [{ uri: post.file_url, name: post.file_name || 'Document' }],
+        });
+      } else {
+        setSelectedFile(null);
+      }
+      const targetB = post.target_batches || [];
+      setSelectedBatches(targetB.length === 0 ? ['All'] : targetB);
+      setShowComposer(true);
     }
-    const targetB = post.target_batches || [];
-    setSelectedBatches(targetB.length === 0 ? ['All'] : targetB);
-    setShowComposer(true);
   };
 
   const handlePickImage = async () => {
     try {
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!permissionResult.granted) {
-        Alert.alert('Permission Required', 'Permission to access gallery is required to select photos.');
-        return;
-      }
-
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
       });
@@ -519,20 +871,29 @@ export default function CommunityScreen() {
         setSelectedImage(result.assets[0].uri);
       }
     } catch (err) {
-      console.warn('Pick image error:', err);
+      console.warn('Direct pick image failed, trying with permission request:', err);
+      try {
+        const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (permissionResult.granted) {
+          const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            quality: 0.8,
+          });
+          if (!result.canceled && result.assets && result.assets.length > 0) {
+            setSelectedImage(result.assets[0].uri);
+          }
+        }
+      } catch (innerErr) {
+        console.warn('Fallback pick image failed:', innerErr);
+      }
     }
   };
 
   const handleTakePhoto = async () => {
     try {
-      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permissionResult.granted) {
-        Alert.alert('Permission Required', 'Permission to access camera is required to take photos.');
-        return;
-      }
-
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
       });
@@ -541,7 +902,22 @@ export default function CommunityScreen() {
         setSelectedImage(result.assets[0].uri);
       }
     } catch (err) {
-      console.warn('Take photo error:', err);
+      console.warn('Direct take photo failed, trying with permission request:', err);
+      try {
+        const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+        if (permissionResult.granted) {
+          const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ['images'],
+            allowsEditing: true,
+            quality: 0.8,
+          });
+          if (!result.canceled && result.assets && result.assets.length > 0) {
+            setSelectedImage(result.assets[0].uri);
+          }
+        }
+      } catch (innerErr) {
+        console.warn('Fallback take photo failed:', innerErr);
+      }
     }
   };
 
@@ -561,6 +937,27 @@ export default function CommunityScreen() {
       }
     } catch (err) {
       console.warn('Pick document error:', err);
+    }
+  };
+
+  const handleViewDocument = async (url: string, fileName: string, id: string) => {
+    if (!url) return;
+    const safeName = fileName ? fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_') : 'document.pdf';
+    const localUri = `${FileSystem.documentDirectory}${safeName}`;
+    try {
+      const info = await FileSystem.getInfoAsync(localUri);
+      if (info.exists) {
+        await Sharing.shareAsync(localUri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+        return;
+      }
+      setDownloadingFileId(id);
+      const downloadRes = await FileSystem.downloadAsync(url, localUri);
+      setDownloadingFileId(null);
+      await Sharing.shareAsync(downloadRes.uri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+    } catch (err) {
+      setDownloadingFileId(null);
+      console.warn('Failed to download or view document:', err);
+      Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
     }
   };
 
@@ -662,7 +1059,19 @@ export default function CommunityScreen() {
   }, [businessId]);
 
   const fetchPosts = useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
+    if (!silent) {
+      try {
+        const cached = getPostsFromLocal();
+        if (cached.length > 0) {
+          setPosts(cached);
+          setIsLoading(false);
+        } else {
+          setIsLoading(true);
+        }
+      } catch (err) {
+        setIsLoading(true);
+      }
+    }
     try {
       let query = supabase
         .from('community_posts')
@@ -696,7 +1105,7 @@ export default function CommunityScreen() {
           author: p.author_name || 'Upendra Sir',
           category: p.category,
           text: p.text,
-          timestamp: timeLabel,
+          timestamp: p.created_at,
           likes: p.likes || 0,
           comments: p.comments || [],
           liked: isLiked,
@@ -711,6 +1120,11 @@ export default function CommunityScreen() {
         };
       });
       setPosts(loadedPosts);
+      try {
+        savePostsToLocal(loadedPosts);
+      } catch (dbErr) {
+        console.warn('Failed to save posts to SQLite local cache:', dbErr);
+      }
     } catch (err) {
       console.warn('Failed to fetch community posts:', err);
     } finally {
@@ -731,11 +1145,19 @@ export default function CommunityScreen() {
       }
     };
     refreshUser();
+
+    // Pre-request picker permissions in background for 0ms latency launch
+    ImagePicker.getMediaLibraryPermissionsAsync().then(status => {
+      if (!status.granted) ImagePicker.requestMediaLibraryPermissionsAsync().catch(_ => {});
+    }).catch(_ => {});
+    ImagePicker.getCameraPermissionsAsync().then(status => {
+      if (!status.granted) ImagePicker.requestCameraPermissionsAsync().catch(_ => {});
+    }).catch(_ => {});
   }, []);
 
   useFocusEffect(
     useCallback(() => {
-      fetchPosts();
+      fetchPosts(postsLengthRef.current > 0);
     }, [fetchPosts])
   );
 
@@ -769,6 +1191,7 @@ export default function CommunityScreen() {
                       file_name: updated.file_name,
                       author_avatar: updated.author_avatar,
                       is_edited: updated.is_edited,
+                      text: updated.text ?? p.text,
                     }
                   : p
               )
@@ -785,8 +1208,9 @@ export default function CommunityScreen() {
     };
   }, [user, fetchPosts]);
 
-  const handlePost = async () => {
-    if (!composerText.trim()) {
+  const handlePost = async (customText?: string) => {
+    const postText = customText !== undefined ? customText : composerText;
+    if (!postText.trim()) {
       Alert.alert('Empty Post', 'Please write something before posting.');
       return;
     }
@@ -794,7 +1218,7 @@ export default function CommunityScreen() {
     setIsUploading(true);
     try {
       const adminName = businessName || user?.user_metadata?.name || 'Admin';
-      const adminAvatar = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+      const adminAvatar = avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
       const targetBatchesArray = selectedBatches.includes('All') ? [] : selectedBatches;
       
       let mediaUrl = editingPost ? editingPost.media_url : null;
@@ -803,7 +1227,15 @@ export default function CommunityScreen() {
 
       if (selectedImage && selectedImage !== editingPost?.media_url) {
         try {
-          mediaUrl = await uploadFileToSupabase(selectedImage, 'community', 'image.jpg');
+          const uploadRes = await uploadFileToGoogleDrive(
+            selectedImage,
+            `image_${Date.now()}.jpg`,
+            businessCode || 'community'
+          );
+          mediaUrl = uploadRes.fileUrl;
+          if (editingPost?.media_url) {
+            await deleteFileFromGoogleDrive(editingPost.media_url);
+          }
         } catch (imgErr: any) {
           Alert.alert('Upload Failed', 'Failed to upload the image: ' + (imgErr.message || imgErr));
           setIsLoading(false);
@@ -815,8 +1247,16 @@ export default function CommunityScreen() {
       if (selectedFile && selectedFile.assets && selectedFile.assets.length > 0 && selectedFile.assets[0].uri !== editingPost?.file_url) {
         const fileAsset = selectedFile.assets[0];
         try {
-          fileUrl = await uploadFileToSupabase(fileAsset.uri, 'community', fileAsset.name || 'document');
-          fileName = fileAsset.name;
+          const uploadRes = await uploadFileToGoogleDrive(
+            fileAsset.uri,
+            fileAsset.name || `doc_${Date.now()}`,
+            businessCode || 'community'
+          );
+          fileUrl = uploadRes.fileUrl;
+          fileName = fileAsset.name || `doc_${Date.now()}`;
+          if (editingPost?.file_url) {
+            await deleteFileFromGoogleDrive(editingPost.file_url);
+          }
         } catch (fileErr: any) {
           Alert.alert('Upload Failed', 'Failed to upload the document: ' + (fileErr.message || fileErr));
           setIsLoading(false);
@@ -831,7 +1271,7 @@ export default function CommunityScreen() {
           .from('community_posts')
           .update({
             category: composerCategory,
-            text: composerText.trim(),
+            text: postText.trim(),
             target_batches: targetBatchesArray,
             media_url: mediaUrl,
             file_url: fileUrl,
@@ -862,7 +1302,7 @@ export default function CommunityScreen() {
             author_name: adminName,
             author_avatar: adminAvatar,
             category: composerCategory,
-            text: composerText.trim(),
+            text: postText.trim(),
             target_batches: targetBatchesArray,
             likes: 0,
             comments: [],
@@ -994,6 +1434,55 @@ export default function CommunityScreen() {
     }
   };
 
+  const handleVote = async (postId: string, optionIndex: number) => {
+    if (!user) return;
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const pollData = parsePollData(post.text);
+    if (!pollData) return;
+
+    const votes = { ...(pollData.votes || {}) };
+    const currentVote = votes[user.id];
+
+    if (currentVote && currentVote.option === optionIndex) {
+      delete votes[user.id];
+    } else {
+      const studentName = user?.user_metadata?.name || 'Admin';
+      votes[user.id] = {
+        option: optionIndex,
+        name: studentName,
+      };
+    }
+
+    const nextPollData = { ...pollData, votes };
+    const nextText = JSON.stringify(nextPollData);
+
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, text: nextText } : p
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('community_posts')
+        .update({
+          text: nextText,
+        })
+        .eq('id', Number(postId));
+
+      if (error) throw error;
+    } catch (err) {
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, text: post.text } : p
+        )
+      );
+      console.warn('Failed to update vote:', err);
+    }
+  };
+
   const handleAddComment = async (postId: string, text: string) => {
     const post = posts.find((p) => p.id === postId);
     if (!post) return;
@@ -1003,7 +1492,7 @@ export default function CommunityScreen() {
       id: Math.random().toString(36).substring(2, 9),
       author_id: user?.id,
       author: adminName,
-      author_avatar: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      author_avatar: avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
       text,
       timestamp: new Date().toLocaleDateString('en-US', {
         day: '2-digit',
@@ -1052,7 +1541,7 @@ export default function CommunityScreen() {
     const newReply: Reply = {
       author_id: user?.id,
       author: adminName,
-      author_avatar: user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
+      author_avatar: avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || undefined,
       text,
       timestamp: new Date().toLocaleDateString('en-US', {
         day: '2-digit',
@@ -1138,6 +1627,17 @@ export default function CommunityScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              // Locate post to delete attached files from Google Drive
+              const postToDelete = posts.find((p) => String(p.id) === String(postId));
+              if (postToDelete) {
+                if (postToDelete.media_url) {
+                  await deleteFileFromGoogleDrive(postToDelete.media_url);
+                }
+                if (postToDelete.file_url) {
+                  await deleteFileFromGoogleDrive(postToDelete.file_url);
+                }
+              }
+
               const { error } = await supabase
                 .from('community_posts')
                 .delete()
@@ -1158,14 +1658,60 @@ export default function CommunityScreen() {
 
   const renderHeader = () => (
     <>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Community</Text>
-        <TouchableOpacity onPress={() => setShowComposer(!showComposer)}>
-          <Text style={styles.newPostButton}>
-            {showComposer ? 'Cancel' : 'New Post'}
-          </Text>
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+          <TouchableOpacity onPress={() => setShowComposer(!showComposer)}>
+            <Text style={styles.newPostButton}>
+              {showComposer ? 'Cancel' : 'New Post'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={styles.premiumSearchButton}>
+            <Ionicons
+              name={showSearch ? "close" : "search"}
+              size={20}
+              color={Colors.accent.primary}
+            />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Telegram-like Search Bar */}
+      {showSearch && (
+        <View style={styles.searchBarHeader}>
+          <Ionicons name="search" size={18} color={Colors.text.tertiary} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchBarInput}
+            placeholder="Search messages, files, or links..."
+            placeholderTextColor={Colors.text.tertiary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCorrect={false}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={16} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Category Tabs */}
+      <View style={styles.filterChipsRow}>
+        {(['all', 'media', 'docs', 'links'] as const).map((filter) => {
+          const isActive = activeFilter === filter;
+          return (
+            <TouchableOpacity
+              key={filter}
+              style={[styles.filterChip, isActive && styles.filterChipActive]}
+              onPress={() => setActiveFilter(filter)}
+            >
+              <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
+                {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Post Composer */}
@@ -1274,6 +1820,13 @@ export default function CommunityScreen() {
                 color={Colors.text.tertiary}
               />
             </TouchableOpacity>
+            <TouchableOpacity style={styles.attachIcon} onPress={() => setShowPollCreator(true)}>
+              <Ionicons
+                name="bar-chart-outline"
+                size={22}
+                color={Colors.text.tertiary}
+              />
+            </TouchableOpacity>
           </View>
 
           {/* Selected Attachment Previews */}
@@ -1308,7 +1861,7 @@ export default function CommunityScreen() {
           <TouchableOpacity
             style={[styles.composerPostButton, (isUploading || isLoading) && { opacity: 0.6 }]}
             activeOpacity={0.8}
-            onPress={handlePost}
+            onPress={() => handlePost()}
             disabled={isUploading || isLoading}
           >
             {isUploading ? (
@@ -1327,29 +1880,181 @@ export default function CommunityScreen() {
     </>
   );
 
+  const filteredPosts = posts.filter((post) => {
+    // 1. Category Filter
+    if (activeFilter === 'media') {
+      if (!post.media_url) return false;
+    } else if (activeFilter === 'docs') {
+      if (!post.file_url) return false;
+    } else if (activeFilter === 'links') {
+      const hasLink = post.text && /(https?:\/\/[^\s]+)/g.test(post.text);
+      if (!hasLink) return false;
+    }
+
+    // 2. Search Query Filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      const textMatch = post.text ? post.text.toLowerCase().includes(query) : false;
+      const fileMatch = post.file_name ? post.file_name.toLowerCase().includes(query) : false;
+      const authorMatch = post.author ? post.author.toLowerCase().includes(query) : false;
+      if (!textMatch && !fileMatch && !authorMatch) return false;
+    }
+
+    return true;
+  });
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top']} {...panResponder.panHandlers}>
+      {/* Visual background placeholder of the Students home screen */}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingTop: 10 }]}>
+        {/* Mock Header Bar */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', height: 50, marginBottom: 16 }}>
+          <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#EBEBEB' }} />
+          <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text.primary }}>PrestoID</Text>
+          <View style={{ width: 38 }} />
+        </View>
+
+        {/* Mock View Toggle */}
+        <View style={{ flexDirection: 'row', backgroundColor: '#F5F5F5', borderRadius: 8, padding: 4, marginBottom: 16 }}>
+          <View style={{ flex: 1, height: 36, backgroundColor: '#FFFFFF', borderRadius: 6, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 }}>
+            <View style={{ width: 60, height: 10, backgroundColor: '#EBEBEB', borderRadius: 2 }} />
+          </View>
+          <View style={{ flex: 1, height: 36, justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ width: 70, height: 10, backgroundColor: '#EBEBEB', borderRadius: 2 }} />
+          </View>
+        </View>
+
+        {/* Mock Stats Row (3 cards) */}
+        <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+          {[1, 2, 3].map((i) => (
+            <View key={i} style={{ flex: 1, height: 78, backgroundColor: '#FAFAFA', borderRadius: 8, padding: 8, borderWidth: 1, borderColor: '#F0F0F0', alignItems: 'center', justifyContent: 'center' }}>
+              <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: '#EBEBEB', marginBottom: 6 }} />
+              <View style={{ width: 24, height: 12, backgroundColor: '#EBEBEB', borderRadius: 2, marginBottom: 4 }} />
+              <View style={{ width: 45, height: 8, backgroundColor: '#EBEBEB', borderRadius: 2 }} />
+            </View>
+          ))}
+        </View>
+
+        {/* Mock Search Bar */}
+        <View style={{ height: 42, backgroundColor: '#F5F5F5', borderRadius: 8, marginBottom: 16 }} />
+
+        {/* Mock Students List cards */}
+        {[1, 2, 3, 4].map((i) => (
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#F5F5F5' }}>
+            <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: '#EBEBEB' }} />
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <View style={{ width: 100, height: 12, backgroundColor: '#EBEBEB', borderRadius: 2, marginBottom: 6 }} />
+              <View style={{ width: 80, height: 8, backgroundColor: '#EBEBEB', borderRadius: 2 }} />
+            </View>
+            <View style={{ width: 50, height: 20, borderRadius: 4, backgroundColor: '#EBEBEB' }} />
+          </View>
+        ))}
+      </View>
+
+      <Animated.View style={[{ flex: 1, backgroundColor: '#FFFFFF', transform: [{ translateX }] }]}>
+        {/* Telegram-style Header */}
+        <TouchableOpacity 
+          style={styles.telegramHeader} 
+          activeOpacity={0.9}
+          onPress={() => {
+            setShowGroupInfoModal(true);
+            Animated.spring(groupInfoAnim, { toValue: 1, useNativeDriver: true, tension: 65, friction: 9 }).start();
+          }}
+        >
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBackBtn}>
+            <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
+          </TouchableOpacity>
+          
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.headerLogo} />
+          ) : (
+            <View style={[styles.headerLogo, { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.accent.primary + '10' }]}>
+              <Ionicons name="megaphone" size={20} color={Colors.accent.primary} />
+            </View>
+          )}
+          
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.headerTitleText} numberOfLines={1}>
+              {businessName || 'UCI Coaching Sehore'}
+            </Text>
+            <Text style={styles.headerSubtitleText}>
+              {studentCount > 0 ? `${studentCount.toLocaleString()} subscribers` : '0 subscribers'}
+            </Text>
+          </View>
+
+          <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={styles.headerSearchBtn}>
+            <Ionicons name={showSearch ? "close" : "search"} size={22} color={Colors.text.secondary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerMenuBtn} onPress={() => {
+            setShowGroupInfoModal(true);
+            Animated.spring(groupInfoAnim, { toValue: 1, useNativeDriver: true, tension: 65, friction: 9 }).start();
+          }}>
+            <Ionicons name="ellipsis-vertical" size={20} color={Colors.text.secondary} />
+          </TouchableOpacity>
+        </TouchableOpacity>
+
+      {/* Search Bar (Sticky at top below header if active) */}
+      {showSearch && (
+        <View style={{ backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB' }}>
+          <View style={styles.searchBarHeader}>
+            <Ionicons name="search" size={18} color={Colors.text.tertiary} style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchBarInput}
+              placeholder="Search messages, files, or links..."
+              placeholderTextColor={Colors.text.tertiary}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color={Colors.text.tertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
+        {/* Main Feed List */}
         <FlatList
-          data={posts}
-          renderItem={({ item }) => (
-            <PostCard
-              item={item}
-              avatarMap={avatarMap}
-              onLike={toggleLike}
-              onAddComment={handleAddComment}
-              onAddReply={handleAddReply}
-              onEdit={handleEditInit}
-              onDelete={handleDeletePost}
-            />
-          )}
+          data={filteredPosts}
+          renderItem={({ item, index }) => {
+            const showDivider = index === 0 ||
+              new Date(filteredPosts[index].timestamp).toDateString() !==
+              new Date(filteredPosts[index - 1].timestamp).toDateString();
+
+            return (
+              <View>
+                {showDivider && (
+                  <View style={styles.dateDividerContainer}>
+                    <View style={styles.dateDividerBubble}>
+                      <Text style={styles.dateDividerText}>
+                        {getFormattedDividerDate(item.timestamp)}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                <PostCard
+                  item={item}
+                  avatarMap={avatarMap}
+                  onLike={toggleLike}
+                  onAddComment={handleAddComment}
+                  onAddReply={handleAddReply}
+                  onEdit={handleEditInit}
+                  onDelete={handleDeletePost}
+                  onVote={handleVote}
+                />
+              </View>
+            );
+          }}
           keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[styles.listContent, { paddingBottom: 120 }]}
           showsVerticalScrollIndicator={false}
-          ListHeaderComponent={renderHeader()}
           refreshing={isLoading}
           onRefresh={() => fetchPosts()}
           ListEmptyComponent={
@@ -1371,8 +2076,443 @@ export default function CommunityScreen() {
             )
           }
         />
+
+        {/* Selected Attachment Previews (Floating above the message bar) */}
+        {(selectedImage || selectedFile || pollQuestion) && (
+          <View style={{ backgroundColor: '#FFFFFF', padding: 8, borderTopWidth: 1, borderTopColor: '#EBEBEB', flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {selectedImage && (
+              <View style={styles.previewImageContainer}>
+                <Image source={{ uri: selectedImage }} style={styles.previewImage} />
+                <TouchableOpacity
+                  style={styles.removePreviewButton}
+                  onPress={() => setSelectedImage(null)}
+                >
+                  <Ionicons name="close-circle" size={24} color={Colors.status.danger} />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {selectedFile && selectedFile.assets && selectedFile.assets.length > 0 && (
+              <View style={styles.previewFileContainer}>
+                <Ionicons name="document-text" size={24} color={Colors.accent.primary} />
+                <Text numberOfLines={1} style={styles.previewFileName}>
+                  {selectedFile.assets[0].name}
+                </Text>
+                <TouchableOpacity
+                  style={styles.removeFilePreviewButton}
+                  onPress={() => setSelectedFile(null)}
+                >
+                  <Ionicons name="close-circle" size={24} color={Colors.status.danger} />
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {pollQuestion && (
+              <View style={[styles.previewFileContainer, { backgroundColor: Colors.accent.primary + '10' }]}>
+                <Ionicons name="bar-chart" size={20} color={Colors.accent.primary} />
+                <Text numberOfLines={1} style={[styles.previewFileName, { color: Colors.accent.primary, fontWeight: '700' }]}>
+                  Poll: {pollQuestion}
+                </Text>
+                <TouchableOpacity
+                  style={styles.removeFilePreviewButton}
+                  onPress={() => {
+                    setPollQuestion('');
+                    setPollOptions(['', '']);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={24} color={Colors.status.danger} />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* Target Batch list picker row (toggled above input bar) */}
+        {showBatchPicker && availableBatches.length > 1 && (
+          <View style={{ backgroundColor: '#FFFFFF', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#EBEBEB', paddingHorizontal: 12 }}>
+            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.secondary, marginBottom: 6 }}>Target Audience:</Text>
+            <FlatList
+              horizontal
+              data={availableBatches}
+              showsHorizontalScrollIndicator={false}
+              keyExtractor={(item) => item}
+              renderItem={({ item }) => {
+                const isSelected = selectedBatches.includes(item) || (item === 'All' && selectedBatches.length === 0);
+                return (
+                  <TouchableOpacity
+                    style={[
+                      styles.composerBatchChip,
+                      isSelected && styles.composerBatchChipActive
+                    ]}
+                    onPress={() => {
+                      if (item === 'All') {
+                        setSelectedBatches([]);
+                      } else {
+                        setSelectedBatches(prev => 
+                          prev.includes(item) 
+                            ? prev.filter(b => b !== item) 
+                            : [...prev.filter(b => b !== 'All'), item]
+                        );
+                      }
+                    }}
+                  >
+                    <Text style={[
+                      styles.composerBatchText,
+                      isSelected && styles.composerBatchTextActive
+                    ]}>
+                      {item}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          </View>
+        )}
+
+        {/* Category & Batch Quick Toggle bar */}
+        <View style={{ flexDirection: 'row', backgroundColor: '#F0F2F5', paddingHorizontal: 12, paddingTop: 6, gap: 8 }}>
+          <TouchableOpacity 
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#EBEBEB', gap: 4 }} 
+            onPress={() => {
+              const keys = CATEGORIES.map(c => c.key);
+              const currIdx = keys.indexOf(composerCategory);
+              const nextKey = keys[(currIdx + 1) % keys.length];
+              setComposerCategory(nextKey);
+            }}
+          >
+            <Ionicons name="pricetag-outline" size={12} color={Colors.accent.primary} />
+            <Text style={{ fontSize: 11, fontWeight: '700', color: Colors.text.secondary }}>
+              {CATEGORIES.find(c => c.key === composerCategory)?.label || 'Announcement'}
+            </Text>
+            <Ionicons name="chevron-down" size={10} color={Colors.text.tertiary} />
+          </TouchableOpacity>
+
+          {availableBatches.length > 1 && (
+            <TouchableOpacity 
+              style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#EBEBEB', gap: 4 }} 
+              onPress={() => setShowBatchPicker(!showBatchPicker)}
+            >
+              <Ionicons name="people-outline" size={12} color={Colors.accent.primary} />
+              <Text style={{ fontSize: 11, fontWeight: '700', color: Colors.text.secondary }}>
+                Target: {selectedBatches.length === 0 ? 'All' : selectedBatches.join(', ')}
+              </Text>
+              <Ionicons name="chevron-down" size={10} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* WhatsApp-style Input / Composer Bar */}
+        <View style={styles.whatsappMessageBar}>
+          <View style={styles.whatsappInputContainer}>
+            {/* Emoji placeholder replaced with Plus Icon */}
+            <TouchableOpacity style={styles.whatsappPlusIcon} onPress={() => setShowAttachmentSheet(true)}>
+              <Ionicons name="add" size={24} color={Colors.accent.primary} />
+            </TouchableOpacity>
+
+            <RotatingPlaceholderInput
+              style={styles.whatsappTextInputField}
+              placeholderTextColor={Colors.text.tertiary}
+              multiline
+              value={composerText}
+              onChangeText={setComposerText}
+            />
+
+            {/* File attach button */}
+            <TouchableOpacity style={styles.whatsappRightIcon} onPress={handlePickDocument}>
+              <Ionicons name="document-attach-outline" size={22} color={Colors.text.secondary} />
+            </TouchableOpacity>
+
+            {/* Image attach button */}
+            <TouchableOpacity style={styles.whatsappRightIcon} onPress={handlePickImage}>
+              <Ionicons name="image-outline" size={22} color={Colors.text.secondary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Send Circle Button */}
+          <TouchableOpacity 
+            style={[styles.whatsappSendCircle, isUploading && { opacity: 0.7 }]} 
+            onPress={handlePost}
+            disabled={isUploading}
+          >
+            {isUploading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Ionicons name="send" size={18} color="#FFFFFF" style={{ marginLeft: 2 }} />
+            )}
+          </TouchableOpacity>
+        </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </Animated.View>
+
+
+      {/* Attachment Options ActionSheet absolute overlay */}
+      {showAttachmentSheet && (
+        <View style={StyleSheet.absoluteFill}>
+          <TouchableOpacity 
+            style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)' }} 
+            activeOpacity={1}
+            onPress={() => {
+              Animated.timing(attachSheetAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+                setShowAttachmentSheet(false);
+              });
+            }}
+          />
+          <Animated.View style={[{ position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, gap: 16, zIndex: 10000, transform: [{ translateY: attachSheetAnim.interpolate({ inputRange: [0, 1], outputRange: [400, 0] }) }] }]}>
+            <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.text.primary, marginBottom: 8 }}>Select Attachment</Text>
+            
+            <View style={{ flexDirection: 'row', justifyContent: 'space-around', flexWrap: 'wrap', gap: 16 }}>
+              <TouchableOpacity 
+                style={{ alignItems: 'center', width: 70 }}
+                onPress={() => {
+                  Animated.timing(attachSheetAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+                    setShowAttachmentSheet(false);
+                    setShowPollCreator(true);
+                  });
+                }}
+              >
+                <View style={{ width: 50, height: 50, borderRadius: 25, backgroundColor: '#E3F2FD', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                  <Ionicons name="bar-chart" size={24} color="#1E88E5" />
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: Colors.text.secondary }}>Create Poll</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={{ alignItems: 'center', width: 70 }}
+                onPress={() => {
+                  Animated.timing(attachSheetAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+                    setShowAttachmentSheet(false);
+                    handlePickDocument();
+                  });
+                }}
+              >
+                <View style={{ width: 50, height: 50, borderRadius: 25, backgroundColor: '#E8F5E9', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                  <Ionicons name="document-text" size={24} color="#43A047" />
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: Colors.text.secondary }}>Document</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={{ alignItems: 'center', width: 70 }}
+                onPress={() => {
+                  Animated.timing(attachSheetAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+                    setShowAttachmentSheet(false);
+                    handlePickImage();
+                  });
+                }}
+              >
+                <View style={{ width: 50, height: 50, borderRadius: 25, backgroundColor: '#FFF3E0', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                  <Ionicons name="image" size={24} color="#FB8C00" />
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: Colors.text.secondary }}>Gallery</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={{ alignItems: 'center', width: 70 }}
+                onPress={() => {
+                  Animated.timing(attachSheetAnim, { toValue: 0, duration: 150, useNativeDriver: true }).start(() => {
+                    setShowAttachmentSheet(false);
+                    handleTakePhoto();
+                  });
+                }}
+              >
+                <View style={{ width: 50, height: 50, borderRadius: 25, backgroundColor: '#FFEBEE', justifyContent: 'center', alignItems: 'center', marginBottom: 4 }}>
+                  <Ionicons name="camera" size={24} color="#E53935" />
+                </View>
+                <Text style={{ fontSize: 12, fontWeight: '600', color: Colors.text.secondary }}>Camera</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </View>
+      )}
+
+      {/* Telegram-style Group Info Details Absolute sliding overlay */}
+      {showGroupInfoModal && (
+        <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#F0F2F5', zIndex: 9999, transform: [{ translateX: groupInfoAnim.interpolate({ inputRange: [0, 1], outputRange: [screenWidth, 0] }) }] }]}>
+          <SafeAreaView style={styles.groupInfoModalContainer} edges={['top']}>
+            {/* Modal Header */}
+            <View style={[styles.telegramHeader, { borderBottomWidth: 0 }]}>
+              <TouchableOpacity onPress={() => {
+                Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                  setShowGroupInfoModal(false);
+                });
+              }} style={styles.headerBackBtn}>
+                <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
+              </TouchableOpacity>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#000', flex: 1 }}>Info</Text>
+              <TouchableOpacity style={styles.headerMenuBtn}>
+                <Ionicons name="ellipsis-vertical" size={20} color={Colors.text.secondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Hero Card */}
+              <View style={styles.groupInfoHeroCard}>
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={styles.groupInfoBigLogo} />
+                ) : (
+                  <View style={[styles.groupInfoBigLogo, { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.accent.primary + '10' }]}>
+                    <Ionicons name="megaphone" size={48} color={Colors.accent.primary} />
+                  </View>
+                )}
+                
+                <Text style={styles.groupInfoTitle}>{businessName || 'UCI Coaching Sehore'}</Text>
+                <Text style={styles.groupInfoSubtitle}>
+                  {studentCount > 0 ? `${studentCount.toLocaleString()} subscribers` : '0 subscribers'}
+                </Text>
+
+                {/* Action row */}
+                <View style={styles.groupInfoActionsRow}>
+                  <TouchableOpacity 
+                    style={styles.groupInfoActionItem}
+                    onPress={() => {
+                      Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                        setShowGroupInfoModal(false);
+                        router.push('/notebank');
+                      });
+                    }}
+                  >
+                    <View style={styles.groupInfoActionIconContainer}>
+                      <Ionicons name="document-text" size={24} color={Colors.accent.primary} />
+                    </View>
+                    <Text style={styles.groupInfoActionText}>Notes</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Invite Link section */}
+              <View style={styles.groupInfoLinkCard}>
+                <Text style={styles.groupInfoLinkLabel}>presto.link/{businessCode || 'invite'}</Text>
+                <Text style={styles.groupInfoLinkSubtitle}>Invite Link (Org Code: {businessCode || '–'})</Text>
+              </View>
+
+              {/* Tabs Filter section */}
+              <View style={styles.groupInfoTabsSection}>
+                <View style={styles.groupInfoTabsRow}>
+                  {(['media', 'docs', 'links'] as const).map(tab => (
+                    <TouchableOpacity
+                      key={tab}
+                      style={[styles.groupInfoTab, activeFilter === tab && styles.groupInfoTabActive]}
+                      onPress={() => {
+                        setActiveFilter(tab);
+                        Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                          setShowGroupInfoModal(false);
+                        });
+                      }}
+                    >
+                      <Text style={[styles.groupInfoTabText, activeFilter === tab && styles.groupInfoTabTextActive]}>
+                        {tab === 'media' ? 'Media' : tab === 'docs' ? 'Files' : 'Links'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            </ScrollView>
+          </SafeAreaView>
+        </Animated.View>
+      )}
+
+        {/* Poll Creator Modal */}
+        <Modal
+          visible={showPollCreator}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowPollCreator(false)}
+        >
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.pollModalOverlay}
+          >
+            <View style={styles.pollModalContainer}>
+              <View style={styles.pollModalHeader}>
+                <Text style={styles.pollModalTitle}>{editingPost ? 'Edit Poll' : 'Create Poll'}</Text>
+                <TouchableOpacity onPress={() => {
+                  setShowPollCreator(false);
+                  setEditingPost(null);
+                  setPollQuestion('');
+                  setPollOptions(['', '']);
+                }}>
+                  <Ionicons name="close" size={24} color={Colors.text.primary} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={styles.pollModalScroll} keyboardShouldPersistTaps="handled">
+                <Text style={styles.pollModalLabel}>Question</Text>
+                <TextInput
+                  style={styles.pollModalInput}
+                  placeholder="Ask a question..."
+                  placeholderTextColor={Colors.text.tertiary}
+                  value={pollQuestion}
+                  onChangeText={setPollQuestion}
+                />
+
+                <Text style={styles.pollModalLabel}>Options</Text>
+                {pollOptions.map((opt, idx) => (
+                  <View key={idx} style={styles.pollOptionInputRow}>
+                    <TextInput
+                      style={[styles.pollModalInput, { flex: 1, marginBottom: 0 }]}
+                      placeholder={`Option ${idx + 1}`}
+                      placeholderTextColor={Colors.text.tertiary}
+                      value={opt}
+                      onChangeText={(val) => {
+                        const next = [...pollOptions];
+                        next[idx] = val;
+                        setPollOptions(next);
+                      }}
+                    />
+                    {pollOptions.length > 2 && (
+                      <TouchableOpacity 
+                        onPress={() => setPollOptions(pollOptions.filter((_, i) => i !== idx))}
+                        style={styles.pollOptionRemoveButton}
+                      >
+                        <Ionicons name="remove-circle" size={22} color={Colors.status.danger} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ))}
+
+                <TouchableOpacity 
+                  style={styles.pollAddOptionButton}
+                  onPress={() => setPollOptions([...pollOptions, ''])}
+                >
+                  <Ionicons name="add" size={16} color={Colors.accent.primary} />
+                  <Text style={styles.pollAddOptionText}>Add Option</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={styles.pollSubmitButton}
+                  onPress={async () => {
+                    if (!pollQuestion.trim()) {
+                      Alert.alert('Empty Question', 'Please enter a poll question.');
+                      return;
+                    }
+                    const activeOpts = pollOptions.filter(o => o.trim());
+                    if (activeOpts.length < 2) {
+                      Alert.alert('Too Few Options', 'Please enter at least 2 options.');
+                      return;
+                    }
+
+                    const existingVotes = editingPost ? (parsePollData(editingPost.text)?.votes || {}) : {};
+
+                    const pollData = {
+                      isPoll: true,
+                      question: pollQuestion.trim(),
+                      options: activeOpts.map(o => o.trim()),
+                      votes: existingVotes
+                    };
+
+                    setShowPollCreator(false);
+                    setPollQuestion('');
+                    setPollOptions(['', '']);
+                    await handlePost(JSON.stringify(pollData));
+                  }}
+                >
+                  <Text style={styles.pollSubmitButtonText}>{editingPost ? 'Save Poll' : 'Create Poll'}</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </KeyboardAvoidingView>
+        </Modal>
+      </SafeAreaView>
   );
 }
 
@@ -1652,19 +2792,21 @@ const styles = StyleSheet.create({
   },
   commentInput: {
     flex: 1,
-    backgroundColor: Colors.bg.tertiary,
-    borderRadius: 10,
-    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF', // Milk color
+    borderRadius: 20, // WhatsApp-like curveness
+    paddingHorizontal: 16,
     paddingVertical: 8,
     fontSize: 13,
     fontWeight: '500',
-    color: Colors.text.primary,
+    color: '#000000',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   commentSendButton: {
     width: 36,
     height: 36,
-    borderRadius: 10,
-    backgroundColor: Colors.accent.primary + '12',
+    borderRadius: 18,
+    backgroundColor: Colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1859,5 +3001,633 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 12,
+  },
+  searchBarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bg.secondary,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 48,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    marginBottom: 8,
+  },
+  searchBarInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.text.primary,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: Colors.bg.tertiary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.accent.primary,
+    borderColor: Colors.accent.primary,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  filterChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  dateDividerContainer: {
+    alignItems: 'center',
+    marginVertical: 16,
+  },
+  dateDividerBubble: {
+    backgroundColor: 'rgba(220, 248, 198, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 10,
+    ...Shadows.sm,
+  },
+  dateDividerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#34495E',
+    textTransform: 'capitalize',
+  },
+  pdfAttachmentCardContainer: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  pdfPreviewImageContainer: {
+    height: 140,
+    width: '100%',
+    backgroundColor: '#ECEFF1',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    position: 'relative',
+  },
+  pdfPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pdfPreviewWrapper: {
+    flex: 1,
+    position: 'relative',
+  },
+  pdfPlaceholderLayout: {
+    flex: 1,
+    backgroundColor: '#ECEFF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  pdfPlaceholderPage: {
+    width: '85%',
+    height: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 4,
+    padding: 10,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  pdfPlaceholderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEEEE',
+    paddingBottom: 6,
+    marginBottom: 10,
+  },
+  pdfPlaceholderTitle: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#37474F',
+    marginLeft: 6,
+    flex: 1,
+  },
+  pdfPlaceholderBody: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  pdfPlaceholderLine: {
+    height: 6,
+    backgroundColor: '#CFD8DC',
+    borderRadius: 3,
+  },
+  pdfDetailsBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  pdfIconBadge: {
+    backgroundColor: '#E53935',
+    borderRadius: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  pdfIconBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  pdfDetailsFileName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#263238',
+  },
+  pdfDetailsMeta: {
+    fontSize: 11,
+    color: '#78909C',
+    marginTop: 2,
+  },
+  pollContainer: {
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    marginBottom: 12,
+    gap: 8,
+  },
+  pollQuestionText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text.primary,
+    marginBottom: 6,
+  },
+  pollOptionWrapper: {
+    marginBottom: 6,
+    gap: 3,
+  },
+  pollOptionButton: {
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    backgroundColor: Colors.bg.secondary,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  pollOptionButtonSelected: {
+    borderColor: Colors.accent.primary,
+  },
+  pollOptionProgress: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(175, 40, 0, 0.08)',
+  },
+  pollOptionProgressSelected: {
+    backgroundColor: 'rgba(175, 40, 0, 0.15)',
+  },
+  pollOptionTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    zIndex: 10,
+  },
+  pollOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.text.primary,
+  },
+  pollOptionTextSelected: {
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
+  pollOptionPctText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+  },
+  pollVotersText: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    paddingLeft: 4,
+  },
+  pollTotalVotesText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+    marginTop: 4,
+    textAlign: 'right',
+  },
+  whatsappInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 25,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 8,
+  },
+  whatsappPlusButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#F5F5F5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  whatsappTextInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#000000',
+    maxHeight: 100,
+    paddingVertical: 4,
+  },
+  whatsappAttachMenu: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-around',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  whatsappAttachItem: {
+    width: '22%',
+    alignItems: 'center',
+    gap: 6,
+  },
+  whatsappAttachIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  whatsappAttachText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#37474F',
+  },
+  pollModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  pollModalContainer: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '85%',
+    paddingBottom: 24,
+  },
+  pollModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  pollModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  pollModalScroll: {
+    padding: 16,
+  },
+  pollModalLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#37474F',
+    marginBottom: 8,
+    marginTop: 12,
+  },
+  pollModalInput: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    height: 44,
+    fontSize: 14,
+    color: '#000000',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  pollAddOptionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    alignSelf: 'flex-start',
+  },
+  pollAddOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.accent.primary,
+  },
+  pollSubmitButton: {
+    backgroundColor: Colors.accent.primary,
+    borderRadius: 12,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+    ...Shadows.glow,
+  },
+  pollSubmitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  pollOptionInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  pollOptionRemoveButton: {
+    padding: 4,
+  },
+  fullImageModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImageCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 100,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImageStyle: {
+    width: '100%',
+    height: '80%',
+  },
+  premiumSearchButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    borderColor: 'rgba(175, 40, 0, 0.15)',
+    backgroundColor: 'rgba(175, 40, 0, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Telegram Header
+  telegramHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  headerBackBtn: {
+    paddingRight: 10,
+  },
+  headerLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+  },
+  headerTitleText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  headerSubtitleText: {
+    fontSize: 12,
+    color: Colors.text.tertiary,
+    marginTop: 1,
+  },
+  headerSearchBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  headerMenuBtn: {
+    padding: 8,
+  },
+
+  // Telegram Group Info Modal
+  groupInfoModalContainer: {
+    flex: 1,
+    backgroundColor: '#F0F2F5', // Milky layered off-white background
+  },
+  groupInfoHeroCard: {
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  groupInfoBigLogo: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    marginBottom: 16,
+    backgroundColor: '#F0F0F0',
+  },
+  groupInfoTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#000000',
+    textAlign: 'center',
+  },
+  groupInfoSubtitle: {
+    fontSize: 14,
+    color: Colors.text.tertiary,
+    marginTop: 4,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  groupInfoActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginTop: 20,
+  },
+  groupInfoActionItem: {
+    alignItems: 'center',
+    width: 72,
+  },
+  groupInfoActionIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F5F6F8',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  groupInfoActionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  groupInfoLinkCard: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 12,
+    padding: 16,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  groupInfoLinkLabel: {
+    fontSize: 14,
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
+  groupInfoLinkSubtitle: {
+    fontSize: 11,
+    color: Colors.text.tertiary,
+    marginTop: 2,
+  },
+  groupInfoTabsSection: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 12,
+    flex: 1,
+    borderTopWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  groupInfoTabsRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+    paddingHorizontal: 8,
+  },
+  groupInfoTab: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  groupInfoTabActive: {
+    borderBottomColor: Colors.accent.primary,
+  },
+  groupInfoTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+  },
+  groupInfoTabTextActive: {
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
+
+  // WhatsApp Message Input Bar Styles
+  whatsappMessageBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    backgroundColor: '#F0F2F5', // Matches WhatsApp background
+  },
+  whatsappInputContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF', // Milk color surface
+    borderRadius: 24,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    marginRight: 6,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+  },
+  whatsappPlusIcon: {
+    padding: 4,
+    marginRight: 6,
+  },
+  whatsappTextInputField: {
+    flex: 1,
+    fontSize: 15,
+    color: '#000000',
+    maxHeight: 120,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  whatsappRightIcon: {
+    padding: 6,
+    marginLeft: 4,
+  },
+  whatsappSendCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#AF2800', // Our brand color code
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+  },
+  // Extra Composer Settings styles
+  composerSettingsBar: {
+    flexDirection: 'row',
+    backgroundColor: '#F0F2F5',
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    gap: 8,
+  },
+  settingsChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EBEBEB',
+    gap: 4,
+  },
+  settingsChipText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.text.secondary,
   },
 });

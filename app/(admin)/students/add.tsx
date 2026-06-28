@@ -312,12 +312,6 @@ export default function AddStudentScreen() {
             onChangeText={(v) => updateForm('aadhaarNumber', v.replace(/[^0-9]/g, '').slice(0, 12))}
             keyboardType="number-pad"
           />
-          <InputField
-            label="Course / Standard"
-            placeholder="e.g. MPPSC Prelims (optional)"
-            value={form.course}
-            onChangeText={(v) => updateForm('course', v)}
-          />
 
           {/* Duration Selector */}
           <View style={styles.fieldContainer}>
@@ -402,22 +396,24 @@ export default function AddStudentScreen() {
           </View>
 
           {/* Fee Due Date */}
-          <View style={styles.fieldContainer}>
-            <Text style={styles.fieldLabel}>Fee Due Date</Text>
-            <View style={styles.dueDateRow}>
-              {['1', '15', '28'].map((d) => (
-                <TouchableOpacity
-                  key={d}
-                  style={[styles.dueDateOption, form.feeDueDate === d && styles.dueDateOptionActive]}
-                  onPress={() => updateForm('feeDueDate', d)}
-                >
-                  <Text style={[styles.dueDateText, form.feeDueDate === d && styles.dueDateTextActive]}>
-                    {d === '28' ? 'Last Day' : `${d}th`}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+          {form.feeCycle !== 'yearly' && form.feeCycle !== 'one time' && (
+            <View style={styles.fieldContainer}>
+              <Text style={styles.fieldLabel}>Fee Due Date</Text>
+              <View style={styles.dueDateRow}>
+                {['1', '15', '28'].map((d) => (
+                  <TouchableOpacity
+                    key={d}
+                    style={[styles.dueDateOption, form.feeDueDate === d && styles.dueDateOptionActive]}
+                    onPress={() => updateForm('feeDueDate', d)}
+                  >
+                    <Text style={[styles.dueDateText, form.feeDueDate === d && styles.dueDateTextActive]}>
+                      {d === '28' ? 'Last Day' : `${d}th`}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
             </View>
-          </View>
+          )}
         </View>
 
         {/* Submit */}

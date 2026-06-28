@@ -69,6 +69,76 @@ export default function AdminTestScreen() {
     }
   };
 
+  const deleteTest = async (testId: string, title: string) => {
+    Alert.alert(
+      'Delete Test',
+      `Delete "${title}"? This will permanently remove all questions and student submissions.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              // Delete questions and submissions first (cascade)
+              await supabase.from('test_questions').delete().eq('test_id', testId);
+              await supabase.from('test_submissions').delete().eq('test_id', testId);
+              const { error } = await supabase.from('tests').delete().eq('id', testId);
+              if (error) throw error;
+              // Remove from local state immediately
+              setTests(prev => prev.filter(t => t.id !== testId));
+            } catch (err: any) {
+              Alert.alert('Error', 'Failed to delete test. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLongPress = (item: any) => {
+    const options: any[] = [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: '🗑️ Delete Test',
+        style: 'destructive',
+        onPress: () => deleteTest(item.id, item.title),
+      },
+    ];
+
+    // Extra option for drafts: publish
+    if (item.status === 'draft') {
+      options.splice(1, 0, {
+        text: '🚀 Publish Test',
+        onPress: async () => {
+          try {
+            await supabase.from('tests').update({ status: 'published' }).eq('id', item.id);
+            setTests(prev => prev.map(t => t.id === item.id ? { ...t, status: 'published' } : t));
+          } catch (err) {
+            Alert.alert('Error', 'Failed to publish test.');
+          }
+        },
+      });
+    }
+
+    // Extra option for published: mark completed
+    if (item.status === 'published') {
+      options.splice(1, 0, {
+        text: '✅ Mark as Completed',
+        onPress: async () => {
+          try {
+            await supabase.from('tests').update({ status: 'completed' }).eq('id', item.id);
+            setTests(prev => prev.map(t => t.id === item.id ? { ...t, status: 'completed' } : t));
+          } catch (err) {
+            Alert.alert('Error', 'Failed to update test status.');
+          }
+        },
+      });
+    }
+
+    Alert.alert(item.title, 'Choose an action', options);
+  };
+
   const renderTest = ({ item }: { item: any }) => {
     const statusColor = getStatusColor(item.status);
     
@@ -78,11 +148,13 @@ export default function AdminTestScreen() {
         activeOpacity={0.7}
         onPress={() => {
           if (item.status === 'draft') {
-            router.push(`/test/review/${item.id}`);
+            router.push(`/(admin)/test/review/${item.id}`);
           } else {
-            router.push(`/test/${item.id}`);
+            router.push(`/(admin)/test/analytics/${item.id}`);
           }
         }}
+        onLongPress={() => handleLongPress(item)}
+        delayLongPress={400}
       >
         <View style={styles.cardHeader}>
           <View style={styles.batchBadge}>
@@ -106,6 +178,12 @@ export default function AdminTestScreen() {
               <Text style={styles.footerText}>
                 {new Date(item.scheduled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </Text>
+            </View>
+          )}
+          {item.status !== 'draft' && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 'auto', gap: 4 }}>
+              <Ionicons name="bar-chart-outline" size={13} color={Colors.accent.primary} />
+              <Text style={{ fontSize: 11, color: Colors.accent.primary, fontWeight: '700' }}>View Analytics</Text>
             </View>
           )}
         </View>

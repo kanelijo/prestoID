@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,7 +10,6 @@ import {
   Alert,
   ActivityIndicator,
   Modal,
-  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -22,7 +21,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { useOfflineQueue } from '@/stores/useOfflineQueue';
-import { registerForPushNotificationsAsync, sendPushNotification } from '@/lib/notifications';
+import { registerForPushNotificationsAsync, sendPushNotification, CHANNELS } from '@/lib/notifications';
+import CachedImage from '@/components/CachedImage';
 
 const BATCHES = ['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC'];
 
@@ -47,9 +47,9 @@ export default function StudentsListScreen() {
   const [stats, setStats] = useState({ totalStudents: 0, presentToday: 0, feeCollected: '₹0' });
   const [isLoading, setIsLoading] = useState(true);
   const [adminName, setAdminName] = useState('Admin');
-  const { user, verified, businessId, businessName } = useAuthStore();
+  const { user, verified, businessId, businessName, avatarUrl } = useAuthStore();
   const { adminUnreadCount } = useNotificationStore();
-  const logoUrl = user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
+  const logoUrl = avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
   const [isSendingReminders, setIsSendingReminders] = useState(false);
   const { attendanceQueue, addAttendance, syncAttendance, loadQueue, clearQueue } = useOfflineQueue();
 
@@ -58,8 +58,8 @@ export default function StudentsListScreen() {
   const [isScannerVisible, setIsScannerVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
 
-  const fetchStudentsAndStats = async () => {
-    setIsLoading(true);
+  const fetchStudentsAndStats = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     if (!verified) {
       // Test Mode (Sandbox)
       setStudents(DEMO_STUDENTS);
@@ -148,11 +148,16 @@ export default function StudentsListScreen() {
     }
   };
 
+  const studentsLengthRef = useRef(0);
+  useEffect(() => {
+    studentsLengthRef.current = students.length;
+  }, [students]);
+
   useFocusEffect(
     useCallback(() => {
-      fetchStudentsAndStats();
+      fetchStudentsAndStats(studentsLengthRef.current > 0);
       loadQueue().then(() => syncAttendance());
-    }, [verified])
+    }, [verified, businessId])
   );
 
   useEffect(() => {
@@ -216,9 +221,11 @@ export default function StudentsListScreen() {
           });
           await sendPushNotification(
             [profileData.push_token],
-            'Attendance Marked',
+            'Attendance Marked ✅',
             `Hi ${studentData.name}, your attendance was marked PRESENT today at ${scanTime}.`,
-            { screen: 'id-card' }
+            { screen: 'id-card' },
+            1,
+            CHANNELS.attendance
           );
         }
       }
@@ -373,10 +380,11 @@ export default function StudentsListScreen() {
                 return;
               }
 
-              // Production Mode: Fetch students with unpaid/overdue fees
+              // Production Mode: Fetch students with unpaid/overdue fees for THIS business only
               const { data: unpaidStudents, error: fetchErr } = await supabase
                 .from('students')
                 .select('id, user_id, name, fee_amount, fee_status')
+                .eq('business_id', businessId)
                 .in('fee_status', ['unpaid', 'overdue']);
 
               if (fetchErr) throw fetchErr;
@@ -425,9 +433,11 @@ export default function StudentsListScreen() {
                   notifiedNames.push(student.name);
                   return sendPushNotification(
                     [token],
-                    'Fee Reminder - PrestoID',
-                    `Hi ${student.name}, your monthly fee of ₹${student.fee_amount} is due. Please clear it at the earliest.`,
-                    { screen: 'fees' }
+                    'Fee Reminder 💰',
+                    `Hi ${student.name}, your fee of ₹${student.fee_amount} is due. Please clear it at the earliest.`,
+                    { screen: 'fees' },
+                    1,
+                    CHANNELS.fees
                   );
                 } else {
                   noTokenNames.push(student.name);
@@ -507,7 +517,7 @@ export default function StudentsListScreen() {
         }
       >
         {item.photo_url ? (
-          <Image source={{ uri: item.photo_url }} style={styles.studentAvatarImage} />
+          <CachedImage uri={item.photo_url} style={styles.studentAvatarImage} fallbackInitial={item.name} priority="normal" />
         ) : (
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
@@ -537,7 +547,7 @@ export default function StudentsListScreen() {
           onPress={() => router.push('/(admin)/profile')}
         >
           {logoUrl ? (
-            <Image source={{ uri: logoUrl }} style={styles.headerAvatarImage} />
+            <CachedImage uri={logoUrl} style={styles.headerAvatarImage} priority="high" />
           ) : (
             <Text style={styles.headerAvatarText}>{getInitials(adminName)}</Text>
           )}

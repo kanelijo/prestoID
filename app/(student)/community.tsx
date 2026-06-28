@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,19 +10,29 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  Image,
   Linking,
   Share,
+  Modal,
+  ScrollView,
+  Image,
+  PanResponder,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { sendPushNotification } from '@/lib/notifications';
+import { sendPushNotification, CHANNELS } from '@/lib/notifications';
+import CachedImage from '@/components/CachedImage';
+import { savePostsToLocal, getPostsFromLocal } from '@/lib/localDb';
+import VirtualIDCard from '@/components/VirtualIDCard';
 
 type Reply = {
   author_id?: string;
@@ -74,6 +84,76 @@ const getCategoryStyle = (category: Post['category']) => {
   }
 };
 
+const parsePollData = (text: string) => {
+  if (!text) return null;
+  const startIdx = text.indexOf('{"isPoll":true');
+  if (startIdx !== -1) {
+    const endIdx = text.lastIndexOf('}');
+    if (endIdx !== -1 && endIdx > startIdx) {
+      const jsonStr = text.substring(startIdx, endIdx + 1);
+      try {
+        return JSON.parse(jsonStr);
+      } catch (e) {
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+const getFormattedDividerDate = (dateString: string) => {
+  if (!dateString) return 'Today';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    return 'Today';
+  }
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) {
+    return 'Today';
+  } else if (date.toDateString() === yesterday.toDateString()) {
+    return 'Yesterday';
+  } else {
+    const day = date.getDate();
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[date.getMonth()];
+    const year = date.getFullYear();
+    return `${day} ${month} ${year}`;
+  }
+};
+
+const formatBubbleTime = (dateString: string) => {
+  try {
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return dateString;
+    return d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    });
+  } catch (e) {
+    return dateString;
+  }
+};
+
+const handleDownload = async (url: string, fileName?: string) => {
+  if (!url) return;
+  try {
+    const downloadUrl = url.includes('?')
+      ? `${url}&download=${encodeURIComponent(fileName || '')}`
+      : `${url}?download=${encodeURIComponent(fileName || '')}`;
+    await Linking.openURL(downloadUrl);
+  } catch (err: any) {
+    try {
+      await Linking.openURL(url);
+    } catch (e) {
+      Alert.alert('Error', 'Could not open or download the file.');
+    }
+  }
+};
+
 interface PostCardProps {
   item: Post;
   studentName: string;
@@ -82,15 +162,18 @@ interface PostCardProps {
   onLike: (postId: string) => void;
   onAddComment: (postId: string, text: string) => void;
   onAddReply: (postId: string, commentId: string, text: string) => void;
+  onVote: (postId: string, optionIndex: number) => void;
 }
 
-function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, onAddReply, avatarMap }: PostCardProps) {
+function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, onAddReply, avatarMap, onVote }: PostCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [commentText, setCommentText] = useState('');
   const [showAllComments, setShowAllComments] = useState(false);
   const [expandedReplies, setExpandedReplies] = useState<Record<string, boolean>>({});
   const [replyingCommentId, setReplyingCommentId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [showFullImage, setShowFullImage] = useState(false);
+  const { user } = useAuthStore();
 
   const handleSendComment = () => {
     if (!commentText.trim()) return;
@@ -126,7 +209,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
       {/* Post Header */}
       <View style={styles.postHeader}>
         {authorAvatarUri ? (
-          <Image source={{ uri: authorAvatarUri }} style={styles.postAuthorAvatarImage} />
+          <CachedImage uri={authorAvatarUri} style={styles.postAuthorAvatarImage} fallbackInitial={item.author} />
         ) : (
           <View style={styles.postAuthorAvatar}>
             <Text style={styles.postAuthorInitial}>{item.author.charAt(0)}</Text>
@@ -142,7 +225,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
             )}
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Text style={styles.postTimestamp}>{item.timestamp}</Text>
+            <Text style={styles.postTimestamp}>{formatBubbleTime(item.timestamp)}</Text>
             {item.is_edited && (
               <Text style={styles.editedLabel}>• Edited</Text>
             )}
@@ -154,29 +237,177 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
       </View>
 
       {/* Post Content */}
-      <Text style={styles.postText}>{item.text}</Text>
+      {(() => {
+        const pollData = parsePollData(item.text);
+        if (pollData) {
+          const totalVotes = Object.keys(pollData.votes || {}).length;
+          return (
+            <View style={styles.pollContainer}>
+              <Text style={styles.pollQuestionText}>{pollData.question}</Text>
+              {pollData.options.map((opt: string, idx: number) => {
+                const votesForOption = Object.values(pollData.votes || {}).filter((v: any) => v.option === idx);
+                const voteCount = votesForOption.length;
+                const pct = totalVotes > 0 ? Math.round((voteCount / totalVotes) * 100) : 0;
+                const isSelected = user && pollData.votes?.[user.id]?.option === idx;
+                const voterNames = votesForOption.map((v: any) => v.name).join(', ');
+
+                return (
+                  <View key={idx} style={styles.pollOptionWrapper}>
+                    <TouchableOpacity
+                      style={[styles.pollOptionButton, isSelected && styles.pollOptionButtonSelected]}
+                      onPress={() => onVote(item.id, idx)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.pollOptionProgress, { width: `${pct}%` }, isSelected && styles.pollOptionProgressSelected]} />
+
+                      <View style={styles.pollOptionTextRow}>
+                        <Text style={[styles.pollOptionText, isSelected && styles.pollOptionTextSelected]}>
+                          {opt}
+                        </Text>
+                        <Text style={styles.pollOptionPctText}>{pct}%</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {voteCount > 0 && (
+                      <Text style={styles.pollVotersText} numberOfLines={1}>
+                        Voted: {voterNames}
+                      </Text>
+                    )}
+                  </View>
+                );
+              })}
+
+              <Text style={styles.pollTotalVotesText}>{totalVotes} votes</Text>
+            </View>
+          );
+        }
+
+        return <Text style={styles.postText}>{item.text}</Text>;
+      })()}
 
       {item.media_url && (
-        <Image source={{ uri: item.media_url }} style={styles.postImage} resizeMode="cover" />
+        <>
+          <TouchableOpacity activeOpacity={0.9} onPress={() => setShowFullImage(true)}>
+            <CachedImage uri={item.media_url} style={styles.postImage} contentFit="cover" priority="high" />
+          </TouchableOpacity>
+
+          <Modal visible={showFullImage} transparent={true} animationType="fade" onRequestClose={() => setShowFullImage(false)}>
+            <View style={styles.fullImageModalOverlay}>
+              <TouchableOpacity style={styles.fullImageCloseButton} onPress={() => setShowFullImage(false)}>
+                <Ionicons name="close" size={28} color="#FFFFFF" />
+              </TouchableOpacity>
+              <CachedImage uri={item.media_url} style={styles.fullImageStyle} contentFit="contain" priority="high" />
+            </View>
+          </Modal>
+        </>
       )}
 
-      {item.file_url && (
-        <TouchableOpacity
-          style={styles.fileAttachmentCard}
-          onPress={() => {
-            if (item.file_url) Linking.openURL(item.file_url);
-          }}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.fileNameText} numberOfLines={1}>
-              {item.file_name || 'Document Attachment'}
-            </Text>
-          </View>
-          <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
-        </TouchableOpacity>
-      )}
+      {item.file_url && (() => {
+        const isPDF = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
+        if (isPDF) {
+          const thumbnailUrl = item.file_url.startsWith('http')
+            ? `https://image.thum.io/get/pdfSource/${item.file_url}`
+            : null;
+
+          return (
+            <TouchableOpacity
+              style={styles.pdfAttachmentCardContainer}
+              onPress={() => {
+                if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.pdfPreviewImageContainer}>
+                {thumbnailUrl ? (
+                  <View style={styles.pdfPreviewWrapper}>
+                    {/* Fallback mockup rendered behind the image in case of loading/offline */}
+                    <View style={[StyleSheet.absoluteFill, styles.pdfPlaceholderLayout]}>
+                      <View style={styles.pdfPlaceholderPage}>
+                        <View style={styles.pdfPlaceholderHeader}>
+                          <Ionicons name="document-text" size={14} color="#E53935" />
+                          <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                            {item.file_name || 'PDF Document'}
+                          </Text>
+                        </View>
+                        <View style={styles.pdfPlaceholderBody}>
+                          <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                          <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                        </View>
+                      </View>
+                    </View>
+                    <CachedImage
+                      uri={thumbnailUrl}
+                      style={styles.pdfPreviewImage}
+                      contentFit="cover"
+                    />
+                  </View>
+                ) : (
+                  <View style={styles.pdfPlaceholderLayout}>
+                    <View style={styles.pdfPlaceholderPage}>
+                      <View style={styles.pdfPlaceholderHeader}>
+                        <Ionicons name="document-text" size={14} color="#E53935" />
+                        <Text style={styles.pdfPlaceholderTitle} numberOfLines={1}>
+                          {item.file_name || 'PDF Document'}
+                        </Text>
+                      </View>
+                      <View style={styles.pdfPlaceholderBody}>
+                        <View style={[styles.pdfPlaceholderLine, { width: '80%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '90%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '60%' }]} />
+                        <View style={[styles.pdfPlaceholderLine, { width: '75%' }]} />
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </View>
+
+              {/* Details banner */}
+              <View style={styles.pdfDetailsBanner}>
+                <View style={styles.pdfIconBadge}>
+                  <Ionicons name="document" size={12} color="#FFFFFF" />
+                  <Text style={styles.pdfIconBadgeText}>PDF</Text>
+                </View>
+                <View style={{ flex: 1, paddingLeft: 10, paddingRight: 6 }}>
+                  <Text style={styles.pdfDetailsFileName} numberOfLines={1}>
+                    {item.file_name || 'PDF Document'}
+                  </Text>
+                  <Text style={styles.pdfDetailsMeta}>
+                    Document • Tap to view
+                  </Text>
+                </View>
+                {downloadingFileId === item.id ? (
+                  <ActivityIndicator size="small" color={Colors.accent.primary} />
+                ) : (
+                  <Ionicons name="arrow-down-circle-outline" size={20} color="#78909C" />
+                )}
+              </View>
+            </TouchableOpacity>
+          );
+        }
+        return (
+          <TouchableOpacity
+            style={styles.fileAttachmentCard}
+            onPress={() => {
+              if (item.file_url) handleViewDocument(item.file_url, item.file_name || 'Document.pdf', item.id);
+            }}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="document-text-outline" size={22} color={Colors.accent.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.fileNameText} numberOfLines={1}>
+                {item.file_name || 'Document Attachment'}
+              </Text>
+            </View>
+            {downloadingFileId === item.id ? (
+              <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : (
+              <Ionicons name="open-outline" size={16} color={Colors.text.tertiary} />
+            )}
+          </TouchableOpacity>
+        );
+      })()}
 
       {/* Engagement Row */}
       <View style={styles.engagementRow}>
@@ -225,7 +456,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
             style={[styles.engagementButton, { marginLeft: 'auto' }]}
             onPress={() => {
               const url = item.file_url || item.media_url;
-              if (url) Linking.openURL(url);
+              if (url) handleDownload(url, item.file_name);
             }}
           >
             <Ionicons name="download-outline" size={20} color={Colors.accent.primary} />
@@ -249,7 +480,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
                   {(() => {
                     const commentAvatarUri = comment.author_id ? (avatarMap[comment.author_id] || comment.author_avatar) : comment.author_avatar;
                     return commentAvatarUri ? (
-                      <Image source={{ uri: commentAvatarUri }} style={styles.commentAvatarImage} />
+                      <CachedImage uri={commentAvatarUri} style={styles.commentAvatarImage} fallbackInitial={comment.author} />
                     ) : (
                       <View style={styles.commentAvatar}>
                         <Text style={styles.commentAvatarText}>
@@ -281,7 +512,7 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
                       return (
                         <View key={rIdx} style={styles.replyItem}>
                           {replyAvatarUri ? (
-                            <Image source={{ uri: replyAvatarUri }} style={styles.replyAvatarImage} />
+                            <CachedImage uri={replyAvatarUri} style={styles.replyAvatarImage} fallbackInitial={reply.author} />
                           ) : (
                             <View style={styles.replyAvatar}>
                               <Text style={styles.replyAvatarText}>
@@ -378,15 +609,108 @@ function PostCard({ item, studentName, studentPhotoUrl, onLike, onAddComment, on
     </View>
   );
 }
+function RotatingPlaceholderInput({ value, onChangeText, style, placeholderTextColor, multiline }: any) {
+  const placeholders = ['Message', 'Announcement', 'Notes'];
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPlaceholderIndex((prev) => (prev + 1) % placeholders.length);
+    }, 2500);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <TextInput
+      style={style}
+      value={value}
+      onChangeText={onChangeText}
+      placeholder={placeholders[placeholderIndex]}
+      placeholderTextColor={placeholderTextColor}
+      multiline={multiline}
+    />
+  );
+}
 export default function StudentCommunityScreen() {
-  const { user } = useAuthStore();
+  const { user, businessName, businessCode, avatarUrl } = useAuthStore();
   const activeStudentId = user?.id;
+  const router = useRouter();
+  const [studentCount, setStudentCount] = useState<number>(0);
+  const [showGroupInfoModal, setShowGroupInfoModal] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+
+  const { width: screenWidth } = Dimensions.get('window');
+  const translateX = useRef(new Animated.Value(0)).current;
+  const groupInfoAnim = useRef(new Animated.Value(0)).current;
+
+  const postsLengthRef = useRef(0);
+  useEffect(() => {
+    postsLengthRef.current = posts.length;
+  }, [posts]);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (evt, gestureState) => {
+        return gestureState.dx > 10 && Math.abs(gestureState.dy) < 15;
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        if (gestureState.dx > 0) {
+          translateX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (evt, gestureState) => {
+        if (gestureState.dx > screenWidth * 0.35 || gestureState.vx > 0.4) {
+          Animated.timing(translateX, {
+            toValue: screenWidth,
+            duration: 150,
+            useNativeDriver: true,
+          }).start(() => {
+            router.back();
+            setTimeout(() => translateX.setValue(0), 300);
+          });
+        } else {
+          Animated.spring(translateX, {
+            toValue: 0,
+            useNativeDriver: true,
+            tension: 50,
+            friction: 7,
+          }).start();
+        }
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    const fetchStudentCount = async () => {
+      const bizId = studentProfile?.business_id;
+      if (!bizId) return;
+      try {
+        const { count, error } = await supabase
+          .from('students')
+          .select('*', { count: 'exact', head: true })
+          .eq('business_id', bizId);
+        if (!error && count !== null) {
+          setStudentCount(count);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch student count:', err);
+      }
+    };
+    fetchStudentCount();
+  }, [studentProfile?.business_id]);
   const [posts, setPosts] = useState<Post[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [studentProfile, setStudentProfile] = useState<{name: string, business_id: string, batch_name: string, id: string, photo_url?: string | null} | null>(null);
+  const [studentProfile, setStudentProfile] = useState<any | null>(null);
+  const [coachingName, setCoachingName] = useState<string>('');
+  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'media' | 'docs' | 'links'>('all');
+  const [showSearch, setShowSearch] = useState(false);
+  const [downloadingFileId, setDownloadingFileId] = useState<string | null>(null);
 
   const sendLikePushNotification = async (recipientId: string, likerName: string, postText: string) => {
     try {
@@ -399,9 +723,9 @@ export default function StudentCommunityScreen() {
       if (profile?.push_token) {
         await sendPushNotification(
           [profile.push_token],
-          'New Like',
+          '❤️ New Like',
           `${likerName} liked your post: "${postText.substring(0, 40)}${postText.length > 40 ? '...' : ''}"`,
-          { screen: 'community' }
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -420,9 +744,9 @@ export default function StudentCommunityScreen() {
       if (profile?.push_token) {
         await sendPushNotification(
           [profile.push_token],
-          'New Comment',
-          `${commentAuthorName} commented: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" on your post`,
-          { screen: 'community' }
+          '💬 New Comment',
+          `${commentAuthorName}: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`,
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -446,9 +770,9 @@ export default function StudentCommunityScreen() {
       if (tokens.length > 0) {
         await sendPushNotification(
           tokens,
-          'New Reply on Post',
-          `${replyAuthorName} replied: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`,
-          { screen: 'community' }
+          '💬 New Reply',
+          `${replyAuthorName}: "${text.substring(0, 60)}${text.length > 60 ? '...' : ''}"`,
+          { screen: 'community' }, 1, CHANNELS.community
         );
       }
     } catch (err) {
@@ -505,12 +829,33 @@ export default function StudentCommunityScreen() {
     resolveAvatars();
   }, [posts]);
 
+  const handleViewDocument = async (url: string, fileName: string, id: string) => {
+    if (!url) return;
+    const safeName = fileName ? fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_') : 'document.pdf';
+    const localUri = `${FileSystem.documentDirectory}${safeName}`;
+    try {
+      const info = await FileSystem.getInfoAsync(localUri);
+      if (info.exists) {
+        await Sharing.shareAsync(localUri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+        return;
+      }
+      setDownloadingFileId(id);
+      const downloadRes = await FileSystem.downloadAsync(url, localUri);
+      setDownloadingFileId(null);
+      await Sharing.shareAsync(downloadRes.uri, { UTI: 'com.adobe.pdf', mimeType: 'application/pdf' });
+    } catch (err) {
+      setDownloadingFileId(null);
+      console.warn('Failed to download or view document:', err);
+      Alert.alert('Error', 'Failed to open document. Please check your internet connection.');
+    }
+  };
+
   const fetchStudentProfile = useCallback(async () => {
     if (!user) return null;
     try {
       const { data, error } = await supabase
         .from('students')
-        .select('id, name, business_id, batch_name, photo_url')
+        .select('*')
         .eq('user_id', user.id)
         .single();
 
@@ -529,6 +874,32 @@ export default function StudentCommunityScreen() {
 
       if (!error && data) {
         setStudentProfile(data);
+        
+        // Fetch business details
+        try {
+          const { data: bizData } = await supabase
+            .from('businesses')
+            .select('name, avatar_url')
+            .eq('id', data.business_id)
+            .single();
+            
+          if (bizData) {
+            setCoachingName(bizData.name || '');
+            setCoachingLogoUrl(bizData.avatar_url || null);
+          }
+
+          // Fetch student count
+          const { count } = await supabase
+            .from('students')
+            .select('*', { count: 'exact', head: true })
+            .eq('business_id', data.business_id);
+          if (count !== null) {
+            setStudentCount(count);
+          }
+        } catch (bizErr) {
+          console.warn('Failed to fetch business details for student:', bizErr);
+        }
+
         return data;
       }
     } catch (err) {
@@ -538,7 +909,19 @@ export default function StudentCommunityScreen() {
   }, [user]);
 
   const fetchPosts = useCallback(async (silent = false) => {
-    if (!silent) setIsLoading(true);
+    if (!silent) {
+      try {
+        const cached = getPostsFromLocal();
+        if (cached.length > 0) {
+          setPosts(cached);
+          setIsLoading(false);
+        } else {
+          setIsLoading(true);
+        }
+      } catch (err) {
+        setIsLoading(true);
+      }
+    }
     try {
       const profile = studentProfile || await fetchStudentProfile();
       console.log('[DEBUG] fetchPosts using profile:', profile);
@@ -609,7 +992,7 @@ export default function StudentCommunityScreen() {
           author: p.author_name || 'Upendra Sir',
           category: p.category,
           text: p.text,
-          timestamp: timeLabel,
+          timestamp: p.created_at,
           likes: p.likes || 0,
           comments: p.comments || [],
           liked: isLiked,
@@ -625,6 +1008,11 @@ export default function StudentCommunityScreen() {
         });
       }
       setPosts(loadedPosts);
+      try {
+        savePostsToLocal(loadedPosts);
+      } catch (dbErr) {
+        console.warn('Failed to save posts to SQLite local cache:', dbErr);
+      }
       if (loadedPosts.length > 0) {
         const postIds = loadedPosts.map(p => p.id);
         AsyncStorage.setItem('@presto_student_read_posts', JSON.stringify(postIds)).then(() => {
@@ -637,10 +1025,20 @@ export default function StudentCommunityScreen() {
       setIsLoading(false);
       setIsRefreshing(false);
     }
-  }, [user, fetchStudentProfile]);
+  }, [user, fetchStudentProfile, studentProfile]);
 
   useEffect(() => {
-    // Refresh user metadata in background exactly once on mount to get latest avatar
+    // 1. Pre-load cached student profile from AsyncStorage immediately
+    AsyncStorage.getItem('@presto_cached_student_data').then(cached => {
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          setStudentProfile(parsed);
+        } catch (_) {}
+      }
+    }).catch(_ => {});
+
+    // 2. Refresh user metadata in background exactly once on mount to get latest avatar
     const refreshUser = async () => {
       try {
         const { data: { user: freshUser } } = await supabase.auth.getUser();
@@ -652,12 +1050,21 @@ export default function StudentCommunityScreen() {
       }
     };
     refreshUser();
+
+    // 3. Pre-request picker permissions in background for 0ms latency launch
+    const ImagePicker = require('expo-image-picker');
+    ImagePicker.getMediaLibraryPermissionsAsync().then((status: any) => {
+      if (!status.granted) ImagePicker.requestMediaLibraryPermissionsAsync().catch((_: any) => {});
+    }).catch((_: any) => {});
+    ImagePicker.getCameraPermissionsAsync().then((status: any) => {
+      if (!status.granted) ImagePicker.requestCameraPermissionsAsync().catch((_: any) => {});
+    }).catch((_: any) => {});
   }, []);
 
   useFocusEffect(
     useCallback(() => {
       fetchStudentProfile();
-      fetchPosts();
+      fetchPosts(postsLengthRef.current > 0);
     }, [fetchStudentProfile, fetchPosts])
   );
 
@@ -692,6 +1099,7 @@ export default function StudentCommunityScreen() {
                       author_avatar: updated.author_avatar,
                       is_edited: updated.is_edited,
                       author_id: updated.author_id,
+                      text: updated.text ?? p.text,
                     }
                   : p
               )
@@ -760,6 +1168,55 @@ export default function StudentCommunityScreen() {
         )
       );
       console.warn('Failed to update like status:', err);
+    }
+  };
+
+  const handleVote = async (postId: string, optionIndex: number) => {
+    if (!user) return;
+    const post = posts.find((p) => p.id === postId);
+    if (!post) return;
+
+    const pollData = parsePollData(post.text);
+    if (!pollData) return;
+
+    const votes = { ...(pollData.votes || {}) };
+    const currentVote = votes[user.id];
+
+    if (currentVote && currentVote.option === optionIndex) {
+      delete votes[user.id];
+    } else {
+      const studentName = studentProfile?.name || 'Student';
+      votes[user.id] = {
+        option: optionIndex,
+        name: studentName,
+      };
+    }
+
+    const nextPollData = { ...pollData, votes };
+    const nextText = JSON.stringify(nextPollData);
+
+    setPosts((prev) =>
+      prev.map((p) =>
+        p.id === postId ? { ...p, text: nextText } : p
+      )
+    );
+
+    try {
+      const { error } = await supabase
+        .from('community_posts')
+        .update({
+          text: nextText,
+        })
+        .eq('id', Number(postId));
+
+      if (error) throw error;
+    } catch (err) {
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, text: post.text } : p
+        )
+      );
+      console.warn('Failed to update vote:', err);
     }
   };
 
@@ -895,34 +1352,276 @@ export default function StudentCommunityScreen() {
   };
 
   const renderHeader = () => (
-    <View style={styles.header}>
-      <Text style={styles.headerTitle}>Community</Text>
-    </View>
+    <>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Community</Text>
+        <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={styles.premiumSearchButton}>
+          <Ionicons
+            name={showSearch ? "close" : "search"}
+            size={20}
+            color={Colors.accent.primary}
+          />
+        </TouchableOpacity>
+      </View>
+
+      {/* Telegram-like Search Bar */}
+      {showSearch && (
+        <View style={styles.searchBarHeader}>
+          <Ionicons name="search" size={18} color={Colors.text.tertiary} style={{ marginRight: 8 }} />
+          <TextInput
+            style={styles.searchBarInput}
+            placeholder="Search messages, files, or links..."
+            placeholderTextColor={Colors.text.tertiary}
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            autoCorrect={false}
+          />
+          {searchQuery.length > 0 && (
+            <TouchableOpacity onPress={() => setSearchQuery('')}>
+              <Ionicons name="close-circle" size={16} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Category Tabs */}
+      <View style={styles.filterChipsRow}>
+        {(['all', 'media', 'docs', 'links'] as const).map((filter) => {
+          const isActive = activeFilter === filter;
+          return (
+            <TouchableOpacity
+              key={filter}
+              style={[styles.filterChip, isActive && styles.filterChipActive]}
+              onPress={() => setActiveFilter(filter)}
+            >
+              <Text style={[styles.filterChipText, isActive && styles.filterChipTextActive]}>
+                {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </>
   );
 
+  const filteredPosts = posts.filter((post) => {
+    // 1. Category Filter
+    if (activeFilter === 'media') {
+      if (!post.media_url) return false;
+    } else if (activeFilter === 'docs') {
+      if (!post.file_url) return false;
+    } else if (activeFilter === 'links') {
+      const hasLink = post.text && /(https?:\/\/[^\s]+)/g.test(post.text);
+      if (!hasLink) return false;
+    }
+
+    // 2. Search Query Filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      const textMatch = post.text ? post.text.toLowerCase().includes(query) : false;
+      const fileMatch = post.file_name ? post.file_name.toLowerCase().includes(query) : false;
+      const authorMatch = post.author ? post.author.toLowerCase().includes(query) : false;
+      if (!textMatch && !fileMatch && !authorMatch) return false;
+    }
+
+    return true;
+  });
+
+  const activeStudent = studentProfile || {
+    name: 'Student User',
+    father_name: '',
+    batch_name: 'Other',
+    course: 'General',
+    enrollment_id: 'UCI-PENDING',
+    phone: '',
+    id: user?.id,
+    fee_amount: 2500,
+    fee_status: 'unpaid',
+    next_due_date: 'N/A',
+    admission_date: 'N/A',
+    photo_url: '',
+    valid_from: '01/26',
+    valid_till: '01/27',
+    dob: '',
+    address: '',
+    whatsapp: '',
+    blood_group: '',
+    duration: '1 Year',
+    batch_timing: '10:00 AM - 01:00 PM'
+  };
+
+  const cardData = {
+    studentName: activeStudent.name,
+    fatherName: activeStudent.father_name || 'Not Set',
+    batch: activeStudent.batch_name,
+    course: activeStudent.course || 'General',
+    enrollmentId: activeStudent.enrollment_id,
+    phone: activeStudent.phone || 'Not Set',
+    coachingName: coachingName || businessName || 'PrestoID Coaching',
+    qrValue: `KF-${activeStudent.id}-${activeStudent.enrollment_id}`,
+    feeAmount: Number(activeStudent.fee_amount || 0),
+    feeStatus: (activeStudent.fee_status || 'unpaid') as 'paid' | 'unpaid' | 'overdue',
+    nextDueDate: activeStudent.next_due_date || 'N/A',
+    admissionDate: activeStudent.admission_date || 'N/A',
+    photoUrl: activeStudent.photo_url || '',
+    validFrom: activeStudent.valid_from || '01/26',
+    validTill: activeStudent.valid_till || '01/27',
+    dob: activeStudent.dob || 'Not Set',
+    address: activeStudent.address || 'Not Set',
+  };
+
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
+    <SafeAreaView style={styles.container} edges={['top']} {...panResponder.panHandlers}>
+      {/* Visual background placeholder of the Student ID Card home screen */}
+      <View style={[StyleSheet.absoluteFill, { backgroundColor: '#FFFFFF', paddingHorizontal: 20, paddingTop: 10 }]}>
+        {/* Mock Header */}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', height: 50, marginBottom: 16 }}>
+          {activeStudent.photo_url ? (
+            <Image source={{ uri: activeStudent.photo_url }} style={{ width: 34, height: 34, borderRadius: 17 }} />
+          ) : (
+            <View style={{ width: 34, height: 34, borderRadius: 17, backgroundColor: '#EBEBEB', justifyContent: 'center', alignItems: 'center' }}>
+              <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.secondary }}>{activeStudent.name ? activeStudent.name.charAt(0) : 'S'}</Text>
+            </View>
+          )}
+          <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text.primary }}>PrestoID</Text>
+          <View style={{ width: 34 }} />
+        </View>
+
+        <ScrollView contentContainerStyle={{ paddingBottom: 20 }} showsVerticalScrollIndicator={false}>
+          {/* Mock Title Section */}
+          <View style={{ marginBottom: 20, marginTop: 10 }}>
+            <Text style={{ fontSize: 24, fontWeight: '800', color: Colors.text.primary }}>Virtual ID Card</Text>
+            <Text style={{ fontSize: 13, color: Colors.text.tertiary, marginTop: 4 }}>
+              Present this code for campus access and attendance.
+            </Text>
+          </View>
+
+          {/* Real Live Activity Widget styling */}
+          <View style={{ width: '100%', height: 95, backgroundColor: '#1E1B4B', borderRadius: 12, padding: 16, marginBottom: 24 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#4ADE80', marginRight: 6 }} />
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#4ADE80', letterSpacing: 0.5 }}>LIVE AT UCI</Text>
+              </View>
+              <View style={{ backgroundColor: 'rgba(255,255,255,0.1)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+                <Text style={{ fontSize: 10, color: '#FFF', fontWeight: '500' }}>{activeStudent.batch_timing || '10:00 AM - 1:00 PM'}</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 15, fontWeight: '700', color: '#FFF', marginBottom: 4 }}>{activeStudent.course || 'General Coaching'}</Text>
+            <Text style={{ fontSize: 11, color: '#A5B4FC' }}>
+              Batch: {activeStudent.batch_name} • Duration: {activeStudent.duration || '1 Year'}
+            </Text>
+          </View>
+
+          {/* Real Virtual ID Card Component */}
+          <View style={{ width: '100%', minHeight: 240, marginBottom: 20 }}>
+            <VirtualIDCard {...cardData} />
+          </View>
+        </ScrollView>
+      </View>
+
+      <Animated.View style={[{ flex: 1, backgroundColor: '#FFFFFF', transform: [{ translateX }] }]}>
+        {/* Telegram-style Header */}
+        <TouchableOpacity 
+          style={styles.telegramHeader} 
+          activeOpacity={0.9}
+          onPress={() => {
+            setShowGroupInfoModal(true);
+            Animated.spring(groupInfoAnim, { toValue: 1, useNativeDriver: true, tension: 65, friction: 9 }).start();
+          }}
+        >
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBackBtn}>
+            <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
+          </TouchableOpacity>
+          
+          {coachingLogoUrl ? (
+            <Image source={{ uri: coachingLogoUrl }} style={styles.headerLogo} />
+          ) : (
+            <View style={[styles.headerLogo, { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.accent.primary + '10' }]}>
+              <Ionicons name="megaphone" size={20} color={Colors.accent.primary} />
+            </View>
+          )}
+          
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={styles.headerTitleText} numberOfLines={1}>
+              {coachingName || businessName || 'UCI Coaching Sehore'}
+            </Text>
+            <Text style={styles.headerSubtitleText}>
+              {studentCount > 0 ? `${studentCount.toLocaleString()} subscribers` : '0 subscribers'}
+            </Text>
+          </View>
+
+          <TouchableOpacity onPress={() => setShowSearch(!showSearch)} style={styles.headerSearchBtn}>
+            <Ionicons name={showSearch ? "close" : "search"} size={22} color={Colors.text.secondary} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerMenuBtn} onPress={() => {
+            setShowGroupInfoModal(true);
+            Animated.spring(groupInfoAnim, { toValue: 1, useNativeDriver: true, tension: 65, friction: 9 }).start();
+          }}>
+            <Ionicons name="ellipsis-vertical" size={20} color={Colors.text.secondary} />
+          </TouchableOpacity>
+        </TouchableOpacity>
+
+      {/* Search Bar (Sticky at top below header if active) */}
+      {showSearch && (
+        <View style={{ backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#EBEBEB' }}>
+          <View style={styles.searchBarHeader}>
+            <Ionicons name="search" size={18} color={Colors.text.tertiary} style={{ marginRight: 8 }} />
+            <TextInput
+              style={styles.searchBarInput}
+              placeholder="Search messages, files, or links..."
+              placeholderTextColor={Colors.text.tertiary}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              autoCorrect={false}
+            />
+            {searchQuery.length > 0 && (
+              <TouchableOpacity onPress={() => setSearchQuery('')}>
+                <Ionicons name="close-circle" size={16} color={Colors.text.tertiary} />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <FlatList
-          data={posts}
-          renderItem={({ item }) => (
-            <PostCard
-              item={item}
-              studentName={studentProfile?.name || 'Student'}
-              studentPhotoUrl={studentProfile?.photo_url || null}
-              avatarMap={avatarMap}
-              onLike={toggleLike}
-              onAddComment={handleAddComment}
-              onAddReply={handleAddReply}
-            />
-          )}
+          data={filteredPosts}
+          renderItem={({ item, index }) => {
+            const showDivider = index === 0 ||
+              new Date(filteredPosts[index].timestamp).toDateString() !==
+              new Date(filteredPosts[index - 1].timestamp).toDateString();
+
+            return (
+              <View>
+                {showDivider && (
+                  <View style={styles.dateDividerContainer}>
+                    <View style={styles.dateDividerBubble}>
+                      <Text style={styles.dateDividerText}>
+                        {getFormattedDividerDate(item.timestamp)}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                <PostCard
+                  item={item}
+                  studentName={studentProfile?.name || 'Student'}
+                  studentPhotoUrl={studentProfile?.photo_url || null}
+                  avatarMap={avatarMap}
+                  onLike={toggleLike}
+                  onAddComment={handleAddComment}
+                  onAddReply={handleAddReply}
+                  onVote={handleVote}
+                />
+              </View>
+            );
+          }}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
-          ListHeaderComponent={renderHeader()}
           refreshing={isRefreshing}
           onRefresh={onRefresh}
           ListEmptyComponent={
@@ -945,6 +1644,93 @@ export default function StudentCommunityScreen() {
           }
         />
       </KeyboardAvoidingView>
+    </Animated.View>
+
+      {/* Telegram-style Group Info Details Absolute sliding overlay */}
+      {showGroupInfoModal && (
+        <Animated.View style={[{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#F0F2F5', zIndex: 9999, transform: [{ translateX: groupInfoAnim.interpolate({ inputRange: [0, 1], outputRange: [screenWidth, 0] }) }] }]}>
+          <SafeAreaView style={styles.groupInfoModalContainer} edges={['top']}>
+            {/* Modal Header */}
+            <View style={[styles.telegramHeader, { borderBottomWidth: 0 }]}>
+              <TouchableOpacity onPress={() => {
+                Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                  setShowGroupInfoModal(false);
+                });
+              }} style={styles.headerBackBtn}>
+                <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
+              </TouchableOpacity>
+              <Text style={{ fontSize: 18, fontWeight: '800', color: '#000', flex: 1 }}>Info</Text>
+              <TouchableOpacity style={styles.headerMenuBtn}>
+                <Ionicons name="ellipsis-vertical" size={20} color={Colors.text.secondary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Hero Card */}
+              <View style={styles.groupInfoHeroCard}>
+                {coachingLogoUrl ? (
+                  <Image source={{ uri: coachingLogoUrl }} style={styles.groupInfoBigLogo} />
+                ) : (
+                  <View style={[styles.groupInfoBigLogo, { justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.accent.primary + '10' }]}>
+                    <Ionicons name="megaphone" size={48} color={Colors.accent.primary} />
+                  </View>
+                )}
+                
+                <Text style={styles.groupInfoTitle}>{coachingName || businessName || 'UCI Coaching Sehore'}</Text>
+                <Text style={styles.groupInfoSubtitle}>
+                  {studentCount > 0 ? `${studentCount.toLocaleString()} subscribers` : '0 subscribers'}
+                </Text>
+
+                {/* Action row */}
+                <View style={styles.groupInfoActionsRow}>
+                  <TouchableOpacity 
+                    style={styles.groupInfoActionItem}
+                    onPress={() => {
+                      Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                        setShowGroupInfoModal(false);
+                        router.push('/notes');
+                      });
+                    }}
+                  >
+                    <View style={styles.groupInfoActionIconContainer}>
+                      <Ionicons name="document-text" size={24} color={Colors.accent.primary} />
+                    </View>
+                    <Text style={styles.groupInfoActionText}>Notes</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Invite Link section */}
+              <View style={styles.groupInfoLinkCard}>
+                <Text style={styles.groupInfoLinkLabel}>presto.link/{businessCode || 'invite'}</Text>
+                <Text style={styles.groupInfoLinkSubtitle}>Invite Link (Org Code: {businessCode || '–'})</Text>
+              </View>
+
+              {/* Tabs Filter section */}
+              <View style={styles.groupInfoTabsSection}>
+                <View style={styles.groupInfoTabsRow}>
+                  {(['media', 'docs', 'links'] as const).map(tab => (
+                    <TouchableOpacity
+                      key={tab}
+                      style={[styles.groupInfoTab, activeFilter === tab && styles.groupInfoTabActive]}
+                      onPress={() => {
+                        setActiveFilter(tab);
+                        Animated.timing(groupInfoAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start(() => {
+                          setShowGroupInfoModal(false);
+                        });
+                      }}
+                    >
+                      <Text style={[styles.groupInfoTabText, activeFilter === tab && styles.groupInfoTabTextActive]}>
+                        {tab === 'media' ? 'Media' : tab === 'docs' ? 'Files' : 'Links'}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            </ScrollView>
+          </SafeAreaView>
+        </Animated.View>
+      )}
     </SafeAreaView>
   );
 }
@@ -959,8 +1745,10 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
   },
 
-  // Header
   header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     paddingTop: 12,
     paddingBottom: 16,
   },
@@ -1124,19 +1912,21 @@ const styles = StyleSheet.create({
   },
   commentInput: {
     flex: 1,
-    backgroundColor: Colors.bg.tertiary,
-    borderRadius: 10,
-    paddingHorizontal: 12,
+    backgroundColor: '#FFFFFF', // Milk color
+    borderRadius: 20, // WhatsApp-like curveness
+    paddingHorizontal: 16,
     paddingVertical: 8,
     fontSize: 13,
     fontWeight: '500',
-    color: Colors.text.primary,
+    color: '#000000',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   commentSendButton: {
     width: 36,
     height: 36,
-    borderRadius: 10,
-    backgroundColor: Colors.accent.primary + '12',
+    borderRadius: 18,
+    backgroundColor: Colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1277,5 +2067,415 @@ const styles = StyleSheet.create({
     width: 38,
     height: 38,
     borderRadius: 12,
+  },
+  searchBarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bg.secondary,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    height: 48,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    marginBottom: 8,
+  },
+  searchBarInput: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '500',
+    color: Colors.text.primary,
+  },
+  filterChipsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  filterChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: Colors.bg.tertiary,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+  },
+  filterChipActive: {
+    backgroundColor: Colors.accent.primary,
+    borderColor: Colors.accent.primary,
+  },
+  filterChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  filterChipTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  dateDividerContainer: {
+    alignItems: 'center',
+    marginVertical: 16,
+  },
+  dateDividerBubble: {
+    backgroundColor: 'rgba(220, 248, 198, 0.85)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 10,
+    ...Shadows.sm,
+  },
+  dateDividerText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#34495E',
+    textTransform: 'capitalize',
+  },
+  pdfAttachmentCardContainer: {
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  pdfPreviewImageContainer: {
+    height: 140,
+    width: '100%',
+    backgroundColor: '#ECEFF1',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+    position: 'relative',
+  },
+  pdfPreviewImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pdfPreviewWrapper: {
+    flex: 1,
+    position: 'relative',
+  },
+  pdfPlaceholderLayout: {
+    flex: 1,
+    backgroundColor: '#ECEFF1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  pdfPlaceholderPage: {
+    width: '85%',
+    height: '90%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 4,
+    padding: 10,
+    elevation: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+  },
+  pdfPlaceholderHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEEEEE',
+    paddingBottom: 6,
+    marginBottom: 10,
+  },
+  pdfPlaceholderTitle: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#37474F',
+    marginLeft: 6,
+    flex: 1,
+  },
+  pdfPlaceholderBody: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 8,
+  },
+  pdfPlaceholderLine: {
+    height: 6,
+    backgroundColor: '#CFD8DC',
+    borderRadius: 3,
+  },
+  pdfDetailsBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  pdfIconBadge: {
+    backgroundColor: '#E53935',
+    borderRadius: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  pdfIconBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+  pdfDetailsFileName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#263238',
+  },
+  pdfDetailsMeta: {
+    fontSize: 11,
+    color: '#78909C',
+    marginTop: 2,
+  },
+  pollContainer: {
+    backgroundColor: Colors.bg.tertiary,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    marginBottom: 12,
+    gap: 8,
+  },
+  pollQuestionText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text.primary,
+    marginBottom: 6,
+  },
+  pollOptionWrapper: {
+    marginBottom: 6,
+    gap: 3,
+  },
+  pollOptionButton: {
+    height: 40,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    backgroundColor: Colors.bg.secondary,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  pollOptionButtonSelected: {
+    borderColor: Colors.accent.primary,
+  },
+  pollOptionProgress: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: 'rgba(175, 40, 0, 0.08)',
+  },
+  pollOptionProgressSelected: {
+    backgroundColor: 'rgba(175, 40, 0, 0.15)',
+  },
+  pollOptionTextRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    zIndex: 10,
+  },
+  pollOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.text.primary,
+  },
+  pollOptionTextSelected: {
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
+  pollOptionPctText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+  },
+  pollVotersText: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    paddingLeft: 4,
+  },
+  pollTotalVotesText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+    marginTop: 4,
+    textAlign: 'right',
+  },
+  fullImageModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImageCloseButton: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    zIndex: 100,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  fullImageStyle: {
+    width: '100%',
+    height: '80%',
+  },
+  premiumSearchButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    borderColor: 'rgba(175, 40, 0, 0.15)',
+    backgroundColor: 'rgba(175, 40, 0, 0.05)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  // Telegram Header
+  telegramHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  headerBackBtn: {
+    paddingRight: 10,
+  },
+  headerLogo: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F0F0F0',
+  },
+  headerTitleText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#000000',
+  },
+  headerSubtitleText: {
+    fontSize: 12,
+    color: Colors.text.tertiary,
+    marginTop: 1,
+  },
+  headerSearchBtn: {
+    padding: 8,
+    marginRight: 4,
+  },
+  headerMenuBtn: {
+    padding: 8,
+  },
+
+  // Telegram Group Info Modal
+  groupInfoModalContainer: {
+    flex: 1,
+    backgroundColor: '#F0F2F5', // Milky layered off-white background
+  },
+  groupInfoHeroCard: {
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+  },
+  groupInfoBigLogo: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    marginBottom: 16,
+    backgroundColor: '#F0F0F0',
+  },
+  groupInfoTitle: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#000000',
+    textAlign: 'center',
+  },
+  groupInfoSubtitle: {
+    fontSize: 14,
+    color: Colors.text.tertiary,
+    marginTop: 4,
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  groupInfoActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    width: '100%',
+    marginTop: 20,
+  },
+  groupInfoActionItem: {
+    alignItems: 'center',
+    width: 72,
+  },
+  groupInfoActionIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#F5F6F8',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  groupInfoActionText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  groupInfoLinkCard: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 12,
+    padding: 16,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  groupInfoLinkLabel: {
+    fontSize: 14,
+    color: Colors.accent.primary,
+    fontWeight: '700',
+  },
+  groupInfoLinkSubtitle: {
+    fontSize: 11,
+    color: Colors.text.tertiary,
+    marginTop: 2,
+  },
+  groupInfoTabsSection: {
+    backgroundColor: '#FFFFFF',
+    marginTop: 12,
+    flex: 1,
+    borderTopWidth: 1,
+    borderColor: '#EBEBEB',
+  },
+  groupInfoTabsRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#EBEBEB',
+    paddingHorizontal: 8,
+  },
+  groupInfoTab: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  groupInfoTabActive: {
+    borderBottomColor: Colors.accent.primary,
+  },
+  groupInfoTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+  },
+  groupInfoTabTextActive: {
+    color: Colors.accent.primary,
+    fontWeight: '700',
   },
 });

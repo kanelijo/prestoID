@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Clipboard } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Clipboard, FlatList } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +8,97 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { DEMO_STUDENTS } from './index';
 import { sendPushNotification } from '@/lib/notifications';
+
+// ─── Student Test Analysis Component ─────────────────────────────────────────
+function StudentTestAnalysis({ studentId, businessId, router }: { studentId: string; businessId: string; router: any }) {
+  const [submissions, setSubmissions] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    if (!studentId) { setIsLoading(false); return; }
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('test_submissions')
+          .select('*, tests(title, duration_minutes, total_questions)')
+          .eq('student_id', studentId)
+          .order('submitted_at', { ascending: false });
+        if (!error) setSubmissions(data || []);
+      } catch (e) {
+        console.warn('Failed to load student tests:', e);
+      } finally {
+        setIsLoading(false);
+      }
+    })();
+  }, [studentId]);
+
+  if (isLoading) return (
+    <View style={{ padding: 24, alignItems: 'center' }}>
+      <ActivityIndicator color={Colors.accent.primary} />
+    </View>
+  );
+
+  if (submissions.length === 0) return (
+    <View style={styles.sectionCard}>
+      <View style={styles.sectionHeader}>
+        <Ionicons name="analytics-outline" size={18} color={Colors.accent.primary} />
+        <Text style={styles.sectionTitle}>Test Analysis</Text>
+      </View>
+      <View style={{ paddingVertical: 20, alignItems: 'center' }}>
+        <Ionicons name="document-text-outline" size={36} color={Colors.text.tertiary} />
+        <Text style={{ fontSize: 13, color: Colors.text.tertiary, fontWeight: '500', marginTop: 8 }}>No tests taken yet</Text>
+      </View>
+    </View>
+  );
+
+  const avgScore = Math.round(submissions.reduce((s, sub) => s + (sub.score ?? 0), 0) / submissions.length);
+
+  return (
+    <View style={styles.sectionCard}>
+      <View style={styles.sectionHeader}>
+        <Ionicons name="analytics-outline" size={18} color={Colors.accent.primary} />
+        <Text style={styles.sectionTitle}>Test Analysis</Text>
+        <View style={{ marginLeft: 'auto', backgroundColor: Colors.accent.primary + '15', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8 }}>
+          <Text style={{ fontSize: 11, fontWeight: '800', color: Colors.accent.primary }}>Avg {avgScore}%</Text>
+        </View>
+      </View>
+
+      {submissions.map((sub: any) => {
+        const score = sub.score ?? 0;
+        const totalQ = sub.total_questions || sub.tests?.total_questions || 0;
+        const correct = Math.round((score / 100) * totalQ);
+        const wrong = totalQ - correct;
+        const scoreColor = score >= 75 ? Colors.status.success : score >= 40 ? Colors.status.warning : Colors.status.danger;
+
+        return (
+          <View key={sub.id} style={{ backgroundColor: Colors.bg.tertiary, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.card.border }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+              {/* Score ring */}
+              <View style={{ width: 52, height: 52, borderRadius: 26, borderWidth: 3, borderColor: scoreColor, justifyContent: 'center', alignItems: 'center', backgroundColor: scoreColor + '10' }}>
+                <Text style={{ fontSize: 14, fontWeight: '900', color: scoreColor }}>{score}%</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }} numberOfLines={1}>{sub.tests?.title || 'Test'}</Text>
+                <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>
+                  {new Date(sub.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                </Text>
+                {/* Correct / Wrong row */}
+                {totalQ > 0 && (
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+                    <Text style={{ fontSize: 11, color: Colors.status.success, fontWeight: '700' }}>✓ {correct} correct</Text>
+                    <Text style={{ fontSize: 11, color: Colors.status.danger, fontWeight: '700' }}>✗ {wrong} wrong</Text>
+                    <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600' }}>{totalQ} total</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 
 export default function StudentDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -814,15 +905,7 @@ export default function StudentDetailScreen() {
         )}
 
         {activeTab === 'tests' && (
-          <View style={styles.sectionCard}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="analytics-outline" size={18} color={Colors.accent.primary} />
-              <Text style={styles.sectionTitle}>Test Analysis</Text>
-            </View>
-            <View style={{ paddingVertical: 12, alignItems: 'center' }}>
-              <Text style={{ fontSize: 13, color: Colors.text.tertiary, fontWeight: '500' }}>AI generated test reports will appear here.</Text>
-            </View>
-          </View>
+          <StudentTestAnalysis studentId={student?.id} businessId={student?.business_id} router={router} />
         )}
 
         {/* Quick Actions */}

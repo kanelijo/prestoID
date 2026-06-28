@@ -44,17 +44,76 @@ export default function SplashScreen() {
     // Check active auth session in database with timeout safety
     const checkAuth = async () => {
       let isDone = false;
+
+      // 1. Instant Cache Routing: bypass network and animations if user has a cached profile
+      try {
+        const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
+        if (cachedProfileStr) {
+          const cachedProfile = JSON.parse(cachedProfileStr);
+          if (cachedProfile.role) {
+            const store = useAuthStore.getState();
+            store.setRole(cachedProfile.role);
+            store.setAvatarUrl(cachedProfile.avatarUrl || null);
+            if (cachedProfile.businessId) {
+              store.setBusiness(
+                cachedProfile.businessId,
+                cachedProfile.businessCode,
+                cachedProfile.businessName,
+                cachedProfile.businessType
+              );
+            }
+            
+            // Route instantly
+            if (cachedProfile.role === 'admin') {
+              router.replace('/(admin)/students');
+            } else {
+              if (cachedProfile.claimed) {
+                router.replace('/(student)/id-card');
+              } else {
+                router.replace('/(auth)/claim-profile');
+              }
+            }
+            isDone = true;
+            return;
+          }
+        }
+      } catch (cacheErr) {
+        console.warn('Failed to instantly route from cache:', cacheErr);
+      }
+
       const timeout = setTimeout(async () => {
         if (!isDone) {
           isDone = true;
-          console.warn('Splash auth check timed out after 8s. Routing to fallback.');
+          console.warn('Splash auth check timed out after 8s. Checking local cache before fallback.');
           try {
-            const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
-            if (onboardingCompleted === 'true') {
-              router.replace('/(auth)/login');
-            } else {
-              router.replace('/onboarding');
+            // Try cache first — user might just be offline
+            const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
+            if (cachedProfileStr) {
+              const cachedProfile = JSON.parse(cachedProfileStr);
+              const store = useAuthStore.getState();
+              store.setRole(cachedProfile.role);
+              store.setAvatarUrl(cachedProfile.avatarUrl || null);
+              if (cachedProfile.businessId) {
+                store.setBusiness(
+                  cachedProfile.businessId,
+                  cachedProfile.businessCode,
+                  cachedProfile.businessName,
+                  cachedProfile.businessType
+                );
+              }
+              // Route based on cached role
+              if (cachedProfile.role === 'admin') {
+                router.replace('/(admin)/students');
+              } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
+                router.replace('/(student)/id-card');
+              } else {
+                router.replace('/(auth)/login');
+              }
+              return;
             }
+            // No cache — check onboarding
+            const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
+            router.replace(onboardingCompleted === 'true' ? '/(auth)/login' : '/onboarding');
           } catch {
             router.replace('/onboarding');
           }
@@ -70,43 +129,99 @@ export default function SplashScreen() {
           // Fetch user profile from database
           const { data: profile, error: profileError } = await supabase
             .from('profiles')
-            .select('role, business_id, claimed')
+            .select('role, business_id, claimed, avatar_url')
             .eq('id', session.user.id)
             .single();
 
           if (isDone) return;
 
+          let role = profile?.role;
+          let businessId = profile?.business_id;
+          let claimed = profile?.claimed;
+          let avatarUrl = profile?.avatar_url;
+          let businessData = null;
+
           if (profile && !profileError) {
-            const store = useAuthStore.getState();
-            store.setUser(session.user);
-            store.setSession(session);
-            store.setRole(profile.role);
-            
             // Load business details if linked
-            if (profile.business_id) {
+            if (businessId) {
               const { data: business } = await supabase
                 .from('businesses')
                 .select('id, organization_id, business_name, business_type')
-                .eq('id', profile.business_id)
+                .eq('id', businessId)
                 .single();
 
               if (isDone) return;
 
               if (business) {
-                store.setBusiness(business.id, business.organization_id, business.business_name, business.business_type);
+                businessData = business;
               }
             }
 
+            // Save to local cache
+            try {
+              const profileCache = {
+                role,
+                businessId,
+                businessCode: businessData?.organization_id || null,
+                businessName: businessData?.business_name || null,
+                businessType: businessData?.business_type || null,
+                claimed,
+                avatarUrl,
+              };
+              await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
+            } catch (cacheErr) {
+              console.warn('Failed to save profile cache:', cacheErr);
+            }
+          } else {
+            // Profile fetch from database failed (e.g. offline/network reconnecting)
+            // Try reading from cache
+            try {
+              const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
+              if (cachedProfileStr) {
+                const cachedProfile = JSON.parse(cachedProfileStr);
+                role = cachedProfile.role;
+                businessId = cachedProfile.businessId;
+                claimed = cachedProfile.claimed;
+                avatarUrl = cachedProfile.avatarUrl;
+                if (businessId) {
+                  businessData = {
+                    id: businessId,
+                    organization_id: cachedProfile.businessCode,
+                    business_name: cachedProfile.businessName,
+                    business_type: cachedProfile.businessType,
+                  };
+                }
+              }
+            } catch (cacheErr) {
+              console.warn('Failed to read profile cache:', cacheErr);
+            }
+          }
+
+          if (role) {
+            const store = useAuthStore.getState();
+            store.setUser(session.user);
+            store.setSession(session);
+            store.setRole(role);
+            store.setAvatarUrl(avatarUrl || null);
+            if (businessData) {
+              store.setBusiness(
+                businessData.id,
+                businessData.organization_id,
+                businessData.business_name,
+                businessData.business_type
+              );
+            }
+
             // Route based on role
-            if (profile.role === 'admin') {
-              if (profile.business_id) {
+            if (role === 'admin') {
+              if (businessId) {
                 router.replace('/(admin)/students');
               } else {
                 router.replace('/(auth)/create-institute');
               }
             } else {
               // Student
-              if (profile.claimed) {
+              if (claimed) {
                 router.replace('/(student)/id-card');
               } else {
                 router.replace('/(auth)/claim-profile');
@@ -134,6 +249,32 @@ export default function SplashScreen() {
         clearTimeout(timeout);
         isDone = true;
         console.error('Splash auth check error:', err);
+        // Check cache before falling back — might be offline
+        try {
+          const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
+          if (cachedProfileStr) {
+            const cachedProfile = JSON.parse(cachedProfileStr);
+            const store = useAuthStore.getState();
+            store.setRole(cachedProfile.role);
+            store.setAvatarUrl(cachedProfile.avatarUrl || null);
+            if (cachedProfile.businessId) {
+              store.setBusiness(
+                cachedProfile.businessId,
+                cachedProfile.businessCode,
+                cachedProfile.businessName,
+                cachedProfile.businessType
+              );
+            }
+            if (cachedProfile.role === 'admin') {
+              router.replace('/(admin)/students');
+            } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
+              router.replace('/(student)/id-card');
+            } else {
+              router.replace('/(auth)/login');
+            }
+            return;
+          }
+        } catch {}
         router.replace('/onboarding');
       }
     };

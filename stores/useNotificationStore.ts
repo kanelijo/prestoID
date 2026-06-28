@@ -154,23 +154,9 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         });
       }
 
-      // 3. Fetch recent community posts for alerts
-      const { data: commAlerts } = await supabase
-        .from('community_posts')
-        .select('id, category, target_batches')
-        .eq('business_id', student.business_id)
-        .order('created_at', { ascending: false });
-
-      if (commAlerts) {
-        const filteredAlerts = commAlerts.filter((p: any) => {
-          const targetBatches = p.target_batches || [];
-          return targetBatches.length === 0 || targetBatches.includes(student.batch_name);
-        }).slice(0, 5);
-
-        filteredAlerts.forEach((p: any) => {
-          alertIds.push(`comm-${p.id}`);
-        });
-      }
+      // 3. Fetch recent community posts — NOT counted in alert badge
+      //    (community posts belong to the Community tab, not Alerts)
+      //    Only att- and pay- are shown in the Alerts screen.
 
       const unreadAlertsCount = alertIds.filter(id => !readAlerts.includes(id)).length;
       set({ studentUnreadCount: unreadAlertsCount });

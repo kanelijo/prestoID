@@ -7,9 +7,15 @@ import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
+let ImageManipulator: any = null;
+try {
+  ImageManipulator = require('expo-image-manipulator');
+} catch (e) {
+  console.warn('ExpoImageManipulator native module is not available:', e);
+}
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
+import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 
 // Mock test data for fallback
 const MOCK_QUESTIONS = [
@@ -33,7 +39,7 @@ export default function TestReviewScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { verified } = useAuthStore();
+  const { verified, businessId } = useAuthStore();
   
   const [testDetails, setTestDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
@@ -175,6 +181,16 @@ export default function TestReviewScreen() {
       
       const safeOriginY = Math.max(0, Math.min(originY, imageHeight - 10));
       const safeHeight = Math.max(10, Math.min(cropHeight, imageHeight - safeOriginY));
+
+      if (!ImageManipulator || !ImageManipulator.manipulateAsync) {
+        Alert.alert(
+          'Notice',
+          'Native image cropping is not available on this device. Using the original uncropped image.',
+          [{ text: 'OK' }]
+        );
+        setCroppedImageUri(rawImageUri);
+        return;
+      }
 
       const result = await ImageManipulator.manipulateAsync(
         rawImageUri,
@@ -325,6 +341,55 @@ export default function TestReviewScreen() {
               .eq('id', id);
 
             if (error) throw error;
+
+            // Fetch target students' user_ids to send push notifications
+            try {
+              let studentUserIds: string[] = [];
+              const targetBatch = testDetails?.batch_name;
+              const targetBusinessId = testDetails?.business_id || businessId;
+
+              if (targetBusinessId) {
+                let query = supabase
+                  .from('students')
+                  .select('user_id')
+                  .eq('business_id', targetBusinessId)
+                  .not('user_id', 'is', null);
+
+                if (targetBatch && targetBatch !== 'All') {
+                  query = query.eq('batch_name', targetBatch);
+                }
+
+                const { data: studentsList, error: studentsError } = await query;
+                if (!studentsError && studentsList) {
+                  studentUserIds = studentsList.map(s => s.user_id).filter(Boolean) as string[];
+                }
+              }
+
+              if (studentUserIds.length > 0) {
+                const { data: studentProfiles, error: profilesError } = await supabase
+                  .from('profiles')
+                  .select('push_token')
+                  .in('id', studentUserIds)
+                  .not('push_token', 'is', null);
+
+                if (!profilesError && studentProfiles && studentProfiles.length > 0) {
+                  const tokens = studentProfiles.map(p => p.push_token).filter(Boolean) as string[];
+                  if (tokens.length > 0) {
+                    await sendPushNotification(
+                      tokens,
+                      'New Test Published 📝',
+                      `A new test "${testDetails?.title || 'Mock Test'}" has been published. Duration: ${testDetails?.duration_minutes || 60} mins.`,
+                      { screen: 'test' },
+                      1,
+                      CHANNELS.tests
+                    );
+                  }
+                }
+              }
+            } catch (pushErr) {
+              console.warn('Failed to send push notifications:', pushErr);
+            }
+
             Alert.alert('Success', 'Test published successfully!');
             router.replace('/(admin)/test');
           } catch (err: any) {

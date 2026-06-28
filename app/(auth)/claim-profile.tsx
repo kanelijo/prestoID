@@ -10,6 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Dimensions,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -18,6 +19,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+
+import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -120,6 +123,7 @@ export default function ClaimProfileScreen() {
           user_id: user.id,
           is_claimed: true,
           device_id: deviceId,
+          email: user.email, // Grab Google Gmail ID and save to student profile
         })
         .eq('id', studentRecord.id);
 
@@ -142,9 +146,54 @@ export default function ClaimProfileScreen() {
         throw updateProfileError;
       }
 
+      // Step 3.5: Send a push notification to the business admin / teacher
+      try {
+        const { data: bizAdmin } = await supabase
+          .from('businesses')
+          .select('admin_id')
+          .eq('id', business.id)
+          .maybeSingle();
+
+        if (bizAdmin?.admin_id) {
+          const { data: adminProf } = await supabase
+            .from('profiles')
+            .select('push_token')
+            .eq('id', bizAdmin.admin_id)
+            .maybeSingle();
+
+          if (adminProf?.push_token) {
+            await sendPushNotification(
+              adminProf.push_token,
+              '🆕 New Student Registered',
+              `${studentRecord.name} has claimed their profile and joined ${business.business_name}!`,
+              { studentId: studentRecord.id, type: 'new_student' },
+              CHANNELS.admin
+            );
+          }
+        }
+      } catch (pushErr) {
+        console.warn('Failed to notify admin about new student:', pushErr);
+      }
+
       // Step 4: Update store and navigate
       setRole('student');
       setBusiness(business.id, business.organization_id, business.business_name, business.business_type);
+
+      // Save cache on successful claim
+      try {
+        const profileCache = {
+          role: 'student',
+          businessId: business.id,
+          businessCode: business.organization_id,
+          businessName: business.business_name,
+          businessType: business.business_type,
+          claimed: true,
+          avatarUrl: null,
+        };
+        await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
+      } catch (cacheErr) {
+        console.warn('Failed to save profile cache on claim:', cacheErr);
+      }
 
       Alert.alert(
         'Welcome! 🎉',
@@ -165,7 +214,7 @@ export default function ClaimProfileScreen() {
 
       {/* Bottom Sheet */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.sheetContainer}
       >
         <View style={styles.sheet}>
@@ -174,117 +223,123 @@ export default function ClaimProfileScreen() {
             <View style={styles.handle} />
           </View>
 
-          {/* Header Row */}
-          <View style={styles.headerRow}>
-            <View style={styles.iconWrap}>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.scrollContent}
+          >
+            {/* Header Row */}
+            <View style={styles.headerRow}>
+              <View style={styles.iconWrap}>
+                <LinearGradient
+                  colors={Gradients.primary as [string, string]}
+                  style={styles.iconGradient}
+                >
+                  <Ionicons name="key" size={22} color="#FFFFFF" />
+                </LinearGradient>
+              </View>
+              <View style={styles.headerText}>
+                <Text style={styles.title}>Claim Your Profile</Text>
+                <Text style={styles.subtitle}>
+                  Enter the Organization ID and Secret Passcode from your admin/teacher.
+                </Text>
+              </View>
+              <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
+                <Ionicons name="close" size={22} color={Colors.text.tertiary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Organization ID Input */}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>Organization ID</Text>
+              <View style={styles.inputWrapper}>
+                <Ionicons name="business" size={18} color={Colors.text.tertiary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. ALP-7X9K"
+                  placeholderTextColor={Colors.text.tertiary}
+                  value={businessCode}
+                  onChangeText={setBusinessCode}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                />
+              </View>
+            </View>
+
+            {/* Toggle: Passcode or Aadhaar */}
+            <View style={styles.toggleRow}>
+              <TouchableOpacity
+                style={[styles.toggleButton, !useAadhaar && styles.toggleActive]}
+                onPress={() => setUseAadhaar(false)}
+              >
+                <Text style={[styles.toggleText, !useAadhaar && styles.toggleTextActive]}>Secret Passcode</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.toggleButton, useAadhaar && styles.toggleActive]}
+                onPress={() => setUseAadhaar(true)}
+              >
+                <Text style={[styles.toggleText, useAadhaar && styles.toggleTextActive]}>Aadhaar (Last 4)</Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Passcode / Aadhaar Input */}
+            <View style={styles.inputSection}>
+              <Text style={styles.inputLabel}>
+                {useAadhaar ? 'Last 4 Digits of Aadhaar' : 'Secret Passcode'}
+              </Text>
+              <View style={styles.inputWrapper}>
+                <Ionicons
+                  name={useAadhaar ? 'finger-print' : 'lock-closed'}
+                  size={18}
+                  color={Colors.text.tertiary}
+                  style={styles.inputIcon}
+                />
+                <TextInput
+                  style={styles.input}
+                  placeholder={useAadhaar ? 'e.g. 5678' : 'e.g. ALPHA-789X'}
+                  placeholderTextColor={Colors.text.tertiary}
+                  value={passcode}
+                  onChangeText={setPasscode}
+                  autoCapitalize={useAadhaar ? 'none' : 'characters'}
+                  autoCorrect={false}
+                  keyboardType={useAadhaar ? 'number-pad' : 'default'}
+                  maxLength={useAadhaar ? 4 : 20}
+                  secureTextEntry={useAadhaar}
+                />
+              </View>
+            </View>
+
+            {/* Claim Button */}
+            <TouchableOpacity
+              onPress={handleClaim}
+              activeOpacity={0.8}
+              disabled={isLoading}
+            >
               <LinearGradient
                 colors={Gradients.primary as [string, string]}
-                style={styles.iconGradient}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.claimButton}
               >
-                <Ionicons name="key" size={22} color="#FFFFFF" />
+                {isLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                    <Text style={styles.claimButtonText}>Claim My Profile</Text>
+                  </>
+                )}
               </LinearGradient>
-            </View>
-            <View style={styles.headerText}>
-              <Text style={styles.title}>Claim Your Profile</Text>
-              <Text style={styles.subtitle}>
-                Enter the Organization ID and Secret Passcode from your admin/teacher.
+            </TouchableOpacity>
+
+            {/* Info hint */}
+            <View style={styles.infoRow}>
+              <Ionicons name="information-circle-outline" size={16} color={Colors.text.tertiary} />
+              <Text style={styles.infoText}>
+                Don't have these? Contact your coaching center.
               </Text>
             </View>
-            <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={Colors.text.tertiary} />
-            </TouchableOpacity>
-          </View>
-
-          {/* Organization ID Input */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>Organization ID</Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons name="business" size={18} color={Colors.text.tertiary} style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. ALP-7X9K"
-                placeholderTextColor={Colors.text.tertiary}
-                value={businessCode}
-                onChangeText={setBusinessCode}
-                autoCapitalize="characters"
-                autoCorrect={false}
-              />
-            </View>
-          </View>
-
-          {/* Toggle: Passcode or Aadhaar */}
-          <View style={styles.toggleRow}>
-            <TouchableOpacity
-              style={[styles.toggleButton, !useAadhaar && styles.toggleActive]}
-              onPress={() => setUseAadhaar(false)}
-            >
-              <Text style={[styles.toggleText, !useAadhaar && styles.toggleTextActive]}>Secret Passcode</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.toggleButton, useAadhaar && styles.toggleActive]}
-              onPress={() => setUseAadhaar(true)}
-            >
-              <Text style={[styles.toggleText, useAadhaar && styles.toggleTextActive]}>Aadhaar (Last 4)</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Passcode / Aadhaar Input */}
-          <View style={styles.inputSection}>
-            <Text style={styles.inputLabel}>
-              {useAadhaar ? 'Last 4 Digits of Aadhaar' : 'Secret Passcode'}
-            </Text>
-            <View style={styles.inputWrapper}>
-              <Ionicons
-                name={useAadhaar ? 'finger-print' : 'lock-closed'}
-                size={18}
-                color={Colors.text.tertiary}
-                style={styles.inputIcon}
-              />
-              <TextInput
-                style={styles.input}
-                placeholder={useAadhaar ? 'e.g. 5678' : 'e.g. ALPHA-789X'}
-                placeholderTextColor={Colors.text.tertiary}
-                value={passcode}
-                onChangeText={setPasscode}
-                autoCapitalize={useAadhaar ? 'none' : 'characters'}
-                autoCorrect={false}
-                keyboardType={useAadhaar ? 'number-pad' : 'default'}
-                maxLength={useAadhaar ? 4 : 20}
-                secureTextEntry={useAadhaar}
-              />
-            </View>
-          </View>
-
-          {/* Claim Button */}
-          <TouchableOpacity
-            onPress={handleClaim}
-            activeOpacity={0.8}
-            disabled={isLoading}
-          >
-            <LinearGradient
-              colors={Gradients.primary as [string, string]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.claimButton}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <>
-                  <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                  <Text style={styles.claimButtonText}>Claim My Profile</Text>
-                </>
-              )}
-            </LinearGradient>
-          </TouchableOpacity>
-
-          {/* Info hint */}
-          <View style={styles.infoRow}>
-            <Ionicons name="information-circle-outline" size={16} color={Colors.text.tertiary} />
-            <Text style={styles.infoText}>
-              Don't have these? Contact your coaching center.
-            </Text>
-          </View>
+          </ScrollView>
         </View>
       </KeyboardAvoidingView>
     </View>
@@ -308,10 +363,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.bg.primary,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 24,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
     maxHeight: SCREEN_HEIGHT * 0.75,
     ...Shadows.md,
+  },
+  scrollContent: {
+    paddingHorizontal: 24,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
   },
   handleBar: {
     alignItems: 'center',

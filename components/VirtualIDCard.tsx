@@ -320,7 +320,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   coachingName: {
-    fontSize: 9,
+    fontSize: 13,
     fontWeight: '800',
     color: Colors.text.primary,
     textTransform: 'uppercase',

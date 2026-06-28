@@ -24,6 +24,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import { supabase, signOutAll } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const ACCOUNT_ITEMS: { label: string; icon: keyof typeof Ionicons.glyphMap; action?: string }[] = [
   { label: 'Change Password', icon: 'lock-closed-outline', action: 'change_password' },
@@ -34,7 +35,7 @@ const ACCOUNT_ITEMS: { label: string; icon: keyof typeof Ionicons.glyphMap; acti
 
 export default function AdminProfileScreen() {
   const router = useRouter();
-  const { user, session, reset } = useAuthStore();
+  const { user, session, reset, businessId } = useAuthStore();
   const [adminName, setAdminName] = useState('Coaching Center');
   const [adminEmail, setAdminEmail] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -53,6 +54,11 @@ export default function AdminProfileScreen() {
   // Loading & Edit Modals states
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Collapsible Accordion states
+  const [isBusinessExpanded, setIsBusinessExpanded] = useState(false);
+  const [isNotificationsExpanded, setIsNotificationsExpanded] = useState(false);
+  const [isAccountExpanded, setIsAccountExpanded] = useState(false);
   
   // Edit Profile Modal
   const [isEditProfileVisible, setIsEditProfileVisible] = useState(false);
@@ -118,32 +124,39 @@ export default function AdminProfileScreen() {
         .eq('admin_id', user.id)
         .maybeSingle();
 
+      let profileAvatar = null;
+      // Fetch profile to get custom avatar_url
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profile) {
+        profileAvatar = profile.avatar_url;
+        // Sync custom avatarUrl in store
+        useAuthStore.getState().setAvatarUrl(profile.avatar_url || null);
+      }
+
       if (!instError && inst) {
         setAdminName(inst.business_name);
         setBusinessName(inst.business_name);
         setBusinessCode(inst.organization_id);
         setLocation('Indore, Madhya Pradesh');
-      } else {
+      } else if (profile) {
         // Fallback to profile table if no institute exists yet
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        if (profile) {
-          setAdminName(profile.name || 'Admin User');
-          setBusinessName(profile.name || 'Admin User');
-        }
+        setAdminName(profile.name || 'Admin User');
+        setBusinessName(profile.name || 'Admin User');
       }
 
-      setPhotoUrl(user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null);
+      setPhotoUrl(profileAvatar || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null);
       setAdminEmail(user.email || '');
 
       // 2. Fetch Batches list from database
       const { data: batchList, error: batchError } = await supabase
         .from('batches')
         .select('name')
+        .eq('business_id', inst?.id || businessId)
         .order('name');
 
       if (!batchError && batchList) {
@@ -251,8 +264,22 @@ export default function AdminProfileScreen() {
         .update({ avatar_url: publicUrl })
         .eq('id', user.id);
 
+      useAuthStore.getState().setAvatarUrl(publicUrl);
+
       if (updateData?.user) {
         useAuthStore.getState().setUser(updateData.user);
+      }
+
+      // Update local cache
+      try {
+        const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
+        if (cachedProfileStr) {
+          const cachedProfile = JSON.parse(cachedProfileStr);
+          cachedProfile.avatarUrl = publicUrl;
+          await AsyncStorage.setItem('@user_profile', JSON.stringify(cachedProfile));
+        }
+      } catch (cacheErr) {
+        console.warn('Failed to update profile cache with new avatar:', cacheErr);
       }
 
       setPhotoUrl(publicUrl);
@@ -313,9 +340,28 @@ export default function AdminProfileScreen() {
     }
     setIsLoading(true);
     try {
+      let targetBusinessId = businessId;
+      if (!targetBusinessId && user) {
+        const { data: inst } = await supabase
+          .from('businesses')
+          .select('id')
+          .eq('admin_id', user.id)
+          .maybeSingle();
+        if (inst) {
+          targetBusinessId = inst.id;
+        }
+      }
+
+      if (!targetBusinessId) {
+        throw new Error('Business details not found. Please reload profile.');
+      }
+
       const { error } = await supabase
         .from('batches')
-        .insert({ name: newBatchName.trim().toUpperCase() });
+        .insert({ 
+          name: newBatchName.trim().toUpperCase(),
+          business_id: targetBusinessId
+        });
 
       if (error) {
         if (error.code === '23505') {
@@ -417,158 +463,225 @@ export default function AdminProfileScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Business Details Section */}
+        {/* Study Material / NoteBank Section */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Business Details</Text>
-          <View style={styles.card}>
-            <View style={styles.infoRow}>
-              <Ionicons name="business-outline" size={18} color={Colors.text.tertiary} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Organization Name</Text>
-                <Text style={styles.infoValue}>{businessName}</Text>
+          <Text style={styles.sectionTitle}>Study Material & Notes</Text>
+          <TouchableOpacity
+            style={styles.notebankCard}
+            activeOpacity={0.8}
+            onPress={() => router.push('/(admin)/notebank')}
+          >
+            <View style={styles.notebankCardContent}>
+              <View style={styles.notebankIconContainer}>
+                <Ionicons name="folder-open" size={22} color="#FFF" />
+              </View>
+              <View style={{ flex: 1, paddingLeft: 12 }}>
+                <Text style={styles.notebankTitle}>NoteBank</Text>
+                <Text style={styles.notebankSubtitle}>Upload and manage Syllabus, Notes, E-books, Docs</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* Collapsible Business Details Section */}
+        <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.accordionHeader} 
+            activeOpacity={0.7}
+            onPress={() => setIsBusinessExpanded(!isBusinessExpanded)}
+          >
+            <View style={styles.accordionHeaderLeft}>
+              <Ionicons name="business" size={20} color={Colors.accent.primary} />
+              <Text style={styles.accordionTitle}>Business Details</Text>
+            </View>
+            <Ionicons 
+              name={isBusinessExpanded ? "chevron-up" : "chevron-down"} 
+              size={18} 
+              color={Colors.text.secondary} 
+            />
+          </TouchableOpacity>
+
+          {isBusinessExpanded && (
+            <View style={styles.card}>
+              <View style={styles.infoRow}>
+                <Ionicons name="business-outline" size={18} color={Colors.text.tertiary} />
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Organization Name</Text>
+                  <Text style={styles.infoValue}>{businessName}</Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.infoRow}>
+                <Ionicons name="key-outline" size={18} color={Colors.text.tertiary} />
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Organization ID</Text>
+                  <View style={styles.inviteCodeRow}>
+                    <Text style={styles.inviteCodeValue}>{businessCode}</Text>
+                    <TouchableOpacity onPress={handleCopyInviteCode} style={styles.copyIcon}>
+                      <Ionicons name="copy-outline" size={16} color={Colors.accent.primary} />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.infoRow}>
+                <Ionicons name="location-outline" size={18} color={Colors.text.tertiary} />
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Location</Text>
+                  <Text style={styles.infoValue}>{location}</Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.infoRow}>
+                <Ionicons name="layers-outline" size={18} color={Colors.text.tertiary} />
+                <View style={styles.infoContent}>
+                  <Text style={styles.infoLabel}>Batches</Text>
+                  <View style={[styles.batchGrid, { marginTop: 8 }]}>
+                    {batches.map((batch) => (
+                      <View key={batch} style={styles.batchChip}>
+                        <Text style={styles.batchChipText}>{batch}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </View>
               </View>
             </View>
+          )}
+        </View>
 
-            <View style={styles.divider} />
+        {/* Collapsible Notification Settings */}
+        <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.accordionHeader} 
+            activeOpacity={0.7}
+            onPress={() => setIsNotificationsExpanded(!isNotificationsExpanded)}
+          >
+            <View style={styles.accordionHeaderLeft}>
+              <Ionicons name="notifications" size={20} color={Colors.accent.primary} />
+              <Text style={styles.accordionTitle}>Notification Settings</Text>
+            </View>
+            <Ionicons 
+              name={isNotificationsExpanded ? "chevron-up" : "chevron-down"} 
+              size={18} 
+              color={Colors.text.secondary} 
+            />
+          </TouchableOpacity>
 
-            <View style={styles.infoRow}>
-              <Ionicons name="key-outline" size={18} color={Colors.text.tertiary} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Organization ID</Text>
-                <View style={styles.inviteCodeRow}>
-                  <Text style={styles.inviteCodeValue}>{businessCode}</Text>
-                  <TouchableOpacity onPress={handleCopyInviteCode} style={styles.copyIcon}>
-                    <Ionicons name="copy-outline" size={16} color={Colors.accent.primary} />
+          {isNotificationsExpanded && (
+            <View style={styles.card}>
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Auto Absent Alert</Text>
+                  <Text style={styles.settingDesc}>Send WhatsApp to parents at 8 PM daily</Text>
+                </View>
+                <Switch
+                  value={autoAbsentAlert}
+                  onValueChange={setAutoAbsentAlert}
+                  trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
+                  thumbColor={autoAbsentAlert ? Colors.accent.primary : Colors.text.tertiary}
+                />
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Auto Fee Reminder</Text>
+                  <Text style={styles.settingDesc}>WhatsApp on 15th & last day of month</Text>
+                </View>
+                <Switch
+                  value={autoFeeReminder}
+                  onValueChange={setAutoFeeReminder}
+                  trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
+                  thumbColor={autoFeeReminder ? Colors.accent.primary : Colors.text.tertiary}
+                />
+              </View>
+
+              <View style={styles.divider} />
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Community Notifications</Text>
+                  <Text style={styles.settingDesc}>Get notified about community activity</Text>
+                </View>
+                <Switch
+                  value={communityNotifs}
+                  onValueChange={setCommunityNotifs}
+                  trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
+                  thumbColor={communityNotifs ? Colors.accent.primary : Colors.text.tertiary}
+                />
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Collapsible Account Section */}
+        <View style={styles.section}>
+          <TouchableOpacity 
+            style={styles.accordionHeader} 
+            activeOpacity={0.7}
+            onPress={() => setIsAccountExpanded(!isAccountExpanded)}
+          >
+            <View style={styles.accordionHeaderLeft}>
+              <Ionicons name="person" size={20} color={Colors.accent.primary} />
+              <Text style={styles.accordionTitle}>Account</Text>
+            </View>
+            <Ionicons 
+              name={isAccountExpanded ? "chevron-up" : "chevron-down"} 
+              size={18} 
+              color={Colors.text.secondary} 
+            />
+          </TouchableOpacity>
+
+          {isAccountExpanded && (
+            <View style={styles.card}>
+              {ACCOUNT_ITEMS.map((item, index) => (
+                <View key={item.label}>
+                  {index > 0 && <View style={styles.divider} />}
+                  <TouchableOpacity
+                    style={styles.menuRow}
+                    onPress={() => {
+                      if (item.action === 'change_password') {
+                        setIsChangePasswordVisible(true);
+                      } else if (item.action === 'help_support') {
+                        Alert.alert(
+                          'Help & Support',
+                          'For any queries, verification issues, or custom requests, please email our team at support@prestoid.com. We are active 24/7.',
+                          [
+                            { text: 'Email Support', onPress: () => Linking.openURL('mailto:support@prestoid.com').catch(() => {}) },
+                            { text: 'Close', style: 'cancel' }
+                          ]
+                        );
+                      } else if (item.action === 'terms_privacy') {
+                        Alert.alert(
+                          'Terms & Privacy Policy',
+                          'PrestoID securely manages student roster check-ins and fee receipts. All data, including Aadhaar inputs and attendance logs, is fully encrypted and never shared with third parties.',
+                          [{ text: 'OK', style: 'cancel' }]
+                        );
+                      } else if (item.action === 'about_prestoid') {
+                        Alert.alert(
+                          'About PrestoID',
+                          'PrestoID v1.0.0\n\nSmart student attendance tracking, offline-first barcode scanning, automated push alerts, and fee receipt management.\n\nDeveloped with ❤️ by Kanelijo.',
+                          [{ text: 'OK', style: 'cancel' }]
+                        );
+                      }
+                    }}
+                  >
+                    <Ionicons name={item.icon} size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
+                    <Text style={styles.menuLabel}>{item.label}</Text>
+                    <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
                   </TouchableOpacity>
                 </View>
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Ionicons name="location-outline" size={18} color={Colors.text.tertiary} />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Location</Text>
-                <Text style={styles.infoValue}>{location}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* Batches Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Batches</Text>
-          <View style={styles.card}>
-            <View style={styles.batchGrid}>
-              {batches.map((batch) => (
-                <View key={batch} style={styles.batchChip}>
-                  <Text style={styles.batchChipText}>{batch}</Text>
-                </View>
               ))}
-              <TouchableOpacity
-                style={[styles.batchChip, styles.addBatchChip]}
-                onPress={() => setIsAddBatchVisible(true)}
-              >
-                <Ionicons name="add" size={14} color={Colors.accent.primary} style={{ marginRight: 2 }} />
-                <Text style={styles.addBatchText}>Add Batch</Text>
-              </TouchableOpacity>
             </View>
-          </View>
-        </View>
-
-        {/* Notification Settings */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Notification Settings</Text>
-          <View style={styles.card}>
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Auto Absent Alert</Text>
-                <Text style={styles.settingDesc}>Send WhatsApp to parents at 8 PM daily</Text>
-              </View>
-              <Switch
-                value={autoAbsentAlert}
-                onValueChange={setAutoAbsentAlert}
-                trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
-                thumbColor={autoAbsentAlert ? Colors.accent.primary : Colors.text.tertiary}
-              />
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Auto Fee Reminder</Text>
-                <Text style={styles.settingDesc}>WhatsApp on 15th & last day of month</Text>
-              </View>
-              <Switch
-                value={autoFeeReminder}
-                onValueChange={setAutoFeeReminder}
-                trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
-                thumbColor={autoFeeReminder ? Colors.accent.primary : Colors.text.tertiary}
-              />
-            </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.settingRow}>
-              <View style={styles.settingInfo}>
-                <Text style={styles.settingLabel}>Community Notifications</Text>
-                <Text style={styles.settingDesc}>Get notified about community activity</Text>
-              </View>
-              <Switch
-                value={communityNotifs}
-                onValueChange={setCommunityNotifs}
-                trackColor={{ false: Colors.bg.tertiary, true: Colors.accent.primary + '30' }}
-                thumbColor={communityNotifs ? Colors.accent.primary : Colors.text.tertiary}
-              />
-            </View>
-          </View>
-        </View>
-
-        {/* Account Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Account</Text>
-          <View style={styles.card}>
-            {ACCOUNT_ITEMS.map((item, index) => (
-              <View key={item.label}>
-                {index > 0 && <View style={styles.divider} />}
-                <TouchableOpacity
-                  style={styles.menuRow}
-                  onPress={() => {
-                    if (item.action === 'change_password') {
-                      setIsChangePasswordVisible(true);
-                    } else if (item.action === 'help_support') {
-                      Alert.alert(
-                        'Help & Support',
-                        'For any queries, verification issues, or custom requests, please email our team at support@prestoid.com. We are active 24/7.',
-                        [
-                          { text: 'Email Support', onPress: () => Linking.openURL('mailto:support@prestoid.com').catch(() => {}) },
-                          { text: 'Close', style: 'cancel' }
-                        ]
-                      );
-                    } else if (item.action === 'terms_privacy') {
-                      Alert.alert(
-                        'Terms & Privacy Policy',
-                        'PrestoID securely manages student roster check-ins and fee receipts. All data, including Aadhaar inputs and attendance logs, is fully encrypted and never shared with third parties.',
-                        [{ text: 'OK', style: 'cancel' }]
-                      );
-                    } else if (item.action === 'about_prestoid') {
-                      Alert.alert(
-                        'About PrestoID',
-                        'PrestoID v1.0.0\n\nSmart student attendance tracking, offline-first barcode scanning, automated push alerts, and fee receipt management.\n\nDeveloped with ❤️ by Kanelijo.',
-                        [{ text: 'OK', style: 'cancel' }]
-                      );
-                    }
-                  }}
-                >
-                  <Ionicons name={item.icon} size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
-                  <Text style={styles.menuLabel}>{item.label}</Text>
-                  <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
-                </TouchableOpacity>
-              </View>
-            ))}
-          </View>
+          )}
         </View>
 
         {/* Danger Zone */}
@@ -615,35 +728,7 @@ export default function AdminProfileScreen() {
         </View>
       </Modal>
 
-      {/* Add Batch Modal */}
-      <Modal
-        visible={isAddBatchVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setIsAddBatchVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Add New Batch</Text>
-            <TextInput
-              style={styles.modalInput}
-              value={newBatchName}
-              onChangeText={setNewBatchName}
-              placeholder="e.g. UPSC, RAILWAY"
-              autoCapitalize="characters"
-              placeholderTextColor={Colors.text.tertiary}
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setIsAddBatchVisible(false)}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSaveBtn} onPress={handleAddBatch}>
-                <Text style={styles.modalSaveText}>Create</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
+
 
       {/* Change Password Modal */}
       <Modal
@@ -941,6 +1026,31 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
+  // Accordion Styles
+  accordionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: Colors.bg.secondary,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: Colors.card.border,
+    marginBottom: 12,
+    ...Shadows.sm,
+  },
+  accordionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  accordionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+
   // Modal Styles
   modalOverlay: {
     flex: 1,
@@ -1009,5 +1119,37 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  notebankCard: {
+    backgroundColor: Colors.bg.secondary,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: Colors.card.border,
+    padding: 16,
+    ...Shadows.sm,
+  },
+  notebankCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  notebankIconContainer: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: Colors.accent.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    ...Shadows.glow,
+  },
+  notebankTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  notebankSubtitle: {
+    fontSize: 12,
+    color: Colors.text.secondary,
+    marginTop: 2,
+    fontWeight: '500',
   },
 });

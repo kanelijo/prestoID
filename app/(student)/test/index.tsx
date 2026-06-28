@@ -90,6 +90,8 @@ export default function StudentTestScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchTests();
+      // Re-fetch badge count in parent layout when this screen is focused
+      // The layout's pendingTestCount will update on next render
     }, [verified, activeStudentId])
   );
 
@@ -143,8 +145,12 @@ export default function StudentTestScreen() {
       
       <View style={styles.cardFooter}>
         <Text style={styles.footerText}>
-          Submitted on {new Date(item.submitted_at || item.created_at).toLocaleDateString()}
+          Submitted {new Date(item.submitted_at || item.created_at).toLocaleDateString()}
         </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Ionicons name="analytics-outline" size={13} color={Colors.accent.primary} />
+          <Text style={{ fontSize: 11, color: Colors.accent.primary, fontWeight: '700' }}>View Analysis</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );

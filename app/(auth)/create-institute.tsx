@@ -39,6 +39,7 @@ export default function CreateInstituteScreen() {
   const [address, setAddress] = useState('');
   const [inviteCode, setInviteCode] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
+  const [batchesText, setBatchesText] = useState('MPPSC, UPSC, SSC, BANKING');
 
   // Dropdown states
   const [showServiceDropdown, setShowServiceDropdown] = useState(false);
@@ -89,6 +90,17 @@ export default function CreateInstituteScreen() {
       setInviteCode('');
     }
   }, [name]);
+
+  // Sync batchesText with coachingSubExams (for Coaching service type)
+  useEffect(() => {
+    if (serviceType === 'Coaching') {
+      if (coachingSubExams.length > 0) {
+        setBatchesText(coachingSubExams.join(', '));
+      } else {
+        setBatchesText('MPPSC, UPSC, SSC, BANKING');
+      }
+    }
+  }, [coachingSubExams, serviceType]);
 
   const handlePickLogo = async () => {
     Alert.alert('Institute Logo', 'Select source', [
@@ -182,6 +194,10 @@ export default function CreateInstituteScreen() {
       Alert.alert('Invalid Phone', 'Phone number must be exactly 10 digits.');
       return;
     }
+    if (!batchesText.trim()) {
+      Alert.alert('Error', 'Please enter at least one batch or shift.');
+      return;
+    }
 
     setIsLoading(true);
 
@@ -219,6 +235,26 @@ export default function CreateInstituteScreen() {
           throw new Error('This Organization ID is already in use. Please modify it.');
         }
         throw businessError;
+      }
+
+      // Insert initial batches
+      const batchNames = batchesText
+        .split(',')
+        .map((b) => b.trim().toUpperCase())
+        .filter(Boolean);
+
+      if (batchNames.length > 0) {
+        const batchesPayload = batchNames.map((name) => ({
+          business_id: business.id,
+          name: name,
+        }));
+        const { error: batchesError } = await supabase
+          .from('batches')
+          .insert(batchesPayload);
+        
+        if (batchesError) {
+          throw batchesError;
+        }
       }
 
       // Update admin profile — link to this business (profile already exists from auth trigger)
@@ -324,6 +360,17 @@ export default function CreateInstituteScreen() {
                        onPress={() => {
                          setServiceType(type);
                          setShowServiceDropdown(false);
+                         if (type === 'Coaching') {
+                           setBatchesText('MPPSC, UPSC, SSC, BANKING');
+                         } else if (type === 'Library') {
+                           setBatchesText('MORNING SHIFT, EVENING SHIFT, NIGHT SHIFT');
+                         } else if (type === 'School') {
+                           setBatchesText('CLASS 9, CLASS 10, CLASS 11, CLASS 12');
+                         } else if (type === 'College') {
+                           setBatchesText('1ST YEAR, 2ND YEAR, 3RD YEAR');
+                         } else if (type === 'Hostel') {
+                           setBatchesText('1ST FLOOR, 2ND FLOOR, 3RD FLOOR');
+                         }
                        }}
                      >
                        <Text style={[styles.dropdownItemText, serviceType === type && styles.dropdownItemTextActive]}>
@@ -380,6 +427,25 @@ export default function CreateInstituteScreen() {
                 placeholderTextColor={Colors.text.tertiary}
               />
             </View>
+
+            {/* Initial Batches — hidden for Coaching (sub-exams auto-become batches) */}
+            {serviceType !== 'Coaching' && (
+              <View style={styles.inputContainer}>
+                <Text style={styles.inputLabel}>
+                  {serviceType === 'Library' ? 'Shifts *' :
+                   serviceType === 'School' ? 'Classes/Grades *' :
+                   serviceType === 'College' ? 'Years/Batches *' : 'Rooms/Floors *'}
+                </Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={batchesText}
+                  onChangeText={setBatchesText}
+                  placeholder="Enter comma-separated names, e.g. MORNING, EVENING"
+                  placeholderTextColor={Colors.text.tertiary}
+                />
+                <Text style={styles.hintText}>Enter names separated by commas. These will be used to assign student cards and notes.</Text>
+              </View>
+            )}
 
             {/* ===================================================
                 DYNAMIC SERVICE SECTION

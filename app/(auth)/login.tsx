@@ -118,7 +118,7 @@ export default function LoginScreen() {
     // Fetch user profile
     const { data: profile, error: profileError } = await supabase
       .from('profiles')
-      .select('role, business_id, claimed')
+      .select('role, business_id, claimed, avatar_url')
       .eq('id', user.id)
       .single();
 
@@ -147,8 +147,11 @@ export default function LoginScreen() {
     }
 
     store.setRole(userRole);
+    const avatarUrl = profile?.avatar_url || null;
+    store.setAvatarUrl(avatarUrl);
 
     // Load business details if linked
+    let businessData = null;
     if (profile?.business_id) {
       const { data: business } = await supabase
         .from('businesses')
@@ -158,7 +161,24 @@ export default function LoginScreen() {
 
       if (business) {
         store.setBusiness(business.id, business.organization_id, business.business_name, business.business_type);
+        businessData = business;
       }
+    }
+
+    // Cache the profile details
+    try {
+      const profileCache = {
+        role: userRole,
+        businessId: businessData?.id || null,
+        businessCode: businessData?.organization_id || null,
+        businessName: businessData?.business_name || null,
+        businessType: businessData?.business_type || null,
+        claimed: profile?.claimed || false,
+        avatarUrl,
+      };
+      await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
+    } catch (cacheErr) {
+      console.warn('Failed to save profile cache on login:', cacheErr);
     }
 
     if (userRole === 'admin') {

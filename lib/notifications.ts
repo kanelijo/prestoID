@@ -14,19 +14,56 @@ try {
   console.warn('Notifications module not loaded:', e);
 }
 
-// Configure notification handler if the module is available
+// Configure notification handler — always show banner + sound (like WhatsApp)
 if (Notifications) {
   Notifications.setNotificationHandler({
     handleNotification: async () => ({
-      shouldShowAlert: true,
       shouldPlaySound: true,
-      shouldSetBadge: false,
+      shouldSetBadge: true,
       shouldShowBanner: true,
       shouldShowList: true,
     }),
   });
 }
 
+// Notification channel IDs
+export const CHANNELS = {
+  community:  'kf_community',
+  fees:       'kf_fees',
+  tests:      'kf_tests',
+  attendance: 'kf_attendance',
+  admin:      'kf_admin',
+  general:    'kf_general',
+};
+
+async function ensureChannels() {
+  if (!Notifications || Platform.OS !== 'android') return;
+  const channelDefs = [
+    { id: CHANNELS.community,  name: '💬 Community',   desc: 'Likes, comments and replies on posts' },
+    { id: CHANNELS.fees,       name: '💰 Fee Alerts',  desc: 'Fee reminders and payment notices' },
+    { id: CHANNELS.tests,      name: '📝 Tests',       desc: 'New tests and results' },
+    { id: CHANNELS.attendance, name: '✅ Attendance',  desc: 'Attendance marked notifications' },
+    { id: CHANNELS.admin,      name: '🔔 Admin Alerts',desc: 'New registrations and admin events' },
+    { id: CHANNELS.general,    name: '📣 PrestoID',    desc: 'General app notifications' },
+  ];
+  for (const ch of channelDefs) {
+    try {
+      await Notifications.setNotificationChannelAsync(ch.id, {
+        name: ch.name,
+        description: ch.desc,
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 150, 100, 150],
+        enableVibrate: true,
+        showBadge: true,
+        // No custom sound — Android uses system default automatically
+        enableLights: true,
+        lightColor: '#AF2800',
+      });
+    } catch (e) {
+      console.warn('Channel setup failed:', ch.id, e);
+    }
+  }
+}
 /**
  * Request notification permissions, retrieve the Expo Push Token, and save it in the database profiles.
  */
@@ -36,20 +73,8 @@ export async function registerForPushNotificationsAsync(userId: string): Promise
     return null;
   }
 
-  if (Platform.OS === 'android') {
-    try {
-      await Notifications.setNotificationChannelAsync('presto_alerts', {
-        name: 'PrestoID Alerts',
-        importance: Notifications.AndroidImportance.MAX,
-        vibrationPattern: [0, 250, 250, 250],
-        lightColor: '#FF231F7C',
-        enableVibrate: true,
-        showBadge: true,
-      });
-    } catch (e) {
-      console.warn('Failed to set notification channel:', e);
-    }
-  }
+  // Set up all notification channels (WhatsApp-style, one per category)
+  await ensureChannels();
 
   if (Device.isDevice || Platform.OS === 'android') {
     try {
@@ -135,7 +160,8 @@ export async function sendPushNotification(
   title: string,
   body: string,
   data: any = {},
-  badge?: number
+  badge?: number,
+  channelId?: string
 ): Promise<void> {
   if (!to || to.length === 0) return;
 
@@ -143,10 +169,10 @@ export async function sendPushNotification(
   const cleanTokens = to.filter(token => token && token.startsWith('ExponentPushToken'));
   if (cleanTokens.length === 0) return;
 
-  console.log(`[Push] Sending push notifications to ${cleanTokens.length} tokens individually.`);
+  const channel = channelId || CHANNELS.general;
 
-  // Send to each token individually to avoid PUSH_TOO_MANY_EXPERIENCE_IDS error
-  // which happens if tokens from different Expo projects are mixed in the database.
+  console.log(`[Push] Sending ${cleanTokens.length} notification(s) on channel: ${channel}`);
+
   const sendPromises = cleanTokens.map(async (token) => {
     try {
       const response = await fetch('https://exp.host/--/api/v2/push/send', {
@@ -162,15 +188,22 @@ export async function sendPushNotification(
           data,
           sound: 'default',
           priority: 'high',
-          channelId: 'presto_alerts',
+          channelId: channel,
           badge: badge ?? 1,
+          // Android notification shade style
+          android: {
+            channelId: channel,
+            smallIcon: 'ic_notification',
+            color: '#AF2800',
+            priority: 'high',
+          },
         }),
       });
 
       const resData = await response.json();
-      console.log(`Expo push response for token [${token.substring(0, 25)}...]:`, resData);
+      console.log(`Push sent [${token.substring(0, 25)}...]:`, resData?.data?.status);
     } catch (error) {
-      console.error(`Failed to send push notification to token [${token.substring(0, 25)}...]:`, error);
+      console.error(`Push failed [${token.substring(0, 25)}...]:`, error);
     }
   });
 
@@ -204,7 +237,6 @@ export async function scheduleLocalNotification(title: string, body: string): Pr
       content: {
         title,
         body,
-        sound: 'default',
         channelId: 'presto_alerts',
       },
       trigger: null,
