@@ -4,7 +4,7 @@
  * local file cache (via expo-file-system) otherwise.
  * This prevents crashes and guarantees offline caching even in Expo Go.
  */
-import { Image, ImageStyle, View, Text, StyleSheet, ViewStyle } from 'react-native';
+import { Image, ImageStyle, View, Text, StyleSheet, ViewStyle, ActivityIndicator } from 'react-native';
 import { Colors } from '@/constants/colors';
 import { useState, useEffect } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -97,6 +97,8 @@ export default function CachedImage({
     );
   }
 
+  const [isLoading, setIsLoading] = useState(true);
+
   if (ExpoImage) {
     return (
       <ExpoImage
@@ -108,16 +110,26 @@ export default function CachedImage({
         placeholder={{ blurhash: PLACEHOLDER_BLURHASH }}
         placeholderContentFit="cover"
         transition={200}
+        onLoad={() => setIsLoading(false)}
       />
     );
   }
 
   return (
-    <Image
-      source={{ uri: localUri || uri }}
-      style={resolvedStyle}
-      resizeMode={contentFit === 'contain' ? 'contain' : 'cover'}
-    />
+    <View style={[resolvedStyle, { overflow: 'hidden', backgroundColor: Colors.bg.tertiary }]}>
+      <Image
+        source={{ uri: localUri || uri }}
+        style={[StyleSheet.absoluteFill]}
+        resizeMode={contentFit === 'contain' ? 'contain' : 'cover'}
+        onLoadStart={() => setIsLoading(true)}
+        onLoadEnd={() => setIsLoading(false)}
+      />
+      {isLoading && (
+        <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
+          <ActivityIndicator size="small" color={Colors.accent.primary} />
+        </View>
+      )}
+    </View>
   );
 }
 
