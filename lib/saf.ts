@@ -8,17 +8,19 @@ export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) 
 
     if (Platform.OS === 'android') {
       try {
-        // 1. Download to temporary hidden cache directory first
-        const tempUri = `${FileSystem.cacheDirectory}${safeName}`;
-        await FileSystem.downloadAsync(downloadUrl, tempUri);
+        // 1. Download to persistent app document directory
+        const localUri = `${FileSystem.documentDirectory}${safeName}`;
+        const downloadResult = await FileSystem.downloadAsync(downloadUrl, localUri);
+        
+        if (downloadResult.status < 200 || downloadResult.status >= 300) {
+          await FileSystem.deleteAsync(localUri, { idempotent: true });
+          throw new Error(`Server returned HTTP status code ${downloadResult.status} (failed to download).`);
+        }
 
         // 2. Call our custom native module to insert it into MediaStore (Downloads/PrestoID)
-        const result = await PrestostorageModule.saveDocument(tempUri, safeName);
+        await PrestostorageModule.saveDocument(localUri, safeName);
         
-        // 3. Clean up cache
-        await FileSystem.deleteAsync(tempUri, { idempotent: true });
-        
-        return { success: true, uri: result.uri };
+        return { success: true, uri: localUri };
       } catch (nativeErr: any) {
         console.error("Native Storage Module Error:", nativeErr);
         return { success: false, error: nativeErr.message || 'Native module failed to save file.' };
@@ -26,7 +28,12 @@ export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) 
     } else {
       // iOS Implementation
       const localUri = `${FileSystem.documentDirectory}${safeName}`;
-      await FileSystem.downloadAsync(downloadUrl, localUri);
+      const downloadResult = await FileSystem.downloadAsync(downloadUrl, localUri);
+      
+      if (downloadResult.status < 200 || downloadResult.status >= 300) {
+        await FileSystem.deleteAsync(localUri, { idempotent: true });
+        throw new Error(`Server returned HTTP status code ${downloadResult.status} (failed to download).`);
+      }
       
       try {
         const Sharing = require('expo-sharing');

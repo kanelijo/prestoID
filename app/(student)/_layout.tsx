@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Tabs, useFocusEffect } from 'expo-router';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Tabs, useFocusEffect, Redirect, useRouter } from 'expo-router';
 import { View, Text, StyleSheet } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { clearBadgeCount, registerForPushNotificationsAsync } from '@/lib/notifications';
+import * as Notifications from 'expo-notifications';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
@@ -39,50 +40,42 @@ function TabIcon({ name, label, focused }: TabIconProps) {
 
 export default function StudentLayout() {
   const insets = useSafeAreaInsets();
-  const { user } = useAuthStore();
-  const { studentUnreadCount } = useNotificationStore();
-  const [pendingTestCount, setPendingTestCount] = useState(0);
+  const { user, role } = useAuthStore();
+
+  if (role && role !== 'student') {
+    return <Redirect href="/(admin)/students" />;
+  }
+  const { studentUnreadCount, studentPendingTestCount, fetchStudentPendingTestCount, studentCommunityUnreadCount } = useNotificationStore();
+  const router = useRouter();
 
   useEffect(() => {
     clearBadgeCount();
-    if (user) {
+    if (user?.id) {
       registerForPushNotificationsAsync(user.id);
-      fetchPendingTestCount();
+      if (fetchStudentPendingTestCount) {
+        fetchStudentPendingTestCount(user.id);
+      }
     }
-  }, [user]);
+  }, [user?.id]);
 
-  const fetchPendingTestCount = async () => {
-    if (!user?.id) return;
-    try {
-      const { data: student } = await supabase
-        .from('students')
-        .select('id, batch_name, business_id')
-        .eq('user_id', user.id)
-        .single();
-      if (!student) return;
-
-      const { data: allTests } = await supabase
-        .from('tests')
-        .select('id, batch_name')
-        .eq('business_id', student.business_id)
-        .eq('status', 'published');
-
-      const applicable = (allTests || []).filter((t: any) =>
-        !t.batch_name || t.batch_name === 'All' || t.batch_name === student.batch_name
-      );
-
-      const { data: submissions } = await supabase
-        .from('test_submissions')
-        .select('test_id')
-        .eq('student_id', student.id);
-
-      const takenIds = new Set((submissions || []).map((s: any) => s.test_id));
-      const pending = applicable.filter((t: any) => !takenIds.has(t.id));
-      setPendingTestCount(pending.length);
-    } catch (err) {
-      console.warn('Badge count fetch error:', err);
-    }
-  };
+  // Navigate to community screen when tapping a community push notification
+  useEffect(() => {
+    const tapSub = Notifications.addNotificationResponseReceivedListener(response => {
+      const screen = response.notification.request.content.data?.screen;
+      if (screen === 'community') {
+        router.push('/(student)/community');
+      }
+    });
+    // Increment community badge when notification arrives while app is open (but NOT if community is visible)
+    const receiveSub = Notifications.addNotificationReceivedListener(notification => {
+      const screen = notification.request.content.data?.screen;
+      if (screen === 'community' && !useNotificationStore.getState().communityIsOpen) {
+        const curr = useNotificationStore.getState().studentCommunityUnreadCount;
+        useNotificationStore.getState().setStudentCommunityUnreadCount(curr + 1);
+      }
+    });
+    return () => { tapSub.remove(); receiveSub.remove(); };
+  }, [router]);
 
   return (
     <>
@@ -117,6 +110,7 @@ export default function StudentLayout() {
         name="community"
         options={{
           tabBarStyle: { display: 'none' },
+          tabBarBadge: studentCommunityUnreadCount > 0 ? studentCommunityUnreadCount : undefined,
           tabBarIcon: ({ focused }) => (
             <TabIcon
               name={focused ? 'megaphone' : 'megaphone-outline'}
@@ -129,7 +123,7 @@ export default function StudentLayout() {
       <Tabs.Screen
         name="test"
         options={{
-          tabBarBadge: pendingTestCount > 0 ? pendingTestCount : undefined,
+          tabBarBadge: studentPendingTestCount > 0 ? studentPendingTestCount : undefined,
           tabBarIcon: ({ focused }) => (
             <TabIcon
               name={focused ? 'document-text' : 'document-text-outline'}
@@ -137,12 +131,6 @@ export default function StudentLayout() {
               focused={focused}
             />
           ),
-        }}
-        listeners={{
-          tabPress: () => {
-            // Clear badge when tab is pressed
-            setPendingTestCount(0);
-          },
         }}
       />
       <Tabs.Screen
@@ -174,6 +162,7 @@ export default function StudentLayout() {
       <Tabs.Screen name="test/result/[id]" options={{ href: null }} />
       <Tabs.Screen name="notes" options={{ href: null }} />
       <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
+      <Tabs.Screen name="lab" options={{ href: null }} />
       </Tabs>
     </>
   );

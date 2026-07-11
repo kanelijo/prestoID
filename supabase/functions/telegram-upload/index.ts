@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
 
 const corsHeaders = {
@@ -34,12 +35,17 @@ serve(async (req) => {
     }
     const documentBlob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
 
+    // Detect if the file is an image (excluding GIFs which should stay as documents)
+    const isImage = mimeType && mimeType.startsWith('image/') && !mimeType.includes('gif');
+    const endpoint = isImage ? 'sendPhoto' : 'sendDocument';
+    const paramName = isImage ? 'photo' : 'document';
+
     // Forward to Telegram
     const telegramFormData = new FormData();
     telegramFormData.append('chat_id', CHANNEL_ID);
-    telegramFormData.append('document', documentBlob, fileName || 'upload.file');
+    telegramFormData.append(paramName, documentBlob, fileName || (isImage ? 'upload.jpg' : 'upload.file'));
 
-    const telegramRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, {
+    const telegramRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${endpoint}`, {
       method: 'POST',
       body: telegramFormData,
     });
@@ -57,8 +63,10 @@ serve(async (req) => {
       throw new Error('Telegram did not return a valid file_id.');
     }
 
+    const messageId = telegramResult.result?.message_id || null;
+
     return new Response(
-      JSON.stringify({ success: true, file_id: fileId }),
+      JSON.stringify({ success: true, file_id: fileId, message_id: messageId }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     )
   } catch (error) {

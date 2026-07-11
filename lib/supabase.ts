@@ -22,6 +22,7 @@ try {
   GoogleSignin.configure({
     webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
     offlineAccess: true,
+    scopes: ['https://www.googleapis.com/auth/drive.appdata'],
   });
 } catch (e) {
   console.warn('GoogleSignin config error in supabase.ts:', e);

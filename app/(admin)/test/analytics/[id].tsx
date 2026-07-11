@@ -10,13 +10,13 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 
-type Tab = 'leaderboard' | 'participants' | 'questions';
+type Tab = 'students' | 'questions';
 
 export default function TestAnalyticsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
 
-  const [activeTab, setActiveTab] = useState<Tab>('leaderboard');
+  const [activeTab, setActiveTab] = useState<Tab>('students');
   const [isLoading, setIsLoading] = useState(true);
   const [testTitle, setTestTitle] = useState('');
   const [totalStudents, setTotalStudents] = useState(0);
@@ -49,14 +49,104 @@ export default function TestAnalyticsScreen() {
       const { count } = await countQuery;
       setTotalStudents(count || 0);
 
-      // 3. All submissions with student name
-      const { data: subs } = await supabase
+      // 3. Fetch submissions robustly
+      let finalSubs = [];
+      const { data: subs, error: subErr } = await supabase
         .from('test_submissions')
-        .select('*, students(name, batch_name, avatar_url)')
+        .select('*, students(name, batch_name, photo_url)')
         .eq('test_id', id)
         .order('score', { ascending: false });
 
-      setSubmissions(subs || []);
+      const needsFallback = subErr || !subs || subs.some((s: any) => !s.students || Array.isArray(s.students));
+      
+      if (needsFallback) {
+        // Fallback if join fails or returns null students
+        const { data: basicSubs } = await supabase
+          .from('test_submissions')
+          .select('*')
+          .eq('test_id', id)
+          .order('score', { ascending: false });
+        if (basicSubs && basicSubs.length > 0) {
+          const studentIds = [...new Set(basicSubs.map((s: any) => s.student_id))];
+          const { data: studentRecords } = await supabase
+            .from('students')
+            .select('id, name, batch_name, photo_url')
+            .in('id', studentIds);
+            
+          const studentMap = (studentRecords || []).reduce((acc: any, st: any) => {
+            acc[st.id] = {
+              ...st,
+              avatar_url: st.photo_url || null
+            };
+            return acc;
+          }, {});
+          
+          finalSubs = basicSubs.map((sub: any) => ({
+            ...sub,
+            students: studentMap[sub.student_id] || null
+          }));
+        } else {
+          finalSubs = [];
+        }
+      } else {
+        // Use the joined data, but ensure it's not an array
+        finalSubs = subs.map((sub: any) => {
+          const st = Array.isArray(sub.students) ? sub.students[0] : sub.students;
+          return {
+            ...sub,
+            students: st ? { ...st, avatar_url: st.photo_url || null } : null
+          };
+        });
+      }
+
+      // Resolve any "Unknown" student names via profiles table fallback
+      const missingNameSubmissions = finalSubs.filter((s: any) => !s.students || !s.students.name || s.students.name === 'Unknown');
+      if (missingNameSubmissions.length > 0) {
+        const studentIds = missingNameSubmissions.map((s: any) => s.student_id);
+        const { data: studentUserIds } = await supabase
+          .from('students')
+          .select('id, user_id')
+          .in('id', studentIds);
+          
+        if (studentUserIds && studentUserIds.length > 0) {
+          const userIds = studentUserIds.map((s: any) => s.user_id).filter(Boolean);
+          const { data: profileRecords } = await supabase
+            .from('profiles')
+            .select('id, name, avatar_url')
+            .in('id', userIds);
+            
+          if (profileRecords && profileRecords.length > 0) {
+            const profileMap = profileRecords.reduce((acc: any, p: any) => {
+              acc[p.id] = p;
+              return acc;
+            }, {});
+            const studentUserMap = studentUserIds.reduce((acc: any, s: any) => {
+              acc[s.id] = s.user_id;
+              return acc;
+            }, {});
+            
+            finalSubs = finalSubs.map((sub: any) => {
+              if (!sub.students || !sub.students.name || sub.students.name === 'Unknown') {
+                const uId = studentUserMap[sub.student_id];
+                const prof = uId ? profileMap[uId] : null;
+                if (prof) {
+                  return {
+                    ...sub,
+                    students: {
+                      ...(sub.students || {}),
+                      name: prof.name || 'Unknown Student',
+                      avatar_url: prof.avatar_url || (sub.students?.avatar_url || null)
+                    }
+                  };
+                }
+              }
+              return sub;
+            });
+          }
+        }
+      }
+
+      setSubmissions(finalSubs);
 
       // 4. Questions for analysis
       const { data: qs } = await supabase
@@ -99,30 +189,41 @@ export default function TestAnalyticsScreen() {
   };
 
   // ─── Renders ──────────────────────────────────────────────────────────────
+  const [selectedStudent, setSelectedStudent] = useState<any>(null);
+
   const renderLeaderRow = ({ item, index }: { item: any; index: number }) => {
     const rank = index + 1;
     return (
-      <View style={[styles.row, rank <= 3 && { backgroundColor: Colors.bg.tertiary, borderColor: medalColor(rank) + '40' }]}>
+      <TouchableOpacity 
+        style={[styles.row, rank <= 3 && { backgroundColor: Colors.bg.tertiary, borderColor: medalColor(rank) + '40' }]}
+        activeOpacity={0.75}
+        onPress={() => setSelectedStudent(item)}
+      >
         <View style={styles.rankBox}>
           {rank <= 3
             ? <Ionicons name="trophy" size={18} color={medalColor(rank)} />
             : <Text style={styles.rankNum}>{rank}</Text>}
         </View>
-        <View style={styles.avatarPlaceholder}>
-          <Text style={styles.avatarInitial}>{(item.students?.name || '?').charAt(0).toUpperCase()}</Text>
-        </View>
-        <View style={{ flex: 1 }}>
+        {item.students?.avatar_url ? (
+          <Image source={{ uri: item.students.avatar_url }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+        ) : (
+          <View style={styles.avatarPlaceholder}>
+            <Text style={styles.avatarInitial}>{(item.students?.name || '?').charAt(0).toUpperCase()}</Text>
+          </View>
+        )}
+        <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={styles.rowName}>{item.students?.name || 'Unknown'}</Text>
-          <Text style={styles.rowSub}>{item.students?.batch_name || ''}</Text>
+          <Text style={styles.rowSub}>
+            {item.students?.batch_name ? `${item.students.batch_name} • ` : ''}
+            {new Date(item.submitted_at).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </Text>
         </View>
         <View style={styles.scorePill}>
           <Text style={styles.scoreText}>{item.score ?? '–'}%</Text>
         </View>
-      </View>
+      </TouchableOpacity>
     );
   };
-
-  const [selectedStudent, setSelectedStudent] = useState<any>(null);
 
   const renderParticipantRow = ({ item }: { item: any }) => (
     <TouchableOpacity
@@ -130,10 +231,14 @@ export default function TestAnalyticsScreen() {
       activeOpacity={0.75}
       onPress={() => setSelectedStudent(item)}
     >
-      <View style={styles.avatarPlaceholder}>
-        <Text style={styles.avatarInitial}>{(item.students?.name || '?').charAt(0).toUpperCase()}</Text>
-      </View>
-      <View style={{ flex: 1 }}>
+      {item.students?.avatar_url ? (
+        <Image source={{ uri: item.students.avatar_url }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+      ) : (
+        <View style={styles.avatarPlaceholder}>
+          <Text style={styles.avatarInitial}>{(item.students?.name || '?').charAt(0).toUpperCase()}</Text>
+        </View>
+      )}
+      <View style={{ flex: 1, marginLeft: 12 }}>
         <Text style={styles.rowName}>{item.students?.name || 'Unknown'}</Text>
         <Text style={styles.rowSub}>
           Submitted {new Date(item.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
@@ -145,10 +250,16 @@ export default function TestAnalyticsScreen() {
       <Ionicons name="chevron-forward" size={16} color={Colors.text.tertiary} />
     </TouchableOpacity>
   );
-
   const renderQuestionRow = ({ item }: { item: any }) => {
     const optLabels = ['A', 'B', 'C', 'D'];
     const barWidth = `${item.accuracy}%`;
+
+    // Calculate average time spent on this question
+    const qTimes = submissions.map(sub => sub.time_logs?.[item.id] || 0).filter(t => t > 0);
+    const avgTimeSpent = qTimes.length > 0 
+      ? Math.round(qTimes.reduce((a, b) => a + b, 0) / qTimes.length) 
+      : 0;
+
     return (
       <View style={styles.qCard}>
         <View style={styles.qHeader}>
@@ -171,6 +282,12 @@ export default function TestAnalyticsScreen() {
           <View style={styles.correctBadge}>
             <Text style={styles.correctBadgeText}>Option {optLabels[item.correct_option]}</Text>
           </View>
+          {avgTimeSpent > 0 && (
+            <View style={[styles.correctBadge, { backgroundColor: '#f0f0f0', marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 3 }]}>
+              <Ionicons name="time-outline" size={12} color="#666" />
+              <Text style={[styles.correctBadgeText, { color: '#666' }]}>Avg: {avgTimeSpent}s</Text>
+            </View>
+          )}
         </View>
 
         {/* Accuracy bar */}
@@ -206,56 +323,36 @@ export default function TestAnalyticsScreen() {
       {/* Stats Row */}
       <LinearGradient colors={Gradients.primary as [string, string]} style={styles.statsRow}>
         <View style={styles.statBox}>
-          <Text style={styles.statVal}>{totalStudents}</Text>
-          <Text style={styles.statLabel}>Enrolled</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statBox}>
           <Text style={styles.statVal}>{appeared}</Text>
           <Text style={styles.statLabel}>Appeared</Text>
         </View>
         <View style={styles.statDivider} />
         <View style={styles.statBox}>
-          <Text style={styles.statVal}>{totalStudents > 0 ? Math.round((appeared / totalStudents) * 100) : 0}%</Text>
-          <Text style={styles.statLabel}>Turnout</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statBox}>
-          <Text style={styles.statVal}>{avgScore}%</Text>
+          <Text style={styles.statVal}>{avgScore}</Text>
           <Text style={styles.statLabel}>Avg Score</Text>
         </View>
       </LinearGradient>
 
       {/* Tabs */}
       <View style={styles.tabs}>
-        {(['leaderboard', 'participants', 'questions'] as Tab[]).map(tab => (
+        {(['students', 'questions'] as Tab[]).map(tab => (
           <TouchableOpacity
             key={tab}
             style={[styles.tab, activeTab === tab && styles.tabActive]}
             onPress={() => setActiveTab(tab)}
           >
             <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
-              {tab === 'leaderboard' ? '🏆 Top 20' : tab === 'participants' ? '👥 All' : '📊 Analysis'}
+              {tab === 'students' ? '🏆 Leaderboard & Students' : '📊 Analysis'}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
 
       {/* Content */}
-      {activeTab === 'leaderboard' && (
-        <FlatList
-          data={top20}
-          renderItem={renderLeaderRow}
-          keyExtractor={item => item.id}
-          contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<Text style={styles.emptyText}>No submissions yet</Text>}
-        />
-      )}
-
-      {activeTab === 'participants' && (
+      {activeTab === 'students' && (
         <FlatList
           data={submissions}
-          renderItem={renderParticipantRow}
+          renderItem={(props) => props.index < 20 ? renderLeaderRow(props) : renderParticipantRow(props)}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={<Text style={styles.emptyText}>No submissions yet</Text>}
@@ -284,20 +381,38 @@ export default function TestAnalyticsScreen() {
             <TouchableOpacity onPress={() => setSelectedStudent(null)} style={styles.backBtn}>
               <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
             </TouchableOpacity>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.pageTitle} numberOfLines={1}>{selectedStudent?.students?.name || 'Student'}</Text>
-              <Text style={styles.pageSubtitle}>Individual Test Analysis</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+              {selectedStudent?.students?.avatar_url ? (
+                <Image source={{ uri: selectedStudent.students.avatar_url }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Text style={styles.avatarInitial}>{selectedStudent?.students?.name?.[0] || '?'}</Text>
+                </View>
+              )}
+              <View>
+                <Text style={styles.pageTitle} numberOfLines={1}>{selectedStudent?.students?.name || 'Unknown Student'}</Text>
+                <Text style={styles.pageSubtitle}>Individual Test Analysis</Text>
+              </View>
             </View>
             <View style={[styles.scorePill, { marginRight: 4 }]}>
               <Text style={styles.scoreText}>{selectedStudent?.score ?? '–'}%</Text>
             </View>
           </View>
 
-          {/* Correct / Wrong summary */}
+          {/* Correct / Wrong / Skipped summary */}
           {selectedStudent && (() => {
+            let correct = 0;
+            let wrong = 0;
+            let skipped = 0;
             const totalQ = selectedStudent.total_questions || questions.length;
-            const correct = Math.round(((selectedStudent.score ?? 0) / 100) * totalQ);
-            const wrong = totalQ - correct;
+            
+            questions.forEach(q => {
+              const ans = selectedStudent.answers?.[q.id];
+              if (ans === undefined || ans === null) skipped++;
+              else if (ans === q.correct_option) correct++;
+              else wrong++;
+            });
+
             return (
               <View style={{ flexDirection: 'row', paddingHorizontal: 16, marginBottom: 12, gap: 8 }}>
                 <View style={[styles.statBox, { flex: 1, backgroundColor: Colors.status.success + '15', borderRadius: 12, paddingVertical: 10 }]}>
@@ -308,9 +423,9 @@ export default function TestAnalyticsScreen() {
                   <Text style={[styles.statVal, { color: Colors.status.danger, fontSize: 20 }]}>{wrong}</Text>
                   <Text style={[styles.statLabel, { color: Colors.status.danger }]}>Wrong</Text>
                 </View>
-                <View style={[styles.statBox, { flex: 1, backgroundColor: Colors.bg.secondary, borderRadius: 12, paddingVertical: 10, borderWidth: 1, borderColor: Colors.card.border }]}>
-                  <Text style={[styles.statVal, { fontSize: 20 }]}>{totalQ}</Text>
-                  <Text style={styles.statLabel}>Total</Text>
+                <View style={[styles.statBox, { flex: 1, backgroundColor: '#ECEFF1', borderRadius: 12, paddingVertical: 10 }]}>
+                  <Text style={[styles.statVal, { color: '#546E7A', fontSize: 20 }]}>{skipped}</Text>
+                  <Text style={[styles.statLabel, { color: '#546E7A' }]}>Skipped</Text>
                 </View>
               </View>
             );
@@ -361,6 +476,33 @@ export default function TestAnalyticsScreen() {
                       );
                     })}
                   </View>
+                  
+                  {/* Time taken (Visual Progress Bar) */}
+                  {selectedStudent?.time_logs?.[q.id] !== undefined && (() => {
+                    const timeLogs = selectedStudent?.time_logs || {};
+                    const times = Object.values(timeLogs).map((t: any) => Number(t) || 0);
+                    const maxTime = Math.max(...times, 1);
+                    const timeTaken = timeLogs[q.id] || 0;
+                    const barWidthPercentage = Math.max(8, (timeTaken / maxTime) * 100);
+                    const barColor = isSkipped 
+                      ? '#D1D1D6' 
+                      : isCorrect ? Colors.status.success : Colors.status.danger;
+
+                    return (
+                      <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.card.border }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                            <Ionicons name="time-outline" size={14} color={Colors.text.tertiary} />
+                            <Text style={{ fontSize: 12, color: Colors.text.tertiary, fontWeight: '500' }}>Time spent:</Text>
+                          </View>
+                          <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.secondary }}>{timeTaken}s</Text>
+                        </View>
+                        <View style={{ height: 8, backgroundColor: Colors.bg.tertiary, borderRadius: 4, overflow: 'hidden' }}>
+                          <View style={{ height: '100%', width: `${barWidthPercentage}%`, backgroundColor: barColor, borderRadius: 4 }} />
+                        </View>
+                      </View>
+                    );
+                  })()}
                 </View>
               );
             }}

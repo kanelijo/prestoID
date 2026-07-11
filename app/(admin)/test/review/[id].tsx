@@ -379,7 +379,7 @@ export default function TestReviewScreen() {
                       tokens,
                       'New Test Published 📝',
                       `A new test "${testDetails?.title || 'Mock Test'}" has been published. Duration: ${testDetails?.duration_minutes || 60} mins.`,
-                      { screen: 'test' },
+                      { screen: 'test', testId: id },
                       1,
                       CHANNELS.tests
                     );
@@ -471,11 +471,6 @@ export default function TestReviewScreen() {
             )}
           </View>
         ))}
-
-        <TouchableOpacity style={styles.addQuestionCardBtn} onPress={() => openEditModal({ id: 'new-q' })}>
-          <Ionicons name="add-circle-outline" size={24} color={Colors.accent.primary} />
-          <Text style={styles.addQuestionCardBtnText}>Add Question Manually</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       <View style={styles.footer}>

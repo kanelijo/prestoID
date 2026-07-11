@@ -37,14 +37,29 @@ interface Notification {
   read: boolean;
 }
 
+// Helper to safely access colors during module boot (immunizes against circular imports in background tasks!)
+const getThemeColor = (path: string, fallback: string) => {
+  try {
+    const parts = path.split('.');
+    let current: any = Colors;
+    for (const part of parts) {
+      if (current === undefined || current === null) return fallback;
+      current = current[part];
+    }
+    return current || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const NOTIFICATION_CONFIG: Record<
   NotificationType,
   { icon: keyof typeof Ionicons.glyphMap; tint: string; label: string }
 > = {
-  fee_payment: { icon: 'wallet', tint: Colors.status.success, label: 'Fee Payment Received' },
-  new_student: { icon: 'person-add', tint: Colors.status.info, label: 'New Student Registered' },
-  attendance: { icon: 'calendar', tint: Colors.accent.primary, label: 'Attendance Alert' },
-  system: { icon: 'information-circle', tint: Colors.status.warning, label: 'System Update' },
+  fee_payment: { icon: 'wallet', tint: getThemeColor('status.success', '#34C759'), label: 'Fee Payment Received' },
+  new_student: { icon: 'person-add', tint: getThemeColor('status.info', '#007AFF'), label: 'New Student Registered' },
+  attendance: { icon: 'calendar', tint: getThemeColor('accent.primary', '#AF2800'), label: 'Attendance Alert' },
+  system: { icon: 'information-circle', tint: getThemeColor('status.warning', '#FF9500'), label: 'System Update' },
 };
 
 const formatTimeAgo = (date: Date) => {

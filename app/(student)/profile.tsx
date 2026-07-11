@@ -21,6 +21,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Shadows } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { supabase, signOutAll } from '@/lib/supabase';
+import { backupProcedure } from '@/lib/backupService';
 
 const HELP_TOPICS = [
   { q: 'How is attendance marked?', a: 'Your attendance is registered instantly when your virtual ID Card QR code is scanned by your organization staff.' },
@@ -45,6 +46,12 @@ export default function StudentSettingsScreen() {
   const [isChangePasswordVisible, setIsChangePasswordVisible] = useState(false);
   const [isTermsVisible, setIsTermsVisible] = useState(false);
   const [isHelpVisible, setIsHelpVisible] = useState(false);
+  const [isUpcomingVisible, setIsUpcomingVisible] = useState(false);
+  
+  // Backup progress states
+  const [isBackupProgressVisible, setIsBackupProgressVisible] = useState(false);
+  const [backupStep, setBackupStep] = useState<'authorizing' | 'preparing' | 'compressing' | 'encrypting' | 'uploading' | 'cleaning' | 'success' | 'failed' | null>(null);
+  const [backupDetail, setBackupDetail] = useState('');
   
   // Settings switches
   const [attendanceAlerts, setAttendanceAlerts] = useState(true);
@@ -380,6 +387,36 @@ export default function StudentSettingsScreen() {
 
             <View style={styles.divider} />
 
+            <TouchableOpacity 
+              style={styles.menuRow} 
+              onPress={() => {
+                if (!user?.id) return;
+                setIsBackupProgressVisible(true);
+                setBackupStep('authorizing');
+                setBackupDetail('Connecting to Google Drive...');
+                
+                setTimeout(async () => {
+                  try {
+                    await backupProcedure(user.id, (step, detail) => {
+                      setBackupStep(step);
+                      if (detail) {
+                        setBackupDetail(detail);
+                      }
+                    });
+                  } catch (err: any) {
+                    setBackupStep('failed');
+                    setBackupDetail(err.message || 'Backup failed.');
+                  }
+                }, 100);
+              }}
+            >
+              <Ionicons name="cloud-upload-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
+              <Text style={styles.menuLabel}>Force Data Backup</Text>
+              <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
             <TouchableOpacity style={styles.menuRow} onPress={() => setIsHelpVisible(true)}>
               <Ionicons name="help-circle-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
               <Text style={styles.menuLabel}>Help & Support</Text>
@@ -391,6 +428,26 @@ export default function StudentSettingsScreen() {
             <TouchableOpacity style={styles.menuRow} onPress={() => setIsTermsVisible(true)}>
               <Ionicons name="document-text-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
               <Text style={styles.menuLabel}>Terms & Privacy Policy</Text>
+              <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Lab Settings */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Experimental</Text>
+          <View style={styles.card}>
+            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(student)/lab')}>
+              <Ionicons name="beaker-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
+              <Text style={styles.menuLabel}>UI Design Lab</Text>
+              <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <TouchableOpacity style={styles.menuRow} onPress={() => setIsUpcomingVisible(true)}>
+              <Ionicons name="rocket-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
+              <Text style={styles.menuLabel}>Upcoming Features</Text>
               <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
             </TouchableOpacity>
           </View>
@@ -671,6 +728,127 @@ export default function StudentSettingsScreen() {
             <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setIsTermsVisible(false)}>
               <Text style={styles.modalCancelText}>Close</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Upcoming Features Modal */}
+      <Modal visible={isUpcomingVisible} animationType="slide" transparent={true} onRequestClose={() => setIsUpcomingVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, { maxWidth: 450, width: '90%' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 15 }}>
+              <Ionicons name="rocket" size={24} color={Colors.accent.primary} style={{ marginRight: 8 }} />
+              <Text style={[styles.modalTitle, { marginBottom: 0 }]}>Upcoming Features</Text>
+            </View>
+            <ScrollView style={{ maxHeight: 350, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
+              <Text style={styles.documentHeader}>1. ZenZa Community</Text>
+              <Text style={styles.documentBody}>
+                Chat with any other student in your coaching securely. Privacy is our top priority—you'll connect through a follow request system.
+              </Text>
+
+              <Text style={styles.documentHeader}>2. In-App Fee Payments</Text>
+              <Text style={styles.documentBody}>
+                Pay your tuition and fees directly within Kanelijo via UPI, cards, and net banking with instant digital receipts.
+              </Text>
+
+              <Text style={styles.documentHeader}>3. Parents Attendance Alert</Text>
+              <Text style={styles.documentBody}>
+                Automated SMS and push notifications to parents the moment attendance is marked or if a student is absent.
+              </Text>
+
+              <Text style={styles.documentHeader}>4. Teacher Branding Royalties</Text>
+              <Text style={styles.documentBody}>
+                A complete ecosystem for teachers to monetize their brand, premium content, and exclusive live sessions directly through the app.
+              </Text>
+            </ScrollView>
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={() => setIsUpcomingVisible(false)}>
+              <Text style={styles.modalSaveText}>Awesome!</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Backup Progress Modal */}
+      <Modal visible={isBackupProgressVisible} transparent animationType="fade" onRequestClose={() => {
+        if (backupStep === 'success' || backupStep === 'failed') {
+          setIsBackupProgressVisible(false);
+        }
+      }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: Colors.bg.primary, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.1, shadowRadius: 12, elevation: 5, borderWidth: 1, borderColor: Colors.card.border }}>
+            <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginBottom: 8, textAlign: 'center' }}>Google Drive Backup</Text>
+            <Text style={{ fontSize: 13, color: Colors.text.tertiary, textAlign: 'center', marginBottom: 24 }}>{backupDetail}</Text>
+
+            {/* Steps List */}
+            <View style={{ gap: 14, marginBottom: 24 }}>
+              {[
+                { key: 'authorizing', label: 'Google Account Authorization' },
+                { key: 'preparing', label: 'Database Snapshot' },
+                { key: 'compressing', label: 'ZIP Compression' },
+                { key: 'encrypting', label: 'AES-256 Encryption' },
+                { key: 'uploading', label: 'Upload Payload to Drive' },
+                { key: 'cleaning', label: 'Workspace Cleanup' },
+              ].map((stepItem, idx, arr) => {
+                const stepKeys = arr.map(x => x.key);
+                const currentIdx = stepKeys.indexOf(backupStep || 'authorizing');
+                const selfIdx = idx;
+
+                let iconName: any = 'ellipse-outline';
+                let iconColor = Colors.text.tertiary;
+                let isCurrent = false;
+
+                if (backupStep === 'success') {
+                  iconName = 'checkmark-circle';
+                  iconColor = Colors.status.success;
+                } else if (backupStep === 'failed') {
+                  if (selfIdx < currentIdx) {
+                    iconName = 'checkmark-circle';
+                    iconColor = Colors.status.success;
+                  } else if (selfIdx === currentIdx) {
+                    iconName = 'close-circle';
+                    iconColor = Colors.status.danger;
+                  } else {
+                    iconName = 'ellipse-outline';
+                    iconColor = Colors.text.tertiary;
+                  }
+                } else {
+                  if (selfIdx < currentIdx) {
+                    iconName = 'checkmark-circle';
+                    iconColor = Colors.status.success;
+                  } else if (selfIdx === currentIdx) {
+                    isCurrent = true;
+                  } else {
+                    iconName = 'ellipse-outline';
+                    iconColor = Colors.text.tertiary;
+                  }
+                }
+
+                return (
+                  <View key={stepItem.key} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    {isCurrent ? (
+                      <ActivityIndicator size="small" color={Colors.accent.primary} style={{ width: 20, height: 20 }} />
+                    ) : (
+                      <Ionicons name={iconName} size={20} color={iconColor} />
+                    )}
+                    <Text style={{ fontSize: 13, fontWeight: isCurrent ? '700' : '500', color: isCurrent ? Colors.accent.primary : (selfIdx < currentIdx || backupStep === 'success' ? Colors.text.primary : Colors.text.secondary) }}>
+                      {stepItem.label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            {/* Bottom Button */}
+            {(backupStep === 'success' || backupStep === 'failed') && (
+              <TouchableOpacity
+                style={{ backgroundColor: backupStep === 'success' ? Colors.status.success : Colors.status.danger, paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}
+                onPress={() => setIsBackupProgressVisible(false)}
+              >
+                <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>
+                  {backupStep === 'success' ? 'Finished' : 'Close'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </Modal>

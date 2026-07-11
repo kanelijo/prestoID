@@ -163,10 +163,11 @@ export default function ClaimProfileScreen() {
 
           if (adminProf?.push_token) {
             await sendPushNotification(
-              adminProf.push_token,
+              [adminProf.push_token],
               '🆕 New Student Registered',
               `${studentRecord.name} has claimed their profile and joined ${business.business_name}!`,
               { studentId: studentRecord.id, type: 'new_student' },
+              undefined,
               CHANNELS.admin
             );
           }

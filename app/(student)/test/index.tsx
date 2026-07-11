@@ -7,18 +7,12 @@ import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
-// Mock Data
-const MOCK_PENDING = [
-  { id: 'demo-test-id', title: 'MPPSC Prelims Mock 1', duration_minutes: 60, target_batches: ['MPPSC'], scheduled_at: new Date(Date.now() + 86400000).toISOString() },
-  { id: '2', title: 'Weekly Current Affairs', duration_minutes: 30, target_batches: ['All'], scheduled_at: new Date().toISOString() },
-];
-const MOCK_COMPLETED = [
-  { id: '3', test_id: '10', tests: { title: 'History Quiz 1', duration_minutes: 45 }, score: 85, total_questions: 100, submitted_at: new Date(Date.now() - 86400000).toISOString() }
-];
+import { useNotificationStore } from '@/stores/useNotificationStore';
 
 export default function StudentTestScreen() {
   const router = useRouter();
   const { verified, user } = useAuthStore();
+  const { fetchStudentPendingTestCount } = useNotificationStore();
   const activeStudentId = user?.id;
   
   const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
@@ -30,21 +24,25 @@ export default function StudentTestScreen() {
   const fetchTests = async (silent = false) => {
     if (!silent) setIsLoading(true);
     if (!verified || !activeStudentId) {
-      setPendingTests(MOCK_PENDING);
-      setCompletedTests(MOCK_COMPLETED);
+      setPendingTests([]);
+      setCompletedTests([]);
       setIsLoading(false);
+      setIsRefreshing(false);
       return;
     }
 
     try {
       // Get student details to match batch
-      const { data: student } = await supabase
+      const { data: studentsList, error: stErr } = await supabase
         .from('students')
         .select('id, batch_name, business_id')
         .eq('user_id', activeStudentId)
-        .single();
+        .limit(1);
         
-      if (!student) throw new Error("Student not found");
+      if (stErr) throw stErr;
+      if (!studentsList || studentsList.length === 0) throw new Error("Student not found");
+      
+      const student = studentsList[0];
 
       // Get ALL published tests for this institute
       const { data: allTests, error: testErr } = await supabase
@@ -52,16 +50,17 @@ export default function StudentTestScreen() {
         .select('*')
         .eq('business_id', student.business_id)
         .eq('status', 'published')
+        .neq('is_deleted', true)
         .order('created_at', { ascending: false });
 
       if (testErr) throw testErr;
 
       // Filter by batch match (tests that match the student's batch, or are set to null / 'All')
-      const applicableTests = (allTests || []).filter((t: any) => 
-        !t.batch_name ||
-        t.batch_name === 'All' || 
-        t.batch_name === student.batch_name
-      );
+      const applicableTests = (allTests || []).filter((t: any) => {
+        if (!t.batch_name || t.batch_name === 'All') return true;
+        const testBatch = Array.isArray(t.batch_name) ? t.batch_name[0] : String(t.batch_name);
+        return testBatch.toLowerCase().trim() === String(student.batch_name || '').toLowerCase().trim();
+      });
 
       // Get submissions to see what is already taken
       const { data: submissions, error: subErr } = await supabase
@@ -69,18 +68,28 @@ export default function StudentTestScreen() {
         .select('*, tests(*)')
         .eq('student_id', student.id);
 
-      if (subErr) throw subErr;
+      // If tests(*) fails due to FK issues, just fetch submissions normally
+      let safeSubmissions = submissions;
+      if (subErr) {
+        console.warn('Submissions fetch with tests(*) failed, trying fallback:', subErr);
+        const { data: fallbackSubs, error: fbErr } = await supabase
+          .from('test_submissions')
+          .select('*')
+          .eq('student_id', student.id);
+        if (fbErr) throw fbErr;
+        safeSubmissions = fallbackSubs;
+      }
 
-      const takenTestIds = new Set((submissions || []).map((s: any) => s.test_id));
+      const takenTestIds = new Set((safeSubmissions || []).map((s: any) => s.test_id));
       
       const pending = applicableTests.filter((t: any) => !takenTestIds.has(t.id));
       
       setPendingTests(pending);
-      setCompletedTests(submissions || []);
+      setCompletedTests(safeSubmissions || []);
     } catch (err) {
       console.warn(err);
-      setPendingTests(MOCK_PENDING);
-      setCompletedTests(MOCK_COMPLETED);
+      setPendingTests([]);
+      setCompletedTests([]);
     } finally {
       if (!silent) setIsLoading(false);
       setIsRefreshing(false);
@@ -90,10 +99,18 @@ export default function StudentTestScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchTests();
-      // Re-fetch badge count in parent layout when this screen is focused
-      // The layout's pendingTestCount will update on next render
+      if (activeStudentId) {
+        fetchStudentPendingTestCount(activeStudentId);
+      }
     }, [verified, activeStudentId])
   );
+
+  // Fallback for initial boot when auth state resolves while already focused
+  useEffect(() => {
+    if (verified && activeStudentId) {
+      fetchTests(true);
+    }
+  }, [verified, activeStudentId]);
 
   const onRefresh = async () => {
     setIsRefreshing(true);

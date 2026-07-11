@@ -7,6 +7,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Shadows, Gradients } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 
 // Temporary mock data for UI
 const MOCK_TESTS = [
@@ -24,7 +25,7 @@ export default function AdminTestScreen() {
 
   const fetchTests = async (silent = false) => {
     if (!silent) setIsLoading(true);
-    if (!verified || !businessId) {
+    if (!businessId) {
       setTests(MOCK_TESTS);
       setIsLoading(false);
       return;
@@ -35,14 +36,19 @@ export default function AdminTestScreen() {
         .from('tests')
         .select('*')
         .eq('business_id', businessId)
+        .neq('is_deleted', true)
         .order('created_at', { ascending: false });
 
       if (error) throw error;
       setTests(data || []);
     } catch (err: any) {
       console.warn('Failed to load tests:', err);
-      // Fallback to mock data if table doesn't exist yet
-      setTests(MOCK_TESTS);
+      // Fallback to mock data only if table doesn't exist yet
+      if (err?.code === '42P01') {
+        setTests(MOCK_TESTS);
+      } else {
+        setTests([]);
+      }
     } finally {
       if (!silent) setIsLoading(false);
       setIsRefreshing(false);
@@ -80,15 +86,14 @@ export default function AdminTestScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              // Delete questions and submissions first (cascade)
-              await supabase.from('test_questions').delete().eq('test_id', testId);
-              await supabase.from('test_submissions').delete().eq('test_id', testId);
+              // Delete the test row. Database foreign keys will automatically cascade-delete questions and submissions.
               const { error } = await supabase.from('tests').delete().eq('id', testId);
               if (error) throw error;
-              // Remove from local state immediately
+              // Remove from local state on success
               setTests(prev => prev.filter(t => t.id !== testId));
             } catch (err: any) {
-              Alert.alert('Error', 'Failed to delete test. Please try again.');
+              console.warn('Delete error:', err);
+              Alert.alert('Error', 'Failed to delete test. Please make sure you have run the database cascade migration.');
             }
           },
         },
@@ -114,6 +119,54 @@ export default function AdminTestScreen() {
           try {
             await supabase.from('tests').update({ status: 'published' }).eq('id', item.id);
             setTests(prev => prev.map(t => t.id === item.id ? { ...t, status: 'published' } : t));
+
+            // Fetch target students' user_ids to send push notifications
+            try {
+              let studentUserIds: string[] = [];
+              const targetBatch = item.batch_name;
+              
+              if (businessId) {
+                let query = supabase
+                  .from('students')
+                  .select('user_id')
+                  .eq('business_id', businessId)
+                  .not('user_id', 'is', null);
+
+                if (targetBatch && targetBatch !== 'All') {
+                  query = query.eq('batch_name', targetBatch);
+                }
+
+                const { data: studentsList, error: studentsError } = await query;
+                if (!studentsError && studentsList) {
+                  studentUserIds = studentsList.map(s => s.user_id).filter(Boolean) as string[];
+                }
+              }
+
+              if (studentUserIds.length > 0) {
+                const { data: studentProfiles, error: profilesError } = await supabase
+                  .from('profiles')
+                  .select('push_token')
+                  .in('id', studentUserIds)
+                  .not('push_token', 'is', null);
+
+                if (!profilesError && studentProfiles && studentProfiles.length > 0) {
+                  const tokens = studentProfiles.map(p => p.push_token).filter(Boolean) as string[];
+                  if (tokens.length > 0) {
+                    await sendPushNotification(
+                      tokens,
+                      'New Test Published 📝',
+                      `A new test "${item.title || 'Mock Test'}" has been published. Duration: ${item.duration_minutes || 60} mins.`,
+                      { screen: 'test', testId: item.id },
+                      1,
+                      CHANNELS.tests
+                    );
+                  }
+                }
+              }
+            } catch (pushErr) {
+              console.warn('Failed to send push notifications via quick publish:', pushErr);
+            }
+
           } catch (err) {
             Alert.alert('Error', 'Failed to publish test.');
           }
@@ -242,7 +295,17 @@ export default function AdminTestScreen() {
       <TouchableOpacity
         style={styles.fab}
         activeOpacity={0.85}
-        onPress={() => router.push('/(admin)/test/create')}
+        onPress={() => {
+          Alert.alert(
+            'Create New Test',
+            'How would you like to create your test?',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Create Manually', onPress: () => router.push('/(admin)/test/create-manual') },
+              { text: 'Generate with AI', onPress: () => router.push('/(admin)/test/create-ai') }
+            ]
+          );
+        }}
       >
         <LinearGradient
           colors={Gradients.primary as [string, string]}

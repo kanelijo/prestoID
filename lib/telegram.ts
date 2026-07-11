@@ -6,7 +6,7 @@ import { Platform } from 'react-native';
  * Invokes the 'telegram-upload' Supabase Edge Function to securely upload a file.
  * The BOT_TOKEN is kept secret in the Supabase backend.
  */
-export async function uploadToTelegramViaEdge(fileUri: string, fileName: string): Promise<string> {
+export async function uploadToTelegramViaEdge(fileUri: string, fileName: string): Promise<{ fileId: string; messageId: number | null }> {
   const fileInfo = await FileSystem.getInfoAsync(fileUri);
   if (!fileInfo.exists) {
     throw new Error('File does not exist locally.');
@@ -33,14 +33,36 @@ export async function uploadToTelegramViaEdge(fileUri: string, fileName: string)
   });
 
   if (error) {
-    throw new Error(`Edge Function invocation failed: ${error.message}`);
+    let detail = error.message;
+    try {
+      const bodyText = await error.context.text();
+      const parsed = JSON.parse(bodyText);
+      if (parsed?.error) detail = parsed.error;
+    } catch {}
+    throw new Error(`Edge Function invocation failed: ${detail}`);
   }
 
   if (!data || !data.success) {
     throw new Error(`Telegram Upload Failed: ${data?.error || 'Unknown error'}`);
   }
 
-  return data.file_id; // Return the fast-track Telegram file_id
+  return { fileId: data.file_id, messageId: data.message_id || null };
+}
+
+/**
+ * Invokes the 'telegram-delete' Edge Function to delete a message from the Telegram group.
+ */
+export async function deleteTelegramMessage(tgMessageId: number): Promise<boolean> {
+  const { data, error } = await supabase.functions.invoke('telegram-delete', {
+    body: { messageId: tgMessageId },
+  });
+
+  if (error) {
+    console.warn('Failed to delete message from Telegram:', error);
+    return false;
+  }
+
+  return data?.success || false;
 }
 
 /**
@@ -48,12 +70,19 @@ export async function uploadToTelegramViaEdge(fileUri: string, fileName: string)
  * a Telegram file_id into a direct, high-speed download link.
  */
 export async function getTelegramFastLink(tgFileId: string): Promise<string> {
+  const cleanFileId = tgFileId.includes(':') ? tgFileId.split(':')[1] : tgFileId;
   const { data, error } = await supabase.functions.invoke('telegram-resolve', {
-    body: { file_id: tgFileId },
+    body: { file_id: cleanFileId },
   });
 
   if (error) {
-    throw new Error(`Edge Function resolve failed: ${error.message}`);
+    let detail = error.message;
+    try {
+      const bodyText = await error.context.text();
+      const parsed = JSON.parse(bodyText);
+      if (parsed?.error) detail = parsed.error;
+    } catch {}
+    throw new Error(`Edge Function resolve failed: ${detail}`);
   }
 
   if (!data || !data.success) {

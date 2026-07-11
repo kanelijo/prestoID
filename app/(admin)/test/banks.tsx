@@ -171,6 +171,33 @@ export default function TestBanksScreen() {
     }
   };
 
+  const handleDeleteBank = (id: string, name: string) => {
+    Alert.alert(
+      "Delete Material",
+      `Are you sure you want to delete "${name}"? This action cannot be undone.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Delete", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              if (!verified) {
+                setBanks(banks.filter(b => b.id !== id));
+                return;
+              }
+              const { error } = await supabase.from('test_banks').delete().eq('id', id);
+              if (error) throw error;
+              setBanks(banks.filter(b => b.id !== id));
+            } catch (err: any) {
+              Alert.alert("Error", "Failed to delete material: " + err.message);
+            }
+          }
+        }
+      ]
+    );
+  };
+
   const renderBank = ({ item }: { item: any }) => (
     <View style={styles.bankCard}>
       <View style={styles.iconContainer}>
@@ -189,8 +216,8 @@ export default function TestBanksScreen() {
           Added on {new Date(item.created_at).toLocaleDateString()}
         </Text>
       </View>
-      <TouchableOpacity style={styles.menuBtn}>
-        <Ionicons name="ellipsis-vertical" size={20} color={Colors.text.tertiary} />
+      <TouchableOpacity style={styles.menuBtn} onPress={() => handleDeleteBank(item.id, item.name)}>
+        <Ionicons name="trash-outline" size={20} color={Colors.status.danger} />
       </TouchableOpacity>
     </View>
   );

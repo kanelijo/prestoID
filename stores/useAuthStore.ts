@@ -14,6 +14,7 @@ interface AuthState {
   isOnboarded: boolean;
   verified: boolean;
   avatarUrl: string | null;
+  studentData: any | null;
 
   setUser: (user: any) => void;
   setSession: (session: any) => void;
@@ -23,6 +24,7 @@ interface AuthState {
   setOnboarded: (onboarded: boolean) => void;
   setVerified: (verified: boolean) => void;
   setAvatarUrl: (avatarUrl: string | null) => void;
+  setStudentData: (data: any | null) => void;
   reset: () => void;
 }
 
@@ -38,6 +40,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   isOnboarded: false,
   verified: true,
   avatarUrl: null,
+  studentData: null,
 
   setUser: (user) => set({ user }),
   setSession: (session) => set({ session }),
@@ -48,6 +51,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   setOnboarded: (isOnboarded) => set({ isOnboarded }),
   setVerified: (verified) => set({ verified }),
   setAvatarUrl: (avatarUrl) => set({ avatarUrl }),
+  setStudentData: (studentData) => set({ studentData }),
   reset: () =>
     set({
       user: null,
@@ -60,5 +64,6 @@ export const useAuthStore = create<AuthState>((set) => ({
       isLoading: false,
       verified: true,
       avatarUrl: null,
+      studentData: null,
     }),
 }));

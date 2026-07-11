@@ -6,6 +6,12 @@ let Notifications: any = null;
 let Device: any = null;
 let Constants: any = null;
 
+// Track the active screen globally so we can suppress notifications intelligently
+export let currentActiveScreen = '';
+export const setCurrentActiveScreen = (screen: string) => {
+  currentActiveScreen = screen;
+};
+
 try {
   Notifications = require('expo-notifications');
   Device = require('expo-device');
@@ -14,26 +20,38 @@ try {
   console.warn('Notifications module not loaded:', e);
 }
 
-// Configure notification handler — always show banner + sound (like WhatsApp)
 if (Notifications) {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-    }),
+    handleNotification: async (notification: any) => {
+      const channelId = notification.request.trigger.channelId;
+      const data = notification.request.content.data;
+      
+      // If we are on the community screen, and this is a community notification, suppress banner and sound
+      if (currentActiveScreen === 'community' && (channelId === CHANNELS.community || data?.type === 'new_post' || data?.type === 'new_comment' || data?.type === 'new_like' || data?.type === 'new_reply')) {
+         return {
+           shouldPlaySound: false,
+           shouldSetBadge: false,
+           shouldShowAlert: false,
+         };
+      }
+      
+      return {
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowAlert: true,
+      };
+    },
   });
 }
 
 // Notification channel IDs
 export const CHANNELS = {
-  community:  'kf_community',
-  fees:       'kf_fees',
-  tests:      'kf_tests',
-  attendance: 'kf_attendance',
-  admin:      'kf_admin',
-  general:    'kf_general',
+  community:  'kf_community_v2',
+  fees:       'kf_fees_v2',
+  tests:      'kf_tests_v2',
+  attendance: 'kf_attendance_v2',
+  admin:      'kf_admin_v2',
+  general:    'kf_general_v2',
 };
 
 async function ensureChannels() {
@@ -201,7 +219,15 @@ export async function sendPushNotification(
       });
 
       const resData = await response.json();
-      console.log(`Push sent [${token.substring(0, 25)}...]:`, resData?.data?.status);
+      const status = resData?.data?.status || resData?.data?.[0]?.status;
+      
+      if (status === 'error') {
+        const errorMsg = resData?.data?.message || resData?.data?.[0]?.message;
+        const errorDetails = resData?.data?.details || resData?.data?.[0]?.details;
+        console.warn(`Push sent [${token.substring(0, 25)}...]: ERROR - ${errorMsg}`, errorDetails);
+      } else {
+        console.log(`Push sent [${token.substring(0, 25)}...]:`, status);
+      }
     } catch (error) {
       console.error(`Push failed [${token.substring(0, 25)}...]:`, error);
     }
@@ -226,7 +252,7 @@ export async function clearBadgeCount(): Promise<void> {
 /**
  * Trigger a local notification immediately on the device (if notifications module is available).
  */
-export async function scheduleLocalNotification(title: string, body: string): Promise<void> {
+export async function scheduleLocalNotification(title: string, body: string, channelId?: string): Promise<void> {
   if (!Notifications) {
     console.log('Notifications module not loaded: Skipping local notification schedule.');
     return;
@@ -237,7 +263,7 @@ export async function scheduleLocalNotification(title: string, body: string): Pr
       content: {
         title,
         body,
-        channelId: 'presto_alerts',
+        channelId: channelId || CHANNELS.tests,
       },
       trigger: null,
     });

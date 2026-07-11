@@ -24,13 +24,9 @@ async function check() {
       console.log(`ID: ${p.id}`);
       console.log(`  business_id: ${p.business_id}`);
       console.log(`  author_name: ${p.author_name}`);
-      console.log(`  category: ${p.category}`);
       console.log(`  text: "${p.text}"`);
-      console.log(`  created_at: ${p.created_at}`);
-      console.log(`  target_batches: ${JSON.stringify(p.target_batches)}`);
-      console.log(`  likes: ${p.likes}`);
-      console.log(`  liked_by: ${JSON.stringify(p.liked_by)}`);
-      console.log(`  comments: ${JSON.stringify(p.comments)}`);
+      console.log(`  tg_file_id: ${p.tg_file_id}`);
+      console.log(`  is_deleted: ${p.is_deleted}`);
       console.log('-----------------------');
     });
 

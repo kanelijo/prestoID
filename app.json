@@ -9,7 +9,7 @@
     "scheme": "prestoid",
     "icon": "./assets/images/icon.png",
     "notification": {
-      "icon": "./assets/images/icon.png",
+      "icon": "./assets/images/notification_icon.png",
       "color": "#AF2800"
     },
     "splash": {
@@ -24,6 +24,7 @@
       }
     },
     "android": {
+      "launchMode": "singleTask",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
         "backgroundColor": "#FFF8F6"
@@ -59,8 +60,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "0d1fedf0-41a2-4807-946d-88970eb7dc43"
+        "projectId": "21c7809d-2515-4745-b2d6-ea7e6337e0ad"
       }
-    }
+    },
+    "owner": "andrewnks-team"
   }
 }

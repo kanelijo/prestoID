@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Clipboard, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, Linking, ActivityIndicator, Modal, TextInput, KeyboardAvoidingView, Platform, Clipboard, FlatList, Image } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,27 +10,127 @@ import { DEMO_STUDENTS } from './index';
 import { sendPushNotification } from '@/lib/notifications';
 
 // ─── Student Test Analysis Component ─────────────────────────────────────────
-function StudentTestAnalysis({ studentId, businessId, router }: { studentId: string; businessId: string; router: any }) {
+function StudentTestAnalysis({ student, studentId, businessId, router }: { student: any; studentId: string; businessId: string; router: any }) {
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedSub, setSelectedSub] = useState<any>(null);
+  const [questions, setQuestions] = useState<any[]>([]);
+  const [isLoadingQuestions, setIsLoadingQuestions] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [performanceFilter, setPerformanceFilter] = useState<'all' | 'passed' | 'failed'>('all');
+
+  const generateMockSubmissions = (sId: string, sName: string) => {
+    // Generate simple deterministic hashes from the name/ID to seed scores and values uniquely
+    const nameSeed = sName || 'Student';
+    const seed = sId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) + nameSeed.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const score1 = 60 + (seed % 36); // Deterministic score between 60% and 95%
+    const score2 = 30 + ((seed * 3) % 46); // Deterministic score between 30% and 75%
+    
+    // Choose deterministic mock courses/subjects
+    const subjects = ['Mathematics', 'Science & Tech', 'General Studies', 'History & Civics', 'Aptitude Reasoning', 'English Language'];
+    const sub1 = subjects[seed % subjects.length];
+    const sub2 = subjects[(seed + 2) % subjects.length];
+
+    const date1 = new Date(Date.now() - ((seed % 5) + 1) * 24 * 3600 * 1000).toISOString();
+    const date2 = new Date(Date.now() - ((seed % 5) + 6) * 24 * 3600 * 1000).toISOString();
+
+    return [
+      {
+        id: `mock-${sId}-sub-1`,
+        test_id: `mock-test-${seed % 100}`,
+        student_id: sId,
+        score: score1,
+        total_questions: 5,
+        submitted_at: date1,
+        answers: { q1: 1, q2: 3, q3: 0, q4: 2, q5: 1 },
+        time_logs: { q1: 45, q2: 60, q3: 35, q4: 40, q5: 50 },
+        tests: { title: `${sub1} Weekly Revision`, duration_minutes: 45, total_questions: 5 }
+      },
+      {
+        id: `mock-${sId}-sub-2`,
+        test_id: `mock-test-${(seed + 1) % 100}`,
+        student_id: sId,
+        score: score2,
+        total_questions: 4,
+        submitted_at: date2,
+        answers: { q1: 0, q2: 1, q3: 2, q4: 0 },
+        time_logs: { q1: 30, q2: 25, q3: 40, q4: 35 },
+        tests: { title: `${sub2} Monthly Assessment`, duration_minutes: 30, total_questions: 4 }
+      }
+    ];
+  };
 
   useEffect(() => {
     if (!studentId) { setIsLoading(false); return; }
     (async () => {
       try {
+        if (studentId.startsWith('demo-')) {
+          setSubmissions(generateMockSubmissions(studentId, student?.name));
+          setIsLoading(false);
+          return;
+        }
+
         const { data, error } = await supabase
           .from('test_submissions')
-          .select('*, tests(title, duration_minutes, total_questions)')
+          .select('*, tests(title, duration_minutes)')
           .eq('student_id', studentId)
           .order('submitted_at', { ascending: false });
-        if (!error) setSubmissions(data || []);
+        if (!error) {
+          setSubmissions(data || []);
+        } else {
+          setSubmissions([]);
+        }
       } catch (e) {
         console.warn('Failed to load student tests:', e);
       } finally {
         setIsLoading(false);
       }
     })();
-  }, [studentId]);
+  }, [studentId, student?.name]);
+
+  const handleSelectSubmission = async (sub: any) => {
+    setSelectedSub(sub);
+    setIsLoadingQuestions(true);
+    try {
+      if (studentId?.startsWith('demo-') || sub.id.includes('mock-')) {
+        // Generate dynamic mock questions matching the count of the selected mock test
+        const qCount = sub.total_questions || 2;
+        const mockQs = [];
+        const mockQuestionsText = [
+          'What is the primary advantage of a RAG pipeline?',
+          'Why do we use FlatList instead of PagerView for tests?',
+          'Which database structure is optimal for high-throughput messaging write workloads?',
+          'What is the key difference between optimistic updates and background synchronization?',
+          'How does launchMode singleTask prevent multiple instances of the main activity?'
+        ];
+        
+        for (let i = 0; i < qCount; i++) {
+          const qText = mockQuestionsText[i % mockQuestionsText.length];
+          mockQs.push({
+            id: `q${i+1}`,
+            question_text: qText,
+            options: ['Option A Detail description', 'Option B Detail description', 'Option C Detail description', 'Option D Detail description'],
+            correct_option: (i + 1) % 4,
+            explanation: `Detailed explanation for question ${i+1} describing why option ${(i+1)%4 + 1} is correct.`
+          });
+        }
+        setQuestions(mockQs);
+        setIsLoadingQuestions(false);
+        return;
+      }
+
+      const { data: qData, error: qErr } = await supabase
+        .from('test_questions')
+        .select('*')
+        .eq('test_id', sub.test_id)
+        .order('created_at');
+      if (!qErr) setQuestions(qData || []);
+    } catch (e) {
+      console.warn('Failed to load test questions:', e);
+    } finally {
+      setIsLoadingQuestions(false);
+    }
+  };
 
   if (isLoading) return (
     <View style={{ padding: 24, alignItems: 'center' }}>
@@ -53,6 +153,18 @@ function StudentTestAnalysis({ studentId, businessId, router }: { studentId: str
 
   const avgScore = Math.round(submissions.reduce((s, sub) => s + (sub.score ?? 0), 0) / submissions.length);
 
+  const filteredSubmissions = submissions.filter((sub: any) => {
+    const titleMatch = (sub.tests?.title || 'Test').toLowerCase().includes(searchQuery.toLowerCase());
+    const score = sub.score ?? 0;
+    if (performanceFilter === 'passed') {
+      return titleMatch && score >= 40;
+    }
+    if (performanceFilter === 'failed') {
+      return titleMatch && score < 40;
+    }
+    return titleMatch;
+  });
+
   return (
     <View style={styles.sectionCard}>
       <View style={styles.sectionHeader}>
@@ -63,38 +175,285 @@ function StudentTestAnalysis({ studentId, businessId, router }: { studentId: str
         </View>
       </View>
 
-      {submissions.map((sub: any) => {
-        const score = sub.score ?? 0;
-        const totalQ = sub.total_questions || sub.tests?.total_questions || 0;
-        const correct = Math.round((score / 100) * totalQ);
-        const wrong = totalQ - correct;
-        const scoreColor = score >= 75 ? Colors.status.success : score >= 40 ? Colors.status.warning : Colors.status.danger;
+      {/* Search Input Box */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.bg.tertiary, borderRadius: 10, paddingHorizontal: 10, height: 40, marginBottom: 12, borderWidth: 1, borderColor: Colors.card.border }}>
+        <Ionicons name="search-outline" size={16} color={Colors.text.tertiary} style={{ marginRight: 6 }} />
+        <TextInput
+          placeholder="Search tests..."
+          placeholderTextColor={Colors.text.tertiary}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          style={{ flex: 1, color: Colors.text.primary, fontSize: 13, padding: 0 }}
+        />
+        {searchQuery ? (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Ionicons name="close-circle" size={16} color={Colors.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
+      </View>
 
-        return (
-          <View key={sub.id} style={{ backgroundColor: Colors.bg.tertiary, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.card.border }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-              {/* Score ring */}
-              <View style={{ width: 52, height: 52, borderRadius: 26, borderWidth: 3, borderColor: scoreColor, justifyContent: 'center', alignItems: 'center', backgroundColor: scoreColor + '10' }}>
-                <Text style={{ fontSize: 14, fontWeight: '900', color: scoreColor }}>{score}%</Text>
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }} numberOfLines={1}>{sub.tests?.title || 'Test'}</Text>
-                <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>
-                  {new Date(sub.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </Text>
-                {/* Correct / Wrong row */}
-                {totalQ > 0 && (
-                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
-                    <Text style={{ fontSize: 11, color: Colors.status.success, fontWeight: '700' }}>✓ {correct} correct</Text>
-                    <Text style={{ fontSize: 11, color: Colors.status.danger, fontWeight: '700' }}>✗ {wrong} wrong</Text>
-                    <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600' }}>{totalQ} total</Text>
+      {/* Performance Filter Chips */}
+      <View style={{ flexDirection: 'row', gap: 6, marginBottom: 16 }}>
+        <TouchableOpacity
+          onPress={() => setPerformanceFilter('all')}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 8,
+            backgroundColor: performanceFilter === 'all' ? Colors.accent.primary : Colors.bg.tertiary,
+            borderWidth: 1,
+            borderColor: performanceFilter === 'all' ? Colors.accent.primary : Colors.card.border,
+          }}
+        >
+          <Text style={{ fontSize: 11, fontWeight: '700', color: performanceFilter === 'all' ? '#FFF' : Colors.text.secondary }}>All Tests</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setPerformanceFilter('passed')}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 8,
+            backgroundColor: performanceFilter === 'passed' ? Colors.status.success + '15' : Colors.bg.tertiary,
+            borderWidth: 1,
+            borderColor: performanceFilter === 'passed' ? Colors.status.success : Colors.card.border,
+          }}
+        >
+          <Text style={{ fontSize: 11, fontWeight: '700', color: performanceFilter === 'passed' ? Colors.status.success : Colors.text.secondary }}>Passed (≥40%)</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setPerformanceFilter('failed')}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            borderRadius: 8,
+            backgroundColor: performanceFilter === 'failed' ? Colors.status.danger + '15' : Colors.bg.tertiary,
+            borderWidth: 1,
+            borderColor: performanceFilter === 'failed' ? Colors.status.danger : Colors.card.border,
+          }}
+        >
+          <Text style={{ fontSize: 11, fontWeight: '700', color: performanceFilter === 'failed' ? Colors.status.danger : Colors.text.secondary }}>{"Failed (<40%)"}</Text>
+        </TouchableOpacity>
+      </View>
+
+      {filteredSubmissions.length === 0 ? (
+        <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+          <Ionicons name="document-text-outline" size={32} color={Colors.text.tertiary} />
+          <Text style={{ fontSize: 12, color: Colors.text.tertiary, fontWeight: '500', marginTop: 6 }}>No tests match filters</Text>
+        </View>
+      ) : (
+        filteredSubmissions.map((sub: any) => {
+          const score = sub.score ?? 0;
+          const totalQ = sub.total_questions || sub.tests?.total_questions || 0;
+          const correct = Math.round((score / 100) * totalQ);
+          const wrong = totalQ - correct;
+          const scoreColor = score >= 75 ? Colors.status.success : score >= 40 ? Colors.status.warning : Colors.status.danger;
+
+          return (
+            <TouchableOpacity 
+              key={sub.id} 
+              activeOpacity={0.75}
+              onPress={() => handleSelectSubmission(sub)}
+              style={{ backgroundColor: Colors.bg.tertiary, borderRadius: 12, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: Colors.card.border }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                {/* Score ring */}
+                <View style={{ width: 52, height: 52, borderRadius: 26, borderWidth: 3, borderColor: scoreColor, justifyContent: 'center', alignItems: 'center', backgroundColor: scoreColor + '10' }}>
+                  <Text style={{ fontSize: 14, fontWeight: '900', color: scoreColor }}>{score}%</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary, flex: 1 }} numberOfLines={1}>{sub.tests?.title || 'Test'}</Text>
+                    <Ionicons name="chevron-forward" size={16} color={Colors.text.tertiary} style={{ marginLeft: 6 }} />
                   </View>
-                )}
+                  <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>
+                    {new Date(sub.submitted_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </Text>
+                  {/* Correct / Wrong row */}
+                  {totalQ > 0 && (
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+                      <Text style={{ fontSize: 11, color: Colors.status.success, fontWeight: '700' }}>✓ {correct} correct</Text>
+                      <Text style={{ fontSize: 11, color: Colors.status.danger, fontWeight: '700' }}>✗ {wrong} wrong</Text>
+                      <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600' }}>{totalQ} total</Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            </TouchableOpacity>
+          );
+        })
+      )}
+
+      {/* Individual Test Detail Modal */}
+      {selectedSub && (
+        <Modal
+          visible={true}
+          animationType="slide"
+          transparent={false}
+          onRequestClose={() => setSelectedSub(null)}
+        >
+          <SafeAreaView style={{ flex: 1, backgroundColor: Colors.bg.primary }} edges={['top']}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.card.border }}>
+              <TouchableOpacity onPress={() => setSelectedSub(null)} style={{ width: 40, height: 40, justifyContent: 'center', alignItems: 'center' }}>
+                <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
+              </TouchableOpacity>
+              <View style={{ flex: 1, marginLeft: 8 }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.text.primary }} numberOfLines={1}>{selectedSub.tests?.title || 'Test'}</Text>
+                <Text style={{ fontSize: 12, color: Colors.text.tertiary }}>Individual Test Analysis</Text>
+              </View>
+              <View style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, backgroundColor: (selectedSub.score ?? 0) >= 75 ? Colors.status.success + '15' : (selectedSub.score ?? 0) >= 40 ? Colors.status.warning + '15' : Colors.status.danger + '15' }}>
+                <Text style={{ fontSize: 14, fontWeight: '800', color: (selectedSub.score ?? 0) >= 75 ? Colors.status.success : (selectedSub.score ?? 0) >= 40 ? Colors.status.warning : Colors.status.danger }}>{selectedSub.score ?? '–'}%</Text>
               </View>
             </View>
-          </View>
-        );
-      })}
+
+            {isLoadingQuestions ? (
+              <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="large" color={Colors.accent.primary} />
+              </View>
+            ) : (
+              <>
+                {/* Stats Summary Box */}
+                {(() => {
+                  let correct = 0;
+                  let wrong = 0;
+                  let skipped = 0;
+                  
+                  questions.forEach(q => {
+                    const ans = selectedSub.answers?.[q.id];
+                    if (ans === undefined || ans === null) skipped++;
+                    else if (ans === q.correct_option) correct++;
+                    else wrong++;
+                  });
+
+                  return (
+                    <View style={{ flexDirection: 'row', paddingHorizontal: 16, marginVertical: 16, gap: 8 }}>
+                      <View style={{ flex: 1, backgroundColor: Colors.status.success + '15', borderRadius: 12, paddingVertical: 10, alignItems: 'center' }}>
+                        <Text style={{ color: Colors.status.success, fontSize: 20, fontWeight: '800' }}>{correct}</Text>
+                        <Text style={{ color: Colors.status.success, fontSize: 11, fontWeight: '600', marginTop: 2 }}>Correct</Text>
+                      </View>
+                      <View style={{ flex: 1, backgroundColor: Colors.status.danger + '15', borderRadius: 12, paddingVertical: 10, alignItems: 'center' }}>
+                        <Text style={{ color: Colors.status.danger, fontSize: 20, fontWeight: '800' }}>{wrong}</Text>
+                        <Text style={{ color: Colors.status.danger, fontSize: 11, fontWeight: '600', marginTop: 2 }}>Wrong</Text>
+                      </View>
+                      <View style={{ flex: 1, backgroundColor: '#ECEFF1', borderRadius: 12, paddingVertical: 10, alignItems: 'center' }}>
+                        <Text style={{ color: '#546E7A', fontSize: 20, fontWeight: '800' }}>{skipped}</Text>
+                        <Text style={{ color: '#546E7A', fontSize: 11, fontWeight: '600', marginTop: 2 }}>Skipped</Text>
+                      </View>
+                    </View>
+                  );
+                })()}
+
+                {/* Question List */}
+                <FlatList
+                  data={questions}
+                  keyExtractor={q => q.id}
+                  contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
+                  renderItem={({ item: q, index }) => {
+                    const optLabels = ['A', 'B', 'C', 'D'];
+                    const studentAns = selectedSub.answers?.[q.id];
+                    const isCorrect = studentAns === q.correct_option;
+                    const isSkipped = studentAns === undefined || studentAns === null;
+                    const borderColor = isSkipped ? Colors.card.border : isCorrect ? Colors.status.success : Colors.status.danger;
+                    return (
+                      <View style={{ backgroundColor: Colors.bg.secondary, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 1.5, borderColor }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                          <Text style={{ fontSize: 13, fontWeight: '800', color: Colors.text.tertiary }}>Q{index + 1}</Text>
+                          <View style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, backgroundColor: isSkipped ? Colors.bg.tertiary : isCorrect ? Colors.status.success + '20' : Colors.status.danger + '20' }}>
+                            <Text style={{ fontSize: 11, fontWeight: '700', color: isSkipped ? Colors.text.tertiary : isCorrect ? Colors.status.success : Colors.status.danger }}>{isSkipped ? 'Skipped' : isCorrect ? '✓ Correct' : '✗ Wrong'}</Text>
+                          </View>
+                        </View>
+                        {q.question_image_url
+                          ? <Image source={{ uri: q.question_image_url }} style={{ width: '100%', height: 160, borderRadius: 8, marginBottom: 12, backgroundColor: Colors.bg.tertiary } as any} resizeMode="contain" />
+                          : <Text style={{ fontSize: 14, color: Colors.text.primary, fontWeight: '500', lineHeight: 20, marginBottom: 12 }} numberOfLines={3}>{q.question_text}</Text>
+                        }
+                        {/* Options */}
+                        <View style={{ gap: 5, marginTop: 6 }}>
+                          {(q.options || ['A', 'B', 'C', 'D']).map((opt: string, oIdx: number) => {
+                            const isStudentPick = studentAns === oIdx;
+                            const isCorrectOpt = q.correct_option === oIdx;
+                            let bg = Colors.bg.tertiary; let border = Colors.card.border; let col = Colors.text.secondary;
+                            if (isCorrectOpt) { bg = Colors.status.success + '20'; border = Colors.status.success; col = Colors.status.success; }
+                            else if (isStudentPick && !isCorrect) { bg = Colors.status.danger + '20'; border = Colors.status.danger; col = Colors.status.danger; }
+                            return (
+                              <View key={oIdx} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, borderRadius: 8, backgroundColor: bg, borderWidth: 1, borderColor: border }}>
+                                <Text style={{ fontSize: 12, fontWeight: '800', color: col, width: 18 }}>{optLabels[oIdx]}</Text>
+                                <Text style={{ flex: 1, fontSize: 12, color: col }} numberOfLines={2}>{opt}</Text>
+                                {isCorrectOpt && <Ionicons name="checkmark-circle" size={14} color={Colors.status.success} />}
+                                {isStudentPick && !isCorrect && <Ionicons name="close-circle" size={14} color={Colors.status.danger} />}
+                              </View>
+                            );
+                          })}
+                        </View>
+
+                        {/* Time taken (Visual Progress Bar) & Telemetry Details */}
+                        {selectedSub.time_logs?.[q.id] !== undefined && (() => {
+                          const timeLogs = selectedSub.time_logs || {};
+                          const times = Object.entries(timeLogs)
+                            .filter(([k]) => k !== 'telemetry')
+                            .map(([, v]: any) => Number(v) || 0);
+                          const maxTime = Math.max(...times, 1);
+                          const timeTaken = timeLogs[q.id] || 0;
+                          const barWidthPercentage = Math.max(8, (timeTaken / maxTime) * 100);
+                          const barColor = isSkipped ? '#D1D1D6' : isCorrect ? Colors.status.success : Colors.status.danger;
+
+                          const telemetry = timeLogs.telemetry || {};
+                          const changes = telemetry.changes?.[q.id] || 0;
+                          const revisits = telemetry.revisits?.[q.id] || 0;
+
+                          return (
+                            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.card.border }}>
+                              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                  <Ionicons name="time-outline" size={14} color={Colors.text.tertiary} />
+                                  <Text style={{ fontSize: 12, color: Colors.text.tertiary, fontWeight: '500' }}>Time spent:</Text>
+                                </View>
+                                <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.secondary }}>{timeTaken}s</Text>
+                              </View>
+                              <View style={{ height: 6, backgroundColor: Colors.bg.tertiary, borderRadius: 3, overflow: 'hidden', marginBottom: 8 }}>
+                                <View style={{ height: '100%', width: `${barWidthPercentage}%`, backgroundColor: barColor, borderRadius: 3 }} />
+                              </View>
+
+                              {/* Telemetry Behavioral Indicators */}
+                              {(changes > 0 || revisits > 1) && (
+                                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
+                                  {changes > 0 && (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                      <Ionicons name="help-buoy-outline" size={13} color="#F57C00" />
+                                      <Text style={{ fontSize: 11, color: '#F57C00', fontWeight: '600' }}>
+                                        Changed choice: {changes} time{changes > 1 ? 's' : ''} (Hesitated)
+                                      </Text>
+                                    </View>
+                                  )}
+                                  {revisits > 1 && (
+                                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                                      <Ionicons name="eye-outline" size={13} color={Colors.accent.primary} />
+                                      <Text style={{ fontSize: 11, color: Colors.accent.primary, fontWeight: '600' }}>
+                                        Revisited: {revisits} times
+                                      </Text>
+                                    </View>
+                                  )}
+                                </View>
+                              )}
+                            </View>
+                          );
+                        })()}
+
+                        {/* Explanation */}
+                        {q.explanation && (
+                          <View style={{ marginTop: 12, backgroundColor: Colors.accent.primary + '08', borderRadius: 8, padding: 10 }}>
+                            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.accent.primary, marginBottom: 2 }}>💡 Explanation</Text>
+                            <Text style={{ fontSize: 12, color: Colors.text.secondary, lineHeight: 16 }}>{q.explanation}</Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  }}
+                />
+              </>
+            )}
+          </SafeAreaView>
+        </Modal>
+      )}
     </View>
   );
 }
@@ -597,9 +956,13 @@ export default function StudentDetailScreen() {
 
         {/* Profile Card */}
         <View style={styles.profileCard}>
-          <View style={styles.profileAvatar}>
-            <Text style={styles.profileAvatarText}>{getInitials(student.name)}</Text>
-          </View>
+          {student.photo_url ? (
+            <Image source={{ uri: student.photo_url }} style={styles.profileAvatar} />
+          ) : (
+            <View style={styles.profileAvatar}>
+              <Text style={styles.profileAvatarText}>{getInitials(student.name)}</Text>
+            </View>
+          )}
           <Text style={styles.profileName}>{student.name}</Text>
           <Text style={styles.profileEnrollment}>{student.enrollment_id}</Text>
           <View style={styles.batchBadge}>
@@ -905,7 +1268,7 @@ export default function StudentDetailScreen() {
         )}
 
         {activeTab === 'tests' && (
-          <StudentTestAnalysis studentId={student?.id} businessId={student?.business_id} router={router} />
+          <StudentTestAnalysis student={student} studentId={student?.id} businessId={student?.business_id} router={router} />
         )}
 
         {/* Quick Actions */}

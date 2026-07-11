@@ -87,6 +87,19 @@ export function savePostsToLocal(posts: any[]) {
   });
 }
 
+export function closeDatabase() {
+  if (db && !useFallback) {
+    try {
+      db.closeSync();
+      console.log('Database connection closed successfully.');
+    } catch (e) {
+      console.warn('Failed to close database:', e);
+    } finally {
+      db = null;
+    }
+  }
+}
+
 export function getPostsFromLocal(): any[] {
   if (useFallback) {
     return inMemoryPosts;

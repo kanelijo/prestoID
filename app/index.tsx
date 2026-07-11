@@ -50,8 +50,12 @@ export default function SplashScreen() {
         const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
         if (cachedProfileStr) {
           const cachedProfile = JSON.parse(cachedProfileStr);
-          if (cachedProfile.role) {
+          if (cachedProfile.role && cachedProfile.userId) {
             const store = useAuthStore.getState();
+            
+            // Reconstruct a minimal user object since we bypassed Supabase auth init
+            store.setUser({ id: cachedProfile.userId, email: cachedProfile.email });
+            
             store.setRole(cachedProfile.role);
             store.setAvatarUrl(cachedProfile.avatarUrl || null);
             if (cachedProfile.businessId) {
@@ -63,16 +67,27 @@ export default function SplashScreen() {
               );
             }
             
-            // Route instantly
-            if (cachedProfile.role === 'admin') {
-              router.replace('/(admin)/students');
-            } else {
-              if (cachedProfile.claimed) {
-                router.replace('/(student)/id-card');
-              } else {
-                router.replace('/(auth)/claim-profile');
+            if (cachedProfile.role === 'student') {
+              const cachedStudentStr = await AsyncStorage.getItem('@presto_cached_student_data');
+              if (cachedStudentStr) {
+                store.setStudentData(JSON.parse(cachedStudentStr));
               }
             }
+
+            // Route instantly
+            let dest = '';
+            if (cachedProfile.role === 'admin') {
+              dest = '/(admin)/students';
+            } else {
+              dest = cachedProfile.claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
+            }
+
+            if ((global as any).pendingNotificationRedirect) {
+              dest = (global as any).pendingNotificationRedirect;
+              (global as any).pendingNotificationRedirect = null;
+            }
+
+            router.replace(dest as any);
             isDone = true;
             return;
           }
@@ -90,26 +105,37 @@ export default function SplashScreen() {
             const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
             if (cachedProfileStr) {
               const cachedProfile = JSON.parse(cachedProfileStr);
-              const store = useAuthStore.getState();
-              store.setRole(cachedProfile.role);
-              store.setAvatarUrl(cachedProfile.avatarUrl || null);
-              if (cachedProfile.businessId) {
-                store.setBusiness(
-                  cachedProfile.businessId,
-                  cachedProfile.businessCode,
-                  cachedProfile.businessName,
-                  cachedProfile.businessType
-                );
+              if (cachedProfile.role && cachedProfile.userId) {
+                const store = useAuthStore.getState();
+                store.setUser({ id: cachedProfile.userId, email: cachedProfile.email });
+                store.setRole(cachedProfile.role);
+                store.setAvatarUrl(cachedProfile.avatarUrl || null);
+                if (cachedProfile.businessId) {
+                  store.setBusiness(
+                    cachedProfile.businessId,
+                    cachedProfile.businessCode,
+                    cachedProfile.businessName,
+                    cachedProfile.businessType
+                  );
+                }
+               // Route based on cached role
+               let dest = '';
+               if (cachedProfile.role === 'admin') {
+                 dest = '/(admin)/students';
+               } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
+                 dest = '/(student)/id-card';
+               } else {
+                 dest = '/(auth)/login';
+               }
+
+               if ((global as any).pendingNotificationRedirect) {
+                 dest = (global as any).pendingNotificationRedirect;
+                 (global as any).pendingNotificationRedirect = null;
+               }
+
+               router.replace(dest as any);
+               return;
               }
-              // Route based on cached role
-              if (cachedProfile.role === 'admin') {
-                router.replace('/(admin)/students');
-              } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
-                router.replace('/(student)/id-card');
-              } else {
-                router.replace('/(auth)/login');
-              }
-              return;
             }
             // No cache — check onboarding
             const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
@@ -160,6 +186,8 @@ export default function SplashScreen() {
             // Save to local cache
             try {
               const profileCache = {
+                userId: session.user.id,
+                email: session.user.email,
                 role,
                 businessId,
                 businessCode: businessData?.organization_id || null,
@@ -213,20 +241,19 @@ export default function SplashScreen() {
             }
 
             // Route based on role
+            let dest = '';
             if (role === 'admin') {
-              if (businessId) {
-                router.replace('/(admin)/students');
-              } else {
-                router.replace('/(auth)/create-institute');
-              }
+              dest = businessId ? '/(admin)/students' : '/(auth)/create-institute';
             } else {
-              // Student
-              if (claimed) {
-                router.replace('/(student)/id-card');
-              } else {
-                router.replace('/(auth)/claim-profile');
-              }
+              dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
             }
+
+            if ((global as any).pendingNotificationRedirect) {
+              dest = (global as any).pendingNotificationRedirect;
+              (global as any).pendingNotificationRedirect = null;
+            }
+
+            router.replace(dest as any);
             clearTimeout(timeout);
             isDone = true;
             return;
@@ -265,13 +292,21 @@ export default function SplashScreen() {
                 cachedProfile.businessType
               );
             }
+            let dest = '';
             if (cachedProfile.role === 'admin') {
-              router.replace('/(admin)/students');
+              dest = '/(admin)/students';
             } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
-              router.replace('/(student)/id-card');
+              dest = '/(student)/id-card';
             } else {
-              router.replace('/(auth)/login');
+              dest = '/(auth)/login';
             }
+
+            if ((global as any).pendingNotificationRedirect) {
+              dest = (global as any).pendingNotificationRedirect;
+              (global as any).pendingNotificationRedirect = null;
+            }
+
+            router.replace(dest as any);
             return;
           }
         } catch {}

@@ -36,10 +36,9 @@ const { width } = Dimensions.get('window');
 export default function StudentStudentIDCardScreen() {
   const router = useRouter();
   const [showFullQR, setShowFullQR] = useState(false);
-  const [studentData, setStudentData] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { user, session, businessName, studentData, setStudentData } = useAuthStore();
+  const [isLoading, setIsLoading] = useState(!studentData);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
-  const { user, session, businessName } = useAuthStore();
   const { studentCommunityUnreadCount } = useNotificationStore();
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
 
@@ -133,14 +132,6 @@ export default function StudentStudentIDCardScreen() {
   };
 
   useEffect(() => {
-    // Try to load cached student data immediately
-    AsyncStorage.getItem('@presto_cached_student_data').then(cached => {
-      if (cached) {
-        setStudentData(JSON.parse(cached));
-        setIsLoading(false);
-      }
-    }).catch(_ => {});
-
     // Pre-request picker permissions in background for 0ms latency launch
     ImagePicker.getMediaLibraryPermissionsAsync().then(status => {
       if (!status.granted) ImagePicker.requestMediaLibraryPermissionsAsync().catch(_ => {});
@@ -150,8 +141,7 @@ export default function StudentStudentIDCardScreen() {
     }).catch(_ => {});
 
     const initFetch = async () => {
-      const cached = await AsyncStorage.getItem('@presto_cached_student_data');
-      if (!cached) {
+      if (!studentData) {
         setIsLoading(true);
       }
       await fetchStudent();

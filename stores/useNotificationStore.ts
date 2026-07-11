@@ -6,20 +6,29 @@ interface NotificationState {
   adminUnreadCount: number;
   studentUnreadCount: number;
   studentCommunityUnreadCount: number;
+  studentPendingTestCount: number;
+  communityIsOpen: boolean;
   setAdminUnreadCount: (count: number) => void;
   setStudentUnreadCount: (count: number) => void;
   setStudentCommunityUnreadCount: (count: number) => void;
+  setStudentPendingTestCount: (count: number) => void;
+  setCommunityIsOpen: (open: boolean) => void;
   fetchAdminUnreadCount: (userId: string, businessId: string) => Promise<number>;
   fetchStudentUnreadCounts: (userId: string) => Promise<void>;
+  fetchStudentPendingTestCount: (userId: string) => Promise<void>;
 }
 
 export const useNotificationStore = create<NotificationState>((set, get) => ({
   adminUnreadCount: 0,
   studentUnreadCount: 0,
   studentCommunityUnreadCount: 0,
+  studentPendingTestCount: 0,
+  communityIsOpen: false,
   setAdminUnreadCount: (adminUnreadCount) => set({ adminUnreadCount }),
   setStudentUnreadCount: (studentUnreadCount) => set({ studentUnreadCount }),
   setStudentCommunityUnreadCount: (studentCommunityUnreadCount) => set({ studentCommunityUnreadCount }),
+  setStudentPendingTestCount: (studentPendingTestCount) => set({ studentPendingTestCount }),
+  setCommunityIsOpen: (communityIsOpen) => set({ communityIsOpen }),
 
   fetchAdminUnreadCount: async (userId: string, businessId: string) => {
     if (!userId || !businessId) return 0;
@@ -180,10 +189,56 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         const readPosts: string[] = readPostsJSON ? JSON.parse(readPostsJSON) : [];
 
         const unreadPostsCount = filteredPosts.filter(p => !readPosts.includes(String(p.id))).length;
-        set({ studentCommunityUnreadCount: unreadPostsCount });
+        // Don't override the badge count if student is currently reading the community
+        if (!get().communityIsOpen) {
+          set({ studentCommunityUnreadCount: unreadPostsCount });
+        }
       }
     } catch (err) {
       console.warn('Failed to fetch student counts in store:', err);
+    }
+  },
+
+  fetchStudentPendingTestCount: async (userId: string) => {
+    if (!userId) return;
+    try {
+      const { data: student } = await supabase
+        .from('students')
+        .select('id, batch_name, business_id')
+        .eq('user_id', userId)
+        .limit(1);
+
+      if (!student || student.length === 0) return;
+      const st = student[0];
+
+      // Get all published tests for business
+      const { data: allTests } = await supabase
+        .from('tests')
+        .select('id, batch_name')
+        .eq('business_id', st.business_id)
+        .eq('status', 'published');
+
+      if (!allTests) return;
+
+      // Filter by batch
+      const applicableTests = allTests.filter((t: any) => {
+        if (!t.batch_name || t.batch_name === 'All') return true;
+        const testBatch = Array.isArray(t.batch_name) ? t.batch_name[0] : String(t.batch_name);
+        return testBatch.toLowerCase().trim() === String(st.batch_name || '').toLowerCase().trim();
+      });
+
+      // Get submissions to see what is already taken
+      const { data: submissions } = await supabase
+        .from('test_submissions')
+        .select('test_id')
+        .eq('student_id', st.id);
+
+      const takenTestIds = new Set((submissions || []).map((s: any) => s.test_id));
+      const pendingCount = applicableTests.filter((t: any) => !takenTestIds.has(t.id)).length;
+
+      set({ studentPendingTestCount: pendingCount });
+    } catch (err) {
+      console.warn('Failed to fetch pending test count:', err);
     }
   },
 }));

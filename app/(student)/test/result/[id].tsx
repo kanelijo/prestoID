@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Image, FlatList,
+  ActivityIndicator, Image, FlatList, Modal, BackHandler
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,7 +11,7 @@ import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
-type Tab = 'summary' | 'review';
+type Tab = 'summary' | 'review' | 'time';
 
 export default function TestResultScreen() {
   const { id } = useLocalSearchParams<{ id: string }>(); // submission id from completed list
@@ -24,10 +24,33 @@ export default function TestResultScreen() {
   const [testDetails, setTestDetails] = useState<any>(null);
   const [questions, setQuestions] = useState<any[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>('summary');
+  const [expandedExplanations, setExpandedExplanations] = useState<Record<string, boolean>>({});
+  const [activeQuestionModal, setActiveQuestionModal] = useState<{ q: any; index: number } | null>(null);
 
   useEffect(() => {
     fetchResults();
   }, [id, activeStudentId]);
+
+  useEffect(() => {
+    const onBackPress = () => {
+      if (activeQuestionModal) {
+        setActiveQuestionModal(null);
+        return true;
+      }
+      if (activeTab === 'time') {
+        setActiveTab('review');
+        return true;
+      }
+      if (activeTab === 'review') {
+        setActiveTab('summary');
+        return true;
+      }
+      return false; // let system navigate back to test index
+    };
+
+    const handler = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => handler.remove();
+  }, [activeTab, activeQuestionModal]);
 
   const fetchResults = async () => {
     setIsLoading(true);
@@ -43,8 +66,8 @@ export default function TestResultScreen() {
           answers: { 'q1': 0, 'q2': 1 },
         });
         setQuestions([
-          { id: 'q1', question_text: 'What was the main feature of the Indus Valley Civilization?', options: ['Town Planning', 'Iron usage', 'Horse chariots', 'Temple architecture'], correct_option: 0 },
-          { id: 'q2', question_text: 'Which of these was a major port city?', options: ['Harappa', 'Lothal', 'Mohenjodaro', 'Kalibangan'], correct_option: 1 },
+          { id: 'q1', question_text: 'What was the main feature of the Indus Valley Civilization?', options: ['Town Planning', 'Iron usage', 'Horse chariots', 'Temple architecture'], correct_option: 0, explanation: 'The Indus Valley Civilization is famous for its town planning, grid systems, and drainage systems.' },
+          { id: 'q2', question_text: 'Which of these was a major port city?', options: ['Harappa', 'Lothal', 'Mohenjodaro', 'Kalibangan'], correct_option: 1, explanation: 'Lothal was one of the most prominent cities of the ancient Indus Valley Civilization, located in Gujarat, and served as a major port.' },
         ]);
         setIsLoading(false);
         return;
@@ -56,7 +79,6 @@ export default function TestResultScreen() {
         .select('id')
         .eq('user_id', activeStudentId)
         .maybeSingle();
-      if (!student) throw new Error('Student not found');
 
       // The `id` param is the submission_id from the completed list
       const { data: sub, error: subErr } = await supabase
@@ -69,10 +91,10 @@ export default function TestResultScreen() {
       setSubmission(sub);
       setTestDetails(sub.tests);
 
-      // Load questions for this test
+      // Load questions for this test (including explanation)
       const { data: qs, error: qErr } = await supabase
         .from('test_questions')
-        .select('id, question_text, question_image_url, options, correct_option')
+        .select('id, question_text, question_image_url, options, correct_option, explanation')
         .eq('test_id', sub.test_id)
         .order('created_at', { ascending: true });
       if (qErr) throw qErr;
@@ -95,14 +117,37 @@ export default function TestResultScreen() {
 
   const score = submission.score ?? 0;
   const totalQ = submission.total_questions || questions.length || 1;
-  const correctCount = Math.round((score / 100) * totalQ);
-  const wrongCount = totalQ - correctCount;
-  const exitCount = submission.exit_logs?.length ?? 0;
+  const posMarks = testDetails?.positive_marks ?? 5;
+  const negMarks = testDetails?.negative_marks ?? 0;
+  const totalPossible = totalQ * posMarks;
 
-  let scoreColor = Colors.status.success;
+  let correctCount = 0;
+  let wrongCount = 0;
+  let skippedCount = 0;
+
+  questions.forEach((q) => {
+    const ans = submission.answers?.[q.id];
+    if (ans === undefined || ans === null) {
+      skippedCount++;
+    } else if (ans === q.correct_option) {
+      correctCount++;
+    } else {
+      wrongCount++;
+    }
+  });
+
+  const exitCount = submission.exit_logs?.length ?? 0;
+  const scorePercentage = totalPossible > 0 ? (score / totalPossible) * 100 : 0;
+
+  let scoreGradColors = ['#11998e', '#38ef7d']; // Green gradient for >=75%
   let scoreMsg = 'Excellent! 🎉';
-  if (score < 40) { scoreColor = Colors.status.danger; scoreMsg = 'Keep Practising 💪'; }
-  else if (score < 75) { scoreColor = Colors.status.warning; scoreMsg = 'Good Effort 👍'; }
+  if (scorePercentage < 40) {
+    scoreGradColors = ['#2b5876', '#4e4376']; // Premium midnight indigo/purple gradient for <40%
+    scoreMsg = 'Keep Practising 💪';
+  } else if (scorePercentage < 75) {
+    scoreGradColors = ['#f12711', '#f5af19']; // Sunset orange/yellow gradient for 40% - 75%
+    scoreMsg = 'Good Effort 👍';
+  }
 
   const optLabels = ['A', 'B', 'C', 'D'];
 
@@ -139,7 +184,7 @@ export default function TestResultScreen() {
 
         {/* Question content */}
         {item.question_image_url ? (
-          <Image source={{ uri: item.question_image_url }} style={styles.qImage} resizeMode="contain" />
+          <Image source={{ uri: item.question_image_url }} style={styles.qImage as any} resizeMode="contain" />
         ) : (
           <Text style={styles.qText}>{item.question_text}</Text>
         )}
@@ -162,6 +207,184 @@ export default function TestResultScreen() {
                 {isCorrectOpt && <Ionicons name="checkmark-circle" size={16} color={Colors.status.success} />}
                 {isStudentChoice && !isCorrect && <Ionicons name="close-circle" size={16} color={Colors.status.danger} />}
               </View>
+            );
+          })}
+        </View>
+
+        {/* Time taken & Telemetry Details */}
+        {submission.time_logs?.[item.id] !== undefined && (() => {
+          const timeLogs = submission.time_logs || {};
+          const timeTaken = timeLogs[item.id] || 0;
+          const telemetry = timeLogs.telemetry || {};
+          const changes = telemetry.changes?.[item.id] || 0;
+          const revisits = telemetry.revisits?.[item.id] || 0;
+
+          return (
+            <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: Colors.card.border }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: (changes > 0 || revisits > 1) ? 6 : 0 }}>
+                <Ionicons name="time-outline" size={14} color={Colors.text.tertiary} />
+                <Text style={{ fontSize: 12, color: Colors.text.tertiary, fontWeight: '500' }}>
+                  Time spent: {timeTaken}s
+                </Text>
+              </View>
+
+              {/* Telemetry Behavioral Indicators */}
+              {(changes > 0 || revisits > 1) && (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 4 }}>
+                  {changes > 0 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Ionicons name="help-buoy-outline" size={13} color="#F57C00" />
+                      <Text style={{ fontSize: 11, color: '#F57C00', fontWeight: '600' }}>
+                        Changed choice: {changes} time{changes > 1 ? 's' : ''} (Hesitated)
+                      </Text>
+                    </View>
+                  )}
+                  {revisits > 1 && (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Ionicons name="eye-outline" size={13} color={Colors.accent.primary} />
+                      <Text style={{ fontSize: 11, color: Colors.accent.primary, fontWeight: '600' }}>
+                        Revisited: {revisits} times
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+          );
+        })()}
+
+        {/* AI-Generated Explanation */}
+        {item.explanation && (
+          <View style={{ marginTop: 12, borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 12 }}>
+            <TouchableOpacity 
+              style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}
+              onPress={() => setExpandedExplanations(prev => ({ ...prev, [item.id]: !prev[item.id] }))}
+              activeOpacity={0.7}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Ionicons name="bulb-outline" size={16} color={Colors.accent.primary} />
+                <Text style={{ fontSize: 13, fontWeight: '700', color: Colors.accent.primary }}>Explanation</Text>
+              </View>
+              <Ionicons 
+                name={expandedExplanations[item.id] ? 'chevron-up' : 'chevron-down'} 
+                size={16} 
+                color={Colors.accent.primary} 
+              />
+            </TouchableOpacity>
+            {expandedExplanations[item.id] && (
+              <View style={{ backgroundColor: Colors.accent.primary + '08', borderRadius: 8, padding: 12, marginTop: 8 }}>
+                <Text style={{ fontSize: 13, color: Colors.text.secondary, lineHeight: 18 }}>{item.explanation}</Text>
+              </View>
+            )}
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderTimeAnalytics = () => {
+    const timeLogs = submission.time_logs || {};
+    const times = Object.values(timeLogs).map((t: any) => Number(t) || 0);
+    const maxTime = Math.max(...times, 1);
+    const totalTime = times.reduce((a, b) => a + b, 0);
+    const avgTime = questions.length > 0 ? Math.round(totalTime / questions.length) : 0;
+    
+    let fastestQIdx = -1;
+    let fastestTime = Infinity;
+    let slowestQIdx = -1;
+    let slowestTime = -1;
+
+    questions.forEach((q, idx) => {
+      const t = timeLogs[q.id] || 0;
+      if (t > 0) {
+        if (t < fastestTime) {
+          fastestTime = t;
+          fastestQIdx = idx;
+        }
+        if (t > slowestTime) {
+          slowestTime = t;
+          slowestQIdx = idx;
+        }
+      }
+    });
+
+    const formatSeconds = (secs: number) => {
+      if (secs === Infinity || secs < 0) return '–';
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${secs}s`;
+    };
+
+    return (
+      <View style={{ paddingTop: 4 }}>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: Colors.bg.secondary, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.card.border, alignItems: 'center' }}>
+            <Ionicons name="hourglass-outline" size={18} color={Colors.accent.primary} style={{ marginBottom: 4 }} />
+            <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.text.primary }}>{formatSeconds(totalTime)}</Text>
+            <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', marginTop: 2 }}>Total Time</Text>
+          </View>
+
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: Colors.bg.secondary, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.card.border, alignItems: 'center' }}>
+            <Ionicons name="speedometer-outline" size={18} color={Colors.accent.primary} style={{ marginBottom: 4 }} />
+            <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.text.primary }}>{formatSeconds(avgTime)}</Text>
+            <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', marginTop: 2 }}>Avg Time / Q</Text>
+          </View>
+
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: Colors.bg.secondary, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.card.border, alignItems: 'center' }}>
+            <Ionicons name="trending-up" size={18} color={Colors.status.success} style={{ marginBottom: 4 }} />
+            <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.status.success }}>
+              {fastestQIdx !== -1 ? `Q${fastestQIdx + 1} (${formatSeconds(fastestTime)})` : '–'}
+            </Text>
+            <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', marginTop: 2 }}>Fastest Q</Text>
+          </View>
+
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: Colors.bg.secondary, borderRadius: 14, padding: 14, borderWidth: 1, borderColor: Colors.card.border, alignItems: 'center' }}>
+            <Ionicons name="trending-down" size={18} color={Colors.status.danger} style={{ marginBottom: 4 }} />
+            <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.status.danger }}>
+              {slowestQIdx !== -1 ? `Q${slowestQIdx + 1} (${formatSeconds(slowestTime)})` : '–'}
+            </Text>
+            <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', marginTop: 2 }}>Slowest Q</Text>
+          </View>
+        </View>
+
+        <Text style={{ fontSize: 15, fontWeight: '700', color: Colors.text.primary, marginBottom: 12 }}>Time Spent Per Question</Text>
+        <View style={{ gap: 10 }}>
+          {questions.map((q, idx) => {
+            const timeTaken = timeLogs[q.id] || 0;
+            const studentAnswer = submission.answers?.[q.id];
+            const isCorrect = studentAnswer === q.correct_option;
+            const isUnattempted = studentAnswer === undefined || studentAnswer === null;
+            
+            const barColor = isUnattempted 
+              ? '#D1D1D6' 
+              : isCorrect ? Colors.status.success : Colors.status.danger;
+
+            const percentage = Math.max(8, (timeTaken / maxTime) * 100);
+
+            return (
+              <TouchableOpacity 
+                key={q.id} 
+                style={{ backgroundColor: Colors.bg.secondary, borderRadius: 12, padding: 12, borderWidth: 1, borderColor: Colors.card.border }}
+                onPress={() => setActiveQuestionModal({ q, index: idx })}
+                activeOpacity={0.7}
+              >
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                    <Text style={{ fontSize: 13, fontWeight: '800', color: Colors.text.secondary }}>Q{idx + 1}</Text>
+                    <Ionicons 
+                      name={isUnattempted ? 'remove-circle-outline' : isCorrect ? 'checkmark-circle' : 'close-circle'} 
+                      size={14} 
+                      color={isUnattempted ? Colors.text.tertiary : isCorrect ? Colors.status.success : Colors.status.danger} 
+                    />
+                  </View>
+                  <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.secondary }}>{timeTaken}s</Text>
+                </View>
+                
+                <View style={{ height: 8, backgroundColor: Colors.bg.tertiary, borderRadius: 4, overflow: 'hidden' }}>
+                  <View style={{ height: '100%', width: `${percentage}%`, backgroundColor: barColor, borderRadius: 4 }} />
+                </View>
+              </TouchableOpacity>
             );
           })}
         </View>
@@ -188,19 +411,24 @@ export default function TestResultScreen() {
         <TouchableOpacity style={[styles.tab, activeTab === 'review' && styles.tabActive]} onPress={() => setActiveTab('review')}>
           <Text style={[styles.tabText, activeTab === 'review' && styles.tabTextActive]}>📝 Review ({questions.length})</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={[styles.tab, activeTab === 'time' && styles.tabActive]} onPress={() => setActiveTab('time')}>
+          <Text style={[styles.tabText, activeTab === 'time' && styles.tabTextActive]}>⏱ Time</Text>
+        </TouchableOpacity>
       </View>
 
       {activeTab === 'summary' ? (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
           {/* Score ring */}
-          <LinearGradient colors={Gradients.primary as [string, string]} style={styles.scoreGrad}>
+          <LinearGradient colors={scoreGradColors as [string, string] | any} style={styles.scoreGrad}>
             <View style={styles.scoreRing}>
-              <Text style={[styles.scoreNum, { color: scoreColor }]}>{score}%</Text>
-              <Text style={styles.scoreSub}>Score</Text>
+              <Text style={[styles.scoreNum, { color: '#FFFFFF' }]}>
+                {score}<Text style={{ fontSize: 18, color: 'rgba(255,255,255,0.7)', fontWeight: '500' }}> / {totalPossible}</Text>
+              </Text>
+              <Text style={styles.scoreSub}>SCORE</Text>
             </View>
             <Text style={styles.scoreMsg}>{scoreMsg}</Text>
             <Text style={styles.scoreDate}>
-              {new Date(submission.submitted_at || new Date()).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              Submitted {new Date(submission.submitted_at || new Date()).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
             </Text>
           </LinearGradient>
 
@@ -217,9 +445,16 @@ export default function TestResultScreen() {
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
-              <Text style={styles.statVal}>{totalQ}</Text>
-              <Text style={styles.statLabel}>Total</Text>
+              <Text style={[styles.statVal, { color: Colors.text.secondary }]}>{skippedCount}</Text>
+              <Text style={styles.statLabel}>Skipped</Text>
             </View>
+          </View>
+
+          {/* Multi-segment progress bar */}
+          <View style={{ height: 8, flexDirection: 'row', borderRadius: 4, overflow: 'hidden', marginHorizontal: 4, marginBottom: 20 }}>
+            {correctCount > 0 && <View style={{ flex: correctCount, backgroundColor: Colors.status.success }} />}
+            {wrongCount > 0 && <View style={{ flex: wrongCount, backgroundColor: Colors.status.danger }} />}
+            {skippedCount > 0 && <View style={{ flex: skippedCount, backgroundColor: '#B0BEC5' }} />}
           </View>
 
           {exitCount > 0 && (
@@ -236,7 +471,7 @@ export default function TestResultScreen() {
             <Text style={styles.reviewBtnText}>Review All Questions →</Text>
           </TouchableOpacity>
         </ScrollView>
-      ) : (
+      ) : activeTab === 'review' ? (
         <FlatList
           data={questions}
           renderItem={renderQuestion}
@@ -244,6 +479,67 @@ export default function TestResultScreen() {
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
         />
+      ) : (
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          {renderTimeAnalytics()}
+        </ScrollView>
+      )}
+      {activeQuestionModal && (
+        <Modal visible={true} transparent animationType="slide" onRequestClose={() => setActiveQuestionModal(null)}>
+          <SafeAreaView style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 20 }} edges={['top', 'bottom']}>
+            <View style={{ backgroundColor: Colors.bg.primary, borderRadius: 20, width: '100%', maxHeight: '85%', overflow: 'hidden', borderWidth: 1, borderColor: Colors.card.border }}>
+              
+              {/* Modal Header */}
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: Colors.card.border }}>
+                <Text style={{ fontSize: 16, fontWeight: '800', color: Colors.text.primary }}>Question {activeQuestionModal.index + 1} Details</Text>
+                <TouchableOpacity onPress={() => setActiveQuestionModal(null)} style={{ padding: 4 }}>
+                  <Ionicons name="close" size={22} color={Colors.text.primary} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={{ padding: 20 }}>
+                <View style={[styles.qCard, { borderWidth: 0, padding: 0, marginBottom: 0 }]}>
+                  {activeQuestionModal.q.question_image_url ? (
+                    <Image source={{ uri: activeQuestionModal.q.question_image_url }} style={styles.qImage as any} resizeMode="contain" />
+                  ) : (
+                    <Text style={[styles.qText, { marginBottom: 16 }]}>{activeQuestionModal.q.question_text}</Text>
+                  )}
+
+                  <View style={styles.optionsGrid}>
+                    {(activeQuestionModal.q.options || ['A', 'B', 'C', 'D']).map((opt: string, oIdx: number) => {
+                      const studentAnswer = submission.answers?.[activeQuestionModal.q.id];
+                      const isStudentChoice = studentAnswer === oIdx;
+                      const isCorrectOpt = activeQuestionModal.q.correct_option === oIdx;
+                      const isCorrect = studentAnswer === activeQuestionModal.q.correct_option;
+                      
+                      let optBg = Colors.bg.tertiary;
+                      let optBorder = Colors.card.border;
+                      let optColor = Colors.text.secondary;
+                      if (isCorrectOpt) { optBg = Colors.status.success + '20'; optBorder = Colors.status.success; optColor = Colors.status.success; }
+                      else if (isStudentChoice && !isCorrect) { optBg = Colors.status.danger + '20'; optBorder = Colors.status.danger; optColor = Colors.status.danger; }
+
+                      return (
+                        <View key={oIdx} style={[styles.optRow, { backgroundColor: optBg, borderColor: optBorder, marginBottom: 6 }]}>
+                          <Text style={[styles.optLabel, { color: optColor }]}>{optLabels[oIdx]}</Text>
+                          <Text style={[styles.optText, { color: optColor }]} numberOfLines={2}>{opt}</Text>
+                          {isCorrectOpt && <Ionicons name="checkmark-circle" size={16} color={Colors.status.success} />}
+                          {isStudentChoice && !isCorrect && <Ionicons name="close-circle" size={16} color={Colors.status.danger} />}
+                        </View>
+                      );
+                    })}
+                  </View>
+
+                  {activeQuestionModal.q.explanation && (
+                    <View style={{ marginTop: 16, backgroundColor: Colors.accent.primary + '08', borderRadius: 8, padding: 12 }}>
+                      <Text style={{ fontSize: 13, fontWeight: '700', color: Colors.accent.primary, marginBottom: 4 }}>💡 Explanation</Text>
+                      <Text style={{ fontSize: 13, color: Colors.text.secondary, lineHeight: 18 }}>{activeQuestionModal.q.explanation}</Text>
+                    </View>
+                  )}
+                </View>
+              </ScrollView>
+            </View>
+          </SafeAreaView>
+        </Modal>
       )}
     </SafeAreaView>
   );
@@ -273,18 +569,20 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingBottom: 40 },
 
   scoreGrad: {
-    borderRadius: 20, padding: 28, alignItems: 'center', marginBottom: 16, ...Shadows.md,
+    borderRadius: 24, padding: 32, alignItems: 'center', marginBottom: 18,
+    borderWidth: 1, borderColor: 'rgba(255, 255, 255, 0.2)', ...Shadows.md,
   },
   scoreRing: {
-    width: 120, height: 120, borderRadius: 60,
-    backgroundColor: 'rgba(0,0,0,0.15)',
+    width: 140, height: 140, borderRadius: 70,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center', alignItems: 'center',
-    marginBottom: 12, borderWidth: 4, borderColor: 'rgba(255,255,255,0.3)',
+    marginBottom: 16, borderWidth: 2.5, borderColor: 'rgba(255, 255, 255, 0.45)',
+    shadowColor: '#FFF', shadowOpacity: 0.15, shadowRadius: 10,
   },
-  scoreNum: { fontSize: 36, fontWeight: '900' },
-  scoreSub: { fontSize: 12, color: 'rgba(255,255,255,0.7)', fontWeight: '600' },
-  scoreMsg: { fontSize: 18, fontWeight: '800', color: '#FFF', marginBottom: 4 },
-  scoreDate: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
+  scoreNum: { fontSize: 42, fontWeight: '900', letterSpacing: -0.5 },
+  scoreSub: { fontSize: 10, color: 'rgba(255,255,255,0.85)', fontWeight: '800', letterSpacing: 1.5, marginTop: 2 },
+  scoreMsg: { fontSize: 24, fontWeight: '900', color: '#FFF', marginBottom: 6, letterSpacing: -0.2 },
+  scoreDate: { fontSize: 12, color: 'rgba(255,255,255,0.8)', fontWeight: '500' },
 
   statsRow: {
     flexDirection: 'row', backgroundColor: Colors.bg.secondary, borderRadius: 16,

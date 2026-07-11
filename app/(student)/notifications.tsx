@@ -37,13 +37,28 @@ interface Notification {
   read: boolean;
 }
 
+// Helper to safely access colors during module boot (immunizes against circular imports in background tasks!)
+const getThemeColor = (path: string, fallback: string) => {
+  try {
+    const parts = path.split('.');
+    let current: any = Colors;
+    for (const part of parts) {
+      if (current === undefined || current === null) return fallback;
+      current = current[part];
+    }
+    return current || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
 const typeConfig: Record<NotificationType, { icon: keyof typeof Ionicons.glyphMap; color: string; label: string }> = {
-  absent: { icon: 'close-circle-outline', color: Colors.status.danger, label: 'Absent Alert' },
-  fee: { icon: 'wallet-outline', color: Colors.status.warning, label: 'Fee Reminder' },
-  announcement: { icon: 'megaphone-outline', color: Colors.accent.primary, label: 'Announcement' },
-  general: { icon: 'information-circle-outline', color: Colors.stitch.tertiaryNeutral, label: 'General' },
-  attendance: { icon: 'checkmark-circle-outline', color: Colors.status.success, label: 'Attendance' },
-  schedule: { icon: 'calendar-outline', color: Colors.status.info, label: 'Schedule' },
+  absent: { icon: 'close-circle-outline', color: getThemeColor('status.danger', '#FF3B30'), label: 'Absent Alert' },
+  fee: { icon: 'wallet-outline', color: getThemeColor('status.warning', '#FF9500'), label: 'Fee Reminder' },
+  announcement: { icon: 'megaphone-outline', color: getThemeColor('accent.primary', '#AF2800'), label: 'Announcement' },
+  general: { icon: 'information-circle-outline', color: getThemeColor('stitch.tertiaryNeutral', '#5B5C5C'), label: 'General' },
+  attendance: { icon: 'checkmark-circle-outline', color: getThemeColor('status.success', '#34C759'), label: 'Attendance' },
+  schedule: { icon: 'calendar-outline', color: getThemeColor('status.info', '#007AFF'), label: 'Schedule' },
 };
 
 export default function StudentNotificationsScreen() {
@@ -373,7 +388,7 @@ export default function StudentNotificationsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bg.primary,
+    backgroundColor: getThemeColor('bg.primary', '#FFF8F6'),
   },
   scrollContent: {
     paddingTop: 40,
@@ -386,11 +401,11 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 26,
     fontWeight: '800',
-    color: Colors.text.primary,
+    color: getThemeColor('text.primary', '#281713'),
   },
   subtitle: {
     fontSize: 14,
-    color: Colors.text.secondary,
+    color: getThemeColor('text.secondary', '#5C4039'),
     marginTop: 4,
     fontWeight: '500',
   },
@@ -410,25 +425,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 10,
-    backgroundColor: Colors.bg.secondary,
+    backgroundColor: getThemeColor('bg.secondary', '#FFFFFF'),
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: getThemeColor('card.border', '#E6BEB4'),
   },
   filterTabActive: {
-    backgroundColor: Colors.accent.primary + '10',
-    borderColor: Colors.accent.primary + '30',
+    backgroundColor: getThemeColor('accent.primary', '#AF2800') + '10',
+    borderColor: getThemeColor('accent.primary', '#AF2800') + '30',
   },
   filterTabText: {
     fontSize: 11,
     fontWeight: '600',
-    color: Colors.text.secondary,
+    color: getThemeColor('text.secondary', '#5C4039'),
   },
   filterTabTextActive: {
-    color: Colors.accent.primary,
+    color: getThemeColor('accent.primary', '#AF2800'),
   },
   markAllBtn: {
     marginLeft: 'auto',
-    backgroundColor: Colors.accent.primary + '10',
+    backgroundColor: getThemeColor('accent.primary', '#AF2800') + '10',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 8,
@@ -436,18 +451,18 @@ const styles = StyleSheet.create({
   markAllText: {
     fontSize: 11,
     fontWeight: '700',
-    color: Colors.accent.primary,
+    color: getThemeColor('accent.primary', '#AF2800'),
   },
   notificationList: {
     paddingHorizontal: 24,
   },
   notificationItem: {
-    backgroundColor: Colors.bg.secondary,
+    backgroundColor: getThemeColor('bg.secondary', '#FFFFFF'),
     borderRadius: 16,
     padding: 16,
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: getThemeColor('card.border', '#E6BEB4'),
     position: 'relative',
     overflow: 'hidden',
   },
@@ -462,7 +477,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: Colors.accent.primary,
+    backgroundColor: getThemeColor('accent.primary', '#AF2800'),
   },
   notifContent: {
     paddingLeft: 4,
@@ -493,7 +508,7 @@ const styles = StyleSheet.create({
   notifTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: Colors.text.primary,
+    color: getThemeColor('text.primary', '#281713'),
   },
   notifTitleUnread: {
     fontWeight: '800',
@@ -510,14 +525,14 @@ const styles = StyleSheet.create({
   },
   notifMessage: {
     fontSize: 12,
-    color: Colors.text.secondary,
+    color: getThemeColor('text.secondary', '#5C4039'),
     lineHeight: 18,
     marginBottom: 8,
     fontWeight: '500',
   },
   notifTime: {
     fontSize: 11,
-    color: Colors.text.tertiary,
+    color: getThemeColor('text.tertiary', '#916F67'),
     fontWeight: '500',
   },
   emptyState: {
@@ -527,12 +542,12 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: Colors.text.primary,
+    color: getThemeColor('text.primary', '#281713'),
     marginBottom: 6,
   },
   emptySubtitle: {
     fontSize: 13,
-    color: Colors.text.secondary,
+    color: getThemeColor('text.secondary', '#5C4039'),
     textAlign: 'center',
     fontWeight: '500',
     paddingHorizontal: 20,
@@ -552,16 +567,16 @@ const styles = StyleSheet.create({
   permissionWarningTitle: {
     fontSize: 13,
     fontWeight: '700',
-    color: Colors.text.primary,
+    color: getThemeColor('text.primary', '#281713'),
   },
   permissionWarningDesc: {
     fontSize: 11,
-    color: Colors.text.secondary,
+    color: getThemeColor('text.secondary', '#5C4039'),
     marginTop: 2,
     lineHeight: 15,
   },
   permissionWarningBtn: {
-    backgroundColor: Colors.accent.primary,
+    backgroundColor: getThemeColor('accent.primary', '#AF2800'),
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,

@@ -18,7 +18,7 @@ try {
   }
 } catch (_) {}
 
-const PLACEHOLDER_BLURHASH = 'LFE{wJ~q00Rj_3t7IUofRPM{M{of';
+const PLACEHOLDER_BLURHASH = '|LHLh9Dh00%M00_g_0.w_0%MoffR00Rj00Rj00~q_0%M_0_g00%M00_g00%M00_g00%M00_g';
 
 type Props = {
   uri?: string | null;

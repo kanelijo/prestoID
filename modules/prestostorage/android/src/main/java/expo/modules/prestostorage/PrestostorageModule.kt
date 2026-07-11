@@ -40,9 +40,9 @@ class PrestostorageModule : Module() {
 
         // Determine destination path based on file type
         val relativePath = when (ext) {
-            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/PrestoID/PrestoID Images"
-            "mp4" -> Environment.DIRECTORY_MOVIES + "/PrestoID/PrestoID Videos"
-            else -> Environment.DIRECTORY_DOWNLOADS + "/PrestoID/PrestoID Documents"
+            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/KanelFlow/KanelFlow Images"
+            "mp4" -> Environment.DIRECTORY_MOVIES + "/KanelFlow/KanelFlow Videos"
+            else -> Environment.DIRECTORY_DOWNLOADS + "/KanelFlow/KanelFlow Documents"
         }
 
         val contentValues = ContentValues().apply {
@@ -67,7 +67,7 @@ class PrestostorageModule : Module() {
               "mp4" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
               else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
           }
-          val prestoDir = File(publicDir, "PrestoID")
+          val prestoDir = File(publicDir, "KanelFlow")
           if (!prestoDir.exists()) prestoDir.mkdirs()
           
           val destFile = File(prestoDir, fileName)
@@ -79,7 +79,15 @@ class PrestostorageModule : Module() {
           return@AsyncFunction
         }
 
-        val uri = resolver.insert(collection, contentValues) ?: throw Exception("Failed to create MediaStore entry")
+        var uri = resolver.insert(collection, contentValues)
+        if (uri == null) {
+            // Collision or failure, try appending a timestamp
+            val nameWithoutExt = fileName.substringBeforeLast('.')
+            val newFileName = "${nameWithoutExt}_${System.currentTimeMillis()}.$ext"
+            contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, newFileName)
+            uri = resolver.insert(collection, contentValues)
+                ?: throw Exception("Failed to create MediaStore entry even with unique name")
+        }
 
         try {
           resolver.openOutputStream(uri)?.use { outputStream ->

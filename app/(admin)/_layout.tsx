@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Tabs } from 'expo-router';
+import { Tabs, Redirect } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -88,7 +88,11 @@ function TabIcon({ name, label, focused }: TabIconProps) {
 
 export default function AdminLayout() {
   const insets = useSafeAreaInsets();
-  const { user, businessId } = useAuthStore();
+  const { user, businessId, role } = useAuthStore();
+
+  if (role && role !== 'admin') {
+    return <Redirect href="/(student)/id-card" />;
+  }
   const { adminUnreadCount } = useNotificationStore();
 
   useEffect(() => {
@@ -177,12 +181,15 @@ export default function AdminLayout() {
           ),
           }}
         />
-      <Tabs.Screen name="test/create" options={{ href: null }} />
+      <Tabs.Screen name="test/create-ai" options={{ href: null }} />
+      <Tabs.Screen name="test/create-manual" options={{ href: null }} />
       <Tabs.Screen name="test/banks" options={{ href: null }} />
       <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
+      <Tabs.Screen name="test/zenza-review" options={{ href: null }} />
       <Tabs.Screen name="test/analytics/[id]" options={{ href: null }} />
       <Tabs.Screen name="notebank" options={{ href: null }} />
       <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
+      <Tabs.Screen name="lab" options={{ href: null }} />
       </Tabs>
     </>
   );
