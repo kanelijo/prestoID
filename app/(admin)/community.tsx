@@ -291,6 +291,8 @@ export default function AdminCommunityScreen() {
   const activeSessionIdRef = useRef<string>('');
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [imageDimsCache, setImageDimsCache] = useState<Record<string, { w: number; h: number }>>({});
 
   // Load persisted cache mappings on mount
   useEffect(() => {
@@ -682,7 +684,13 @@ export default function AdminCommunityScreen() {
 
             try {
               // 1. Try Telegram Storage Upload
-              const uploadRes = await uploadToTelegramViaEdge(selectedImageUri, fileName);
+              const uploadRes = await uploadToTelegramViaEdge(
+                selectedImageUri,
+                fileName,
+                (pct) => {
+                  if (session === activeSessionIdRef.current) setUploadProgress(pct);
+                }
+              );
               if (session !== activeSessionIdRef.current) return;
               publicUrl = await getTelegramFastLink(uploadRes.fileId);
               tgFileIdVal = uploadRes.messageId ? `${uploadRes.messageId}:${uploadRes.fileId}` : uploadRes.fileId;
@@ -764,6 +772,7 @@ export default function AdminCommunityScreen() {
           author_role: 'admin',
           category: 'announcement',
           text: messageText,
+          image_url: publicUrl,
           tg_file_id: fileId || null
         })
         .select();
@@ -1215,11 +1224,27 @@ export default function AdminCommunityScreen() {
                       const parsed = extractUrlAndName(item.text);
                       const imgUri = item.image_url || parsed?.url;
                       const displayUri = localMediaMap[item.id] || imgUri;
+                      // Blur preview URI: always use image_url (public) so blur shows before download
+                      const previewUri = item.image_url || imgUri;
                       const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
+                      // Compute dynamic height from cached image dimensions
+                      const BOX_W = 260;
+                      const cachedDims = imageDimsCache[item.id];
+                      const dynHeight = cachedDims
+                        ? Math.max(160, Math.min(320, Math.round((cachedDims.h / cachedDims.w) * BOX_W)))
+                        : 190;
+
+                      // Lazy-load image dimensions for aspect ratio
+                      if (!cachedDims && previewUri) {
+                        Image.getSize(previewUri, (w, h) => {
+                          setImageDimsCache(prev => ({ ...prev, [item.id]: { w, h } }));
+                        }, () => {});
+                      }
+
                       return (
-                        <View style={{ overflow: 'hidden', borderRadius: 16, width: 260 }}>
-                          <View style={{ position: 'relative', width: 260, height: 190, overflow: 'hidden' }}>
+                        <View style={{ overflow: 'hidden', borderRadius: 16, width: BOX_W }}>
+                          <View style={{ position: 'relative', width: BOX_W, height: dynHeight, overflow: 'hidden' }}>
                             <TouchableOpacity 
                               activeOpacity={0.9} 
                               delayLongPress={200}
@@ -1236,10 +1261,11 @@ export default function AdminCommunityScreen() {
                               }}
                               disabled={!isDownloaded && !isMultiSelect}
                             >
+                              {/* Blur preview always from public URL, full quality from local/downloaded */}
                               <Image 
-                                source={{ uri: displayUri }} 
-                                style={styles.bubbleImageAttachment} 
-                                blurRadius={isDownloaded ? 0 : 25}
+                                source={{ uri: isDownloaded ? displayUri : previewUri }} 
+                                style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
+                                blurRadius={isDownloaded ? 0 : 18}
                               />
                             </TouchableOpacity>
                             {!isDownloaded && (
@@ -1483,37 +1509,36 @@ export default function AdminCommunityScreen() {
               <View style={{ height: 1, backgroundColor: '#EAEAEA', marginHorizontal: 16, marginBottom: 16 }} />
 
               {/* Upload Status / Progress Bar */}
-              <View style={{ paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+              <View style={{ paddingHorizontal: 16, marginBottom: 16 }}>
                 {uploadState === 'uploading' && (
-                  <>
-                    <ActivityIndicator size="small" color={Colors.accent.primary} />
-                    <Text style={{ fontSize: 13, color: Colors.text.secondary }}>
-                      Uploading high-quality media in background...
-                    </Text>
-                  </>
+                  <View>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: Colors.text.secondary, fontWeight: '500' }}>Uploading...</Text>
+                      <Text style={{ fontSize: 12, color: Colors.accent.primary, fontWeight: '700' }}>{uploadProgress}%</Text>
+                    </View>
+                    <View style={{ height: 5, backgroundColor: '#E8E8E8', borderRadius: 3, overflow: 'hidden' }}>
+                      <View style={{
+                        height: '100%',
+                        width: `${uploadProgress}%`,
+                        backgroundColor: Colors.accent.primary,
+                        borderRadius: 3,
+                      }} />
+                    </View>
+                  </View>
                 )}
                 {uploadState === 'success' && (
-                  <>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Ionicons name="checkmark-circle" size={18} color="#2e7d32" />
-                    <Text style={{ fontSize: 13, color: '#2e7d32', fontWeight: '500' }}>
-                      Upload complete. Ready to share.
-                    </Text>
-                  </>
+                    <Text style={{ fontSize: 13, color: '#2e7d32', fontWeight: '600' }}>Upload complete — ready to share</Text>
+                  </View>
                 )}
                 {uploadState === 'error' && (
-                  <TouchableOpacity 
+                  <TouchableOpacity
                     style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}
-                    onPress={() => {
-                      if (selectedImageForCaption) {
-                        // Retry background upload
-                        handlePickImage();
-                      }
-                    }}
+                    onPress={handlePickImage}
                   >
                     <Ionicons name="alert-circle" size={18} color="#c62828" />
-                    <Text style={{ fontSize: 13, color: '#c62828', fontWeight: '500' }}>
-                      Upload failed. Tap here to retry.
-                    </Text>
+                    <Text style={{ fontSize: 13, color: '#c62828', fontWeight: '500' }}>Upload failed. Tap to retry.</Text>
                   </TouchableOpacity>
                 )}
               </View>

@@ -272,6 +272,7 @@ export default function StudentCommunityScreen() {
   const [profilesMap, setProfilesMap] = useState<Record<string, string>>({});
   const [downloadedMap, setDownloadedMap] = useState<Record<string, boolean>>({});
   const [localMediaMap, setLocalMediaMap] = useState<Record<string, string>>({});
+  const [imageDimsCache, setImageDimsCache] = useState<Record<string, { w: number; h: number }>>({});
   const [downloadingIds, setDownloadingIds] = useState<Record<string, boolean>>({});
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [currentViewerIndex, setCurrentViewerIndex] = useState<number>(0);
@@ -849,11 +850,26 @@ export default function StudentCommunityScreen() {
                     const parsed = extractUrlAndName(item.text);
                     const imgUri = item.image_url || parsed?.url;
                     const displayUri = localMediaMap[item.id] || imgUri;
+                    // Always use image_url for blur preview (it's the public Supabase/Telegram URL)
+                    const previewUri = item.image_url || imgUri;
                     const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
+                    // Dynamic height from cached image dimensions (WhatsApp-style aspect ratio)
+                    const BOX_W = 260;
+                    const cachedDims = imageDimsCache[item.id];
+                    const dynHeight = cachedDims
+                      ? Math.max(160, Math.min(320, Math.round((cachedDims.h / cachedDims.w) * BOX_W)))
+                      : 190;
+
+                    if (!cachedDims && previewUri) {
+                      Image.getSize(previewUri, (w, h) => {
+                        setImageDimsCache(prev => ({ ...prev, [item.id]: { w, h } }));
+                      }, () => {});
+                    }
+
                     return (
-                      <View style={{ overflow: 'hidden', borderRadius: 16, width: 260 }}>
-                        <View style={{ position: 'relative', width: 260, height: 190, overflow: 'hidden' }}>
+                      <View style={{ overflow: 'hidden', borderRadius: 16, width: BOX_W }}>
+                        <View style={{ position: 'relative', width: BOX_W, height: dynHeight, overflow: 'hidden' }}>
                           <TouchableOpacity 
                             activeOpacity={0.9}
                             onPress={() => {
@@ -868,10 +884,11 @@ export default function StudentCommunityScreen() {
                             }}
                             disabled={!isDownloaded}
                           >
+                            {/* Blur preview from public URL, full quality from local */}
                             <Image 
-                              source={{ uri: displayUri }} 
-                              style={styles.bubbleImageAttachment} 
-                              blurRadius={isDownloaded ? 0 : 25}
+                              source={{ uri: isDownloaded ? displayUri : previewUri }} 
+                              style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
+                              blurRadius={isDownloaded ? 0 : 18}
                             />
                           </TouchableOpacity>
                           {!isDownloaded && (
