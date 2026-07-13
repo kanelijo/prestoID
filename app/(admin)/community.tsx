@@ -772,7 +772,6 @@ export default function AdminCommunityScreen() {
           author_role: 'admin',
           category: 'announcement',
           text: messageText,
-          image_url: publicUrl,
           tg_file_id: fileId || null
         })
         .select();
