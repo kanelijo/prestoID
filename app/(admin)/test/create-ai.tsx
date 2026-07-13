@@ -19,6 +19,7 @@ type Message = {
   id: string;
   role: 'user' | 'model';
   text: string;
+  parts?: any[]; // Keep the exact parts (text + inlineData) for Gemini history
   isTestReady?: boolean;
   testData?: any;
 };
@@ -320,7 +321,47 @@ export default function CreateAITestChatScreen() {
       displayMsg = `📎 [Attached: ${bank.name}]\n` + userText;
     }
 
-    const newUserMsg: Message = { id: Date.now().toString(), role: 'user', text: displayMsg || 'Please use this attachment.' };
+    const parts: any[] = [];
+    if (userText) parts.push({ text: userText });
+    
+    if (localAttachment) {
+      parts.push({
+         inlineData: {
+           data: localAttachment.base64,
+           mimeType: localAttachment.mimeType
+         }
+      });
+      parts.push({ text: "\n\nPlease base your questions on this attached file." });
+    } else if (bank && bank.file_url) {
+      const localUri = FileSystem.cacheDirectory + 'temp_chat_' + Date.now();
+      const downloadRes = await FileSystem.downloadAsync(bank.file_url, localUri);
+      const base64Data = await FileSystem.readAsStringAsync(downloadRes.uri, { encoding: FileSystem.EncodingType.Base64 });
+      
+      let mimeType = 'application/pdf'; 
+      const contentTypeHeader = downloadRes.headers['Content-Type'] || downloadRes.headers['content-type'];
+      if (contentTypeHeader) {
+        mimeType = contentTypeHeader.split(';')[0].trim();
+      } else if (!bank.file_url.toLowerCase().includes('.pdf')) {
+        mimeType = 'image/jpeg';
+      }
+
+      parts.push({
+         inlineData: {
+           data: base64Data,
+           mimeType: mimeType
+         }
+      });
+      parts.push({ text: "\n\nPlease base your questions on this attached document." });
+    } else if (bank) {
+      parts.push({ text: `\n\n(Note: The user attached the topic '${bank.name}' but there is no file content available. Create questions based on this topic.)` });
+    }
+
+    const newUserMsg: Message = { 
+        id: Date.now().toString(), 
+        role: 'user', 
+        text: displayMsg || 'Please use this attachment.',
+        parts: parts.length > 0 ? parts : [{ text: displayMsg }]
+    };
     setMessages(prev => [...prev, newUserMsg]);
     setInput('');
     setIsTyping(true);
@@ -328,63 +369,26 @@ export default function CreateAITestChatScreen() {
 
     try {
       let groqSupported = true;
-      const parts: any[] = [];
-      if (userText) parts.push({ text: userText });
-      
-      if (localAttachment) {
-        groqSupported = false; // Groq does not support files natively
-        parts.push({
-           inlineData: {
-             data: localAttachment.base64,
-             mimeType: localAttachment.mimeType
-           }
-        });
-        parts.push({ text: "\n\nPlease base your questions on this attached file." });
-      } else if (bank && bank.file_url) {
-        groqSupported = false; // Groq does not support PDFs natively
-        const localUri = FileSystem.cacheDirectory + 'temp_chat_' + Date.now();
-        const downloadRes = await FileSystem.downloadAsync(bank.file_url, localUri);
-        const base64Data = await FileSystem.readAsStringAsync(downloadRes.uri, { encoding: FileSystem.EncodingType.Base64 });
-        
-        let mimeType = 'application/pdf'; // Default
-        const contentTypeHeader = downloadRes.headers['Content-Type'] || downloadRes.headers['content-type'];
-        if (contentTypeHeader) {
-          mimeType = contentTypeHeader.split(';')[0].trim();
-        } else if (!bank.file_url.toLowerCase().includes('.pdf')) {
-          mimeType = 'image/jpeg';
-        }
-
-        parts.push({
-           inlineData: {
-             data: base64Data,
-             mimeType: mimeType
-           }
-        });
-        parts.push({ text: "\n\nPlease base your questions on this attached document." });
-      } else if (bank) {
-        parts.push({ text: `\n\n(Note: The user attached the topic '${bank.name}' but there is no file content available. Create questions based on this topic.)` });
+      if (localAttachment || (bank && bank.file_url)) {
+        groqSupported = false; 
       }
       
-      // Clear attachment state after compiling parts
       setLocalAttachment(null);
       setSelectedBankId(null);
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
 
-      // Filter out the initial greeting message to prevent Gemini 400 Bad Request (duplicate model roles)
       const actualMessages = messages.filter(m => m.id !== '1');
 
-      // 1. Build Gemini Memory Bucket
       const geminiHistory = [
         { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
         { role: 'model', parts: [{ text: "Understood! I will act as the AI Test Creator." }] },
         ...actualMessages.map(m => ({
           role: m.role === 'model' ? 'model' : 'user',
-          parts: [{ text: m.text }]
+          parts: m.parts || [{ text: m.text }]
         })),
-        { role: 'user', parts } // The current message with parts
+        { role: 'user', parts: parts.length > 0 ? parts : [{ text: displayMsg }] } 
       ];
 
-      // 2. Build Groq Memory Bucket (Truncated to avoid 6000 TPM limit on Free Tier)
       const recentMessages = actualMessages.slice(-4);
       const groqHistory = [
         { role: 'system', content: SYSTEM_PROMPT },
