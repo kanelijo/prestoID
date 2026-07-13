@@ -400,7 +400,11 @@ export default function CreateAITestChatScreen() {
 
       const attemptGemini = async (modelName: string) => {
         const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent({ contents: geminiHistory });
+        // Disable thinking for 2.5 models — thinking tokens burn quota fast on free tier
+        const generationConfig: any = modelName.includes('2.5')
+          ? { thinkingConfig: { thinkingBudget: 0 } }
+          : {};
+        const result = await model.generateContent({ contents: geminiHistory, generationConfig });
         return result.response.text();
       };
 
@@ -414,8 +418,9 @@ export default function CreateAITestChatScreen() {
             "Content-Type": "application/json"
           },
           body: JSON.stringify({
-            model: "llama-3.1-8b-instant",
+            model: "llama-3.3-70b-versatile",
             messages: groqHistory,
+            temperature: 0.4,
           })
         });
         const data = await res.json();
@@ -423,32 +428,48 @@ export default function CreateAITestChatScreen() {
         return data.choices[0].message.content;
       };
 
-      // --- FAILOVER WATERFALL ---
+      // --- FAILOVER WATERFALL (best → oldest → Groq backup) ---
+      // gemini-2.5-flash: highest free quota, best quality
+      // gemini-2.5-flash-lite: lightweight, still new quota pool
+      // gemini-2.0-flash / 1.5-flash / 1.5-pro: older fallbacks
+      // groq llama-3.3-70b: final backup (text-only, no PDFs)
       try {
-        console.log("Attempt 1: Gemini 2.0 Flash");
-        responseText = await attemptGemini("gemini-2.0-flash");
-      } catch (err1) {
-        console.warn("Gemini 2.0 Flash failed:", err1);
+        console.log("Attempt 1: Gemini 2.5 Flash");
+        responseText = await attemptGemini("gemini-2.5-flash");
+      } catch (err1: any) {
+        console.warn("Gemini 2.5 Flash failed:", err1?.message || err1);
         try {
-          console.log("Attempt 2: Gemini 1.5 Flash");
-          responseText = await attemptGemini("gemini-1.5-flash");
-        } catch (err2) {
-          console.warn("Gemini 1.5 Flash failed:", err2);
+          console.log("Attempt 2: Gemini 2.5 Flash Lite");
+          responseText = await attemptGemini("gemini-2.5-flash-lite");
+        } catch (err2: any) {
+          console.warn("Gemini 2.5 Flash Lite failed:", err2?.message || err2);
           try {
-            console.log("Attempt 3: Gemini 1.5 Pro");
-            responseText = await attemptGemini("gemini-1.5-pro");
-          } catch (err3) {
-            console.warn("Gemini 1.5 Pro failed:", err3);
-            if (groqSupported) {
+            console.log("Attempt 3: Gemini 2.0 Flash");
+            responseText = await attemptGemini("gemini-2.0-flash");
+          } catch (err3: any) {
+            console.warn("Gemini 2.0 Flash failed:", err3?.message || err3);
+            try {
+              console.log("Attempt 4: Gemini 1.5 Flash");
+              responseText = await attemptGemini("gemini-1.5-flash");
+            } catch (err4: any) {
+              console.warn("Gemini 1.5 Flash failed:", err4?.message || err4);
               try {
-                console.log("Attempt 4: Groq Llama 3.1");
-                responseText = await attemptGroq();
-              } catch (err4) {
-                console.error("Groq failed:", err4);
-                throw new Error("Your text is too large for the Backup AI Server. Please reduce the length and try again, or wait for Google to stabilize.");
+                console.log("Attempt 5: Gemini 1.5 Pro");
+                responseText = await attemptGemini("gemini-1.5-pro");
+              } catch (err5: any) {
+                console.warn("Gemini 1.5 Pro failed:", err5?.message || err5);
+                if (groqSupported) {
+                  try {
+                    console.log("Attempt 6: Groq Llama 3.3 70B");
+                    responseText = await attemptGroq();
+                  } catch (err6) {
+                    console.error("Groq failed:", err6);
+                    throw new Error("All AI servers are currently overloaded. Please wait a minute and try again.");
+                  }
+                } else {
+                  throw new Error("All Gemini models are overloaded. Please try again in a minute.");
+                }
               }
-            } else {
-              throw new Error("Gemini AI is overloaded. Groq cannot process the attached PDF.");
             }
           }
         }
