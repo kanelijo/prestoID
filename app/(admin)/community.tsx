@@ -772,6 +772,7 @@ export default function AdminCommunityScreen() {
           author_role: 'admin',
           category: 'announcement',
           text: messageText,
+          media_url: publicUrl,
           tg_file_id: fileId || null
         })
         .select();
@@ -1221,10 +1222,10 @@ export default function AdminCommunityScreen() {
                       const isDownloaded = downloadedMap[item.id] || isSelf;
                       const isDownloading = downloadingIds[item.id];
                       const parsed = extractUrlAndName(item.text);
-                      const imgUri = item.image_url || parsed?.url;
+                      const imgUri = item.media_url || item.image_url || parsed?.url;
                       const displayUri = localMediaMap[item.id] || imgUri;
-                      // Blur preview URI: always use image_url (public) so blur shows before download
-                      const previewUri = item.image_url || imgUri;
+                      // Blur preview URI: always use public URL (media_url) so blur shows before download
+                      const previewUri = item.media_url || item.image_url || imgUri;
                       const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
                       // Compute dynamic height from cached image dimensions

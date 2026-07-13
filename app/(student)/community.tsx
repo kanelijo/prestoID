@@ -848,10 +848,10 @@ export default function StudentCommunityScreen() {
                     const isDownloaded = downloadedMap[item.id] || isSelf;
                     const isDownloading = downloadingIds[item.id];
                     const parsed = extractUrlAndName(item.text);
-                    const imgUri = item.image_url || parsed?.url;
+                    const imgUri = item.media_url || item.image_url || parsed?.url;
                     const displayUri = localMediaMap[item.id] || imgUri;
-                    // Always use image_url for blur preview (it's the public Supabase/Telegram URL)
-                    const previewUri = item.image_url || imgUri;
+                    // Always use public URL (media_url) for blur preview
+                    const previewUri = item.media_url || item.image_url || imgUri;
                     const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
                     // Dynamic height from cached image dimensions (WhatsApp-style aspect ratio)
