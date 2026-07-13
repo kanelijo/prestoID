@@ -71,15 +71,21 @@ const extractUrlAndName = (text: string) => {
 // Clickable link parser helper
 const renderTextWithLinks = (text: string, linkColor: string = '#0066CC') => {
   if (!text) return null;
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|org|net|co|in|edu|gov|io|info)(?:\/[^\s]*)?)/gi;
   const parts = text.split(urlRegex);
   return parts.map((part, idx) => {
+    // Reset regex lastIndex because of 'g' flag
+    urlRegex.lastIndex = 0;
     if (urlRegex.test(part)) {
+      let cleanUrl = part.trim();
+      if (!/^https?:\/\//i.test(cleanUrl)) {
+        cleanUrl = `https://${cleanUrl}`;
+      }
       return (
         <Text
           key={idx}
           style={{ textDecorationLine: 'underline', color: linkColor }}
-          onPress={() => Linking.openURL(part).catch(err => console.warn("Failed to open URL:", err))}
+          onPress={() => Linking.openURL(cleanUrl).catch(err => console.warn("Failed to open URL:", err))}
         >
           {part}
         </Text>
