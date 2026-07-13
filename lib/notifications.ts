@@ -27,7 +27,14 @@ if (Notifications) {
       const data = notification.request.content.data;
       
       // If we are on the community screen, and this is a community notification, suppress banner and sound
-      if (currentActiveScreen === 'community' && (channelId === CHANNELS.community || data?.type === 'new_post' || data?.type === 'new_comment' || data?.type === 'new_like' || data?.type === 'new_reply')) {
+      const isCommunityNotification = channelId === CHANNELS.community || 
+        data?.screen === 'community' ||
+        data?.type === 'new_post' || 
+        data?.type === 'new_comment' || 
+        data?.type === 'new_like' || 
+        data?.type === 'new_reply';
+
+      if (currentActiveScreen === 'community' && isCommunityNotification) {
          return {
            shouldPlaySound: false,
            shouldSetBadge: false,

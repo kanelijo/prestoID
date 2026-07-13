@@ -175,6 +175,7 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         .from('community_posts')
         .select('id, target_batches')
         .eq('business_id', student.business_id)
+        .neq('is_deleted', true)
         .gte('created_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
         .order('created_at', { ascending: false });
 

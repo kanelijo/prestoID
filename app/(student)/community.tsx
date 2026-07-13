@@ -63,6 +63,27 @@ const extractUrlAndName = (text: string) => {
   return null;
 };
 
+// Clickable link parser helper
+const renderTextWithLinks = (text: string, linkColor: string = '#0066CC') => {
+  if (!text) return null;
+  const urlRegex = /(https?:\/\/[^\s]+)/g;
+  const parts = text.split(urlRegex);
+  return parts.map((part, idx) => {
+    if (urlRegex.test(part)) {
+      return (
+        <Text
+          key={idx}
+          style={{ textDecorationLine: 'underline', color: linkColor }}
+          onPress={() => Linking.openURL(part).catch(err => console.warn("Failed to open URL:", err))}
+        >
+          {part}
+        </Text>
+      );
+    }
+    return part;
+  });
+};
+
 // Date separator helper
 const getFormattedDividerDate = (dateString: string) => {
   if (!dateString) return 'Today';
@@ -910,11 +931,11 @@ export default function StudentCommunityScreen() {
                         </View>
                         {captionText ? (
                           <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 }}>
-                            <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther, { paddingRight: 0 }]}>
-                              {captionText}
-                            </Text>
-                          </View>
-                        ) : null}
+                             <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther, { paddingRight: 0 }]}>
+                               {renderTextWithLinks(captionText, isSelf ? '#FFFFFF' : '#0066CC')}
+                             </Text>
+                           </View>
+                         ) : null}
                       </View>
                     );
                   })()}
@@ -971,7 +992,7 @@ export default function StudentCommunityScreen() {
                   })() : (
                     item.text !== '[Attached Image]' && !item.text?.startsWith('[Image:') && (
                       <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
-                        {item.text}
+                        {renderTextWithLinks(item.text, isSelf ? '#FFFFFF' : '#0066CC')}
                       </Text>
                     )
                   )}
