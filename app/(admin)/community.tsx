@@ -1331,16 +1331,16 @@ export default function AdminCommunityScreen() {
                           }}
                         >
                           {isDownloading ? (
-                            <ActivityIndicator size="small" color={isSelf ? '#FFF' : '#AF2800'} style={{ marginRight: 8 }} />
+                            <ActivityIndicator size="small" color="#AF2800" style={{ marginRight: 8 }} />
                           ) : (
                             <Ionicons 
                               name={isDownloaded ? "document-text" : "download-outline"} 
                               size={24} 
-                              color={isSelf ? '#FFF' : '#AF2800'} 
+                              color="#AF2800" 
                               style={{ marginRight: 8 }} 
                             />
                           )}
-                           <Text style={[styles.bubbleFileAttachmentText, { color: isSelf ? '#FFF' : Colors.text.primary }]} numberOfLines={1}>
+                           <Text style={[styles.bubbleFileAttachmentText, { color: Colors.text.primary }]} numberOfLines={1}>
                              {docName}
                            </Text>
                            {isDownloaded && !isDownloading && (
@@ -2044,10 +2044,10 @@ const styles = StyleSheet.create({
     position: 'relative'
   },
   bubbleSelf: { 
-    backgroundColor: '#AF2800', 
+    backgroundColor: '#FFFFFF', 
     borderBottomRightRadius: 4,
-    borderColor: '#911D00',
-    borderWidth: 0.5
+    borderColor: Colors.card.border,
+    borderWidth: 1
   },
   bubbleOther: { 
     backgroundColor: '#FFFFFF', 
@@ -2102,7 +2102,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: 'rgba(255,255,255,0.25)',
   },
-  textSelf: { color: '#FFFFFF' },
+  textSelf: { color: Colors.text.primary },
   textOther: { color: Colors.text.primary },
   timeText: { 
     fontSize: 9, 
@@ -2113,7 +2113,7 @@ const styles = StyleSheet.create({
     bottom: 4, 
     right: 8 
   },
-  timeSelf: { color: '#FFB4A2' },
+  timeSelf: { color: Colors.text.tertiary },
   timeOther: { color: Colors.text.tertiary },
   inputBar: { 
     flexDirection: 'row', 
