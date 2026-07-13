@@ -6,6 +6,7 @@ import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -72,6 +73,8 @@ export default function SplashScreen() {
               if (cachedStudentStr) {
                 store.setStudentData(JSON.parse(cachedStudentStr));
               }
+              // Fire prefetch immediately — user has 2-3s of splash/animation before reaching tabs
+              usePrefetchStore.getState().prefetchAll(cachedProfile.userId);
             }
 
             // Route instantly
@@ -246,6 +249,10 @@ export default function SplashScreen() {
               dest = businessId ? '/(admin)/students' : '/(auth)/create-institute';
             } else {
               dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
+              // Fire prefetch — user has splash+animation time before reaching tabs
+              if (session.user?.id) {
+                usePrefetchStore.getState().prefetchAll(session.user.id);
+              }
             }
 
             if ((global as any).pendingNotificationRedirect) {

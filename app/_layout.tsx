@@ -7,6 +7,7 @@ import { Colors } from '@/constants/colors';
 import { backupProcedure } from '@/lib/backupService';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 // Safely import native modules
 let TaskManager: any;
@@ -99,6 +100,8 @@ export default function RootLayout() {
         } else {
           useNotificationStore.getState().fetchStudentUnreadCounts(store.user.id);
           useNotificationStore.getState().fetchStudentPendingTestCount(store.user.id);
+          // Fire background prefetch for all student tabs
+          usePrefetchStore.getState().prefetchAll(store.user.id);
         }
       }
     };

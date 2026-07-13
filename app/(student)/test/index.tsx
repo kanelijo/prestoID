@@ -6,8 +6,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
-
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 export default function StudentTestScreen() {
   const router = useRouter();
@@ -16,9 +16,11 @@ export default function StudentTestScreen() {
   const activeStudentId = user?.id;
   
   const [activeTab, setActiveTab] = useState<'pending' | 'completed'>('pending');
-  const [pendingTests, setPendingTests] = useState<any[]>([]);
-  const [completedTests, setCompletedTests] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  // Bootstrap from prefetch cache — shows data instantly if available
+  const prefetch = usePrefetchStore();
+  const [pendingTests, setPendingTests] = useState<any[]>(prefetch.testsReady ? prefetch.pendingTests : []);
+  const [completedTests, setCompletedTests] = useState<any[]>(prefetch.testsReady ? prefetch.completedTests : []);
+  const [isLoading, setIsLoading] = useState(!prefetch.testsReady);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const fetchTests = async (silent = false) => {

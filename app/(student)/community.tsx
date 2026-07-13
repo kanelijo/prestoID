@@ -35,6 +35,7 @@ import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } fro
 import * as Haptics from 'expo-haptics';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { setCurrentActiveScreen } from '@/lib/notifications';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -249,10 +250,12 @@ const ZoomableImage = ({ uri, onZoomStateChange }: { uri: string, onZoomStateCha
 export default function StudentCommunityScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const [messages, setMessages] = useState<any[]>([]);
+  const prefetch = usePrefetchStore();
+  // Bootstrap from prefetch — shows messages instantly if they loaded in background
+  const [messages, setMessages] = useState<any[]>(prefetch.communityReady ? prefetch.communityMessages : []);
   const [inputText, setInputText] = useState('');
   const [studentProfile, setStudentProfile] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!prefetch.communityReady);
   const [isSending, setIsSending] = useState(false);
   const [coachingName, setCoachingName] = useState('Community Chat');
   const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
