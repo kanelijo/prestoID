@@ -87,10 +87,11 @@ serve(async (req) => {
         model: modelName,
         systemInstruction: SYSTEM_INSTRUCTION
       });
-      // Disable thinking for 2.5 models to conserve free-tier quota
+      // Disable thinking for 2.5, 3.1, and 3.5 models to conserve free-tier quota
+      const disableThinking = modelName.includes('2.5') || modelName.includes('3.1') || modelName.includes('3.5');
       const generationConfig: any = {
         responseMimeType: "application/json",
-        ...(modelName.includes('2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+        ...(disableThinking ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
       };
       return await model.generateContentStream({
         contents: [{ role: "user", parts }],
@@ -101,28 +102,28 @@ serve(async (req) => {
     let resultStream;
 
     try {
-      console.log("Attempt 1: Gemini 2.5 Flash");
-      resultStream = await attemptExtraction("gemini-2.5-flash");
+      console.log("Attempt 1: Gemini 3.5 Flash");
+      resultStream = await attemptExtraction("gemini-3.5-flash");
     } catch (err1: any) {
-      console.warn("Gemini 2.5 Flash failed:", err1.message);
+      console.warn("Gemini 3.5 Flash failed:", err1.message);
       try {
-        console.log("Attempt 2: Gemini 2.5 Flash Lite");
-        resultStream = await attemptExtraction("gemini-2.5-flash-lite");
+        console.log("Attempt 2: Gemini 3.1 Flash Lite");
+        resultStream = await attemptExtraction("gemini-3.1-flash-lite");
       } catch (err2: any) {
-        console.warn("Gemini 2.5 Flash Lite failed:", err2.message);
+        console.warn("Gemini 3.1 Flash Lite failed:", err2.message);
         try {
-          console.log("Attempt 3: Gemini 2.0 Flash");
-          resultStream = await attemptExtraction("gemini-2.0-flash");
+          console.log("Attempt 3: Gemini 2.5 Flash");
+          resultStream = await attemptExtraction("gemini-2.5-flash");
         } catch (err3: any) {
-          console.warn("Gemini 2.0 Flash failed:", err3.message);
+          console.warn("Gemini 2.5 Flash failed:", err3.message);
           try {
-            console.log("Attempt 4: Gemini 1.5 Pro");
-            resultStream = await attemptExtraction("gemini-1.5-pro");
+            console.log("Attempt 4: Gemini 2.5 Pro");
+            resultStream = await attemptExtraction("gemini-2.5-pro");
           } catch (err4: any) {
-            console.warn("Gemini 1.5 Pro failed:", err4.message);
+            console.warn("Gemini 2.5 Pro failed:", err4.message);
             try {
-              console.log("Attempt 5: Gemini 1.5 Flash");
-              resultStream = await attemptExtraction("gemini-1.5-flash");
+              console.log("Attempt 5: Gemini 2.0 Flash");
+              resultStream = await attemptExtraction("gemini-2.0-flash");
             } catch (err5: any) {
               console.error("All Gemini models failed:", err5.message);
               throw new Error("All Gemini models are currently overloaded. Please try again in a minute.");

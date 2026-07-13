@@ -404,8 +404,8 @@ export default function CreateAITestChatScreen() {
 
       const attemptGemini = async (modelName: string) => {
         const model = genAI.getGenerativeModel({ model: modelName });
-        // Disable thinking for 2.5 models — thinking tokens burn quota fast on free tier
-        const generationConfig: any = modelName.includes('2.5')
+        // Disable thinking for 2.5, 3.1, and 3.5 models to conserve free-tier quota
+        const generationConfig: any = (modelName.includes('2.5') || modelName.includes('3.1') || modelName.includes('3.5'))
           ? { thinkingConfig: { thinkingBudget: 0 } }
           : {};
         const result = await model.generateContent({ contents: geminiHistory, generationConfig });
@@ -432,36 +432,37 @@ export default function CreateAITestChatScreen() {
         return data.choices[0].message.content;
       };
 
-      // --- FAILOVER WATERFALL (best → oldest → Groq backup) ---
-      // gemini-2.5-flash: highest free quota, best quality
-      // gemini-2.5-flash-lite: lightweight, still new quota pool
-      // gemini-2.0-flash / 1.5-flash / 1.5-pro: older fallbacks
-      // groq llama-3.3-70b: final backup (text-only, no PDFs)
+      // --- FAILOVER WATERFALL (best → newest → fallback) ---
+      // gemini-3.5-flash: latest, largest free quota
+      // gemini-3.1-flash-lite: lightweight 3.x fallback
+      // gemini-2.5-flash / gemini-2.5-pro: high quality 2.5 series
+      // gemini-2.0-flash / gemini-2.0-flash-lite: 2.0 series
+      // groq llama-3.3-70b: final backup (text-only)
       try {
-        console.log("Attempt 1: Gemini 2.5 Flash");
-        responseText = await attemptGemini("gemini-2.5-flash");
+        console.log("Attempt 1: Gemini 3.5 Flash");
+        responseText = await attemptGemini("gemini-3.5-flash");
       } catch (err1: any) {
-        console.warn("Gemini 2.5 Flash failed:", err1?.message || err1);
+        console.warn("Gemini 3.5 Flash failed:", err1?.message || err1);
         try {
-          console.log("Attempt 2: Gemini 2.5 Flash Lite");
-          responseText = await attemptGemini("gemini-2.5-flash-lite");
+          console.log("Attempt 2: Gemini 3.1 Flash Lite");
+          responseText = await attemptGemini("gemini-3.1-flash-lite");
         } catch (err2: any) {
-          console.warn("Gemini 2.5 Flash Lite failed:", err2?.message || err2);
+          console.warn("Gemini 3.1 Flash Lite failed:", err2?.message || err2);
           try {
-            console.log("Attempt 3: Gemini 2.0 Flash");
-            responseText = await attemptGemini("gemini-2.0-flash");
+            console.log("Attempt 3: Gemini 2.5 Flash");
+            responseText = await attemptGemini("gemini-2.5-flash");
           } catch (err3: any) {
-            console.warn("Gemini 2.0 Flash failed:", err3?.message || err3);
+            console.warn("Gemini 2.5 Flash failed:", err3?.message || err3);
             try {
-              console.log("Attempt 4: Gemini 1.5 Flash");
-              responseText = await attemptGemini("gemini-1.5-flash");
+              console.log("Attempt 4: Gemini 2.5 Pro");
+              responseText = await attemptGemini("gemini-2.5-pro");
             } catch (err4: any) {
-              console.warn("Gemini 1.5 Flash failed:", err4?.message || err4);
+              console.warn("Gemini 2.5 Pro failed:", err4?.message || err4);
               try {
-                console.log("Attempt 5: Gemini 1.5 Pro");
-                responseText = await attemptGemini("gemini-1.5-pro");
+                console.log("Attempt 5: Gemini 2.0 Flash");
+                responseText = await attemptGemini("gemini-2.0-flash");
               } catch (err5: any) {
-                console.warn("Gemini 1.5 Pro failed:", err5?.message || err5);
+                console.warn("Gemini 2.0 Flash failed:", err5?.message || err5);
                 if (groqSupported) {
                   try {
                     console.log("Attempt 6: Groq Llama 3.3 70B");
