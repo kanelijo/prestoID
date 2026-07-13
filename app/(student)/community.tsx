@@ -129,7 +129,7 @@ const formatBubbleTime = (dateString: string) => {
 // Extract links, docs, and media dynamically from community messages
 const extractMediaDocsLinks = (msgs: any[]) => {
   const media: string[] = [];
-  const docs: { name: string; url: string; date: string }[] = [];
+  const docs: { id: string; name: string; url: string; date: string }[] = [];
   const links: { title: string; url: string; date: string }[] = [];
 
   msgs.forEach(msg => {
@@ -140,7 +140,7 @@ const extractMediaDocsLinks = (msgs: any[]) => {
       if (parsed.type === 'image') {
         media.push(parsed.url);
       } else if (parsed.type === 'document') {
-        docs.push({ name: parsed.name, url: parsed.url, date: new Date(msg.created_at).toLocaleDateString() });
+        docs.push({ id: String(msg.id), name: parsed.name, url: parsed.url, date: new Date(msg.created_at).toLocaleDateString() });
       }
     }
 
@@ -155,7 +155,7 @@ const extractMediaDocsLinks = (msgs: any[]) => {
         } else if (/\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar)$/i.test(cleanUrl)) {
           const fileName = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1) || 'Document';
           if (!docs.some(d => d.url === cleanUrl)) {
-            docs.push({ name: fileName, url: cleanUrl, date: new Date(msg.created_at).toLocaleDateString() });
+            docs.push({ id: String(msg.id), name: fileName, url: cleanUrl, date: new Date(msg.created_at).toLocaleDateString() });
           }
         } else {
           if (!links.some(l => l.url === cleanUrl)) {
@@ -1227,7 +1227,17 @@ export default function StudentCommunityScreen() {
                           activeOpacity={0.7}
                           onPress={() => {
                             if (item.url) {
-                              downloadAndOpenSaf(item.url, item.name);
+                              const localUri = localMediaMap[item.id];
+                              if (localUri && item.name.toLowerCase().endsWith('.pdf')) {
+                                router.push({
+                                  pathname: '/(student)/pdf-viewer',
+                                  params: { uri: localUri, title: item.name }
+                                });
+                              } else if (!localUri && item.name.toLowerCase().endsWith('.pdf')) {
+                                handleDownloadDocument(item.id, item.url, item.name);
+                              } else {
+                                downloadAndOpenSaf(item.url, item.name);
+                              }
                             }
                           }}
                         >

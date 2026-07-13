@@ -134,7 +134,7 @@ const formatBubbleTime = (dateString: string) => {
 // Extract links, docs, and media dynamically from community messages
 const extractMediaDocsLinks = (msgs: any[]) => {
   const media: string[] = [];
-  const docs: { name: string; url: string; date: string }[] = [];
+  const docs: { id: string; name: string; url: string; date: string }[] = [];
   const links: { title: string; url: string; date: string }[] = [];
 
   msgs.forEach(msg => {
@@ -145,7 +145,7 @@ const extractMediaDocsLinks = (msgs: any[]) => {
       if (parsed.type === 'image') {
         media.push(parsed.url);
       } else if (parsed.type === 'document') {
-        docs.push({ name: parsed.name, url: parsed.url, date: new Date(msg.created_at).toLocaleDateString() });
+        docs.push({ id: String(msg.id), name: parsed.name, url: parsed.url, date: new Date(msg.created_at).toLocaleDateString() });
       }
     }
 
@@ -160,7 +160,7 @@ const extractMediaDocsLinks = (msgs: any[]) => {
         } else if (/\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar)$/i.test(cleanUrl)) {
           const fileName = cleanUrl.substring(cleanUrl.lastIndexOf('/') + 1) || 'Document';
           if (!docs.some(d => d.url === cleanUrl)) {
-            docs.push({ name: fileName, url: cleanUrl, date: new Date(msg.created_at).toLocaleDateString() });
+            docs.push({ id: String(msg.id), name: fileName, url: cleanUrl, date: new Date(msg.created_at).toLocaleDateString() });
           }
         } else {
           if (!links.some(l => l.url === cleanUrl)) {
@@ -173,6 +173,7 @@ const extractMediaDocsLinks = (msgs: any[]) => {
 
   return { media, docs, links };
 };
+
 
 // Reusable animated pressable that scales down slightly when pressed (WhatsApp/premium tactile feel)
 const ScalePressable = ({ children, onPress, style, disabled }: { children: React.ReactNode, onPress?: () => void, style?: any, disabled?: boolean }) => {
@@ -287,6 +288,8 @@ export default function AdminCommunityScreen() {
   const [adminProfile, setAdminProfile] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isPickingImage, setIsPickingImage] = useState(false);
+  const [isPickingDocument, setIsPickingDocument] = useState(false);
   const [coachingName, setCoachingName] = useState('Community Chat');
   const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
   const [studentCount, setStudentCount] = useState<number>(0);
@@ -660,6 +663,7 @@ export default function AdminCommunityScreen() {
   }, [messages.length]);
 
   const handlePickImage = async () => {
+    setIsPickingImage(true);
     try {
       const status = await ImagePicker.getMediaLibraryPermissionsAsync();
       if (!status.granted) {
@@ -675,6 +679,8 @@ export default function AdminCommunityScreen() {
         allowsEditing: false,
         quality: 0.8,
       });
+
+      setIsPickingImage(false);
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const selectedAsset = result.assets[0];
@@ -759,6 +765,7 @@ export default function AdminCommunityScreen() {
         uploadPromiseRef.current = startBackgroundUpload(sessionId);
       }
     } catch (err: any) {
+      setIsPickingImage(false);
       console.warn('Failed to pick image:', err);
       Alert.alert('Error', 'Failed to select image. Please try again.');
     }
@@ -836,11 +843,14 @@ export default function AdminCommunityScreen() {
   };
 
   const handlePickDocument = async () => {
+    setIsPickingDocument(true);
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
       });
+
+      setIsPickingDocument(false);
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const doc = result.assets[0];
@@ -896,9 +906,11 @@ export default function AdminCommunityScreen() {
         );
       }
     } catch (err: any) {
+      setIsPickingDocument(false);
       console.warn('Failed to pick/upload document:', err);
       Alert.alert('Error', 'Failed to select document. Please try again.');
     } finally {
+      setIsPickingDocument(false);
       setIsSending(false);
     }
   };
@@ -1430,14 +1442,24 @@ export default function AdminCommunityScreen() {
           <ScalePressable 
             style={styles.attachIconBtn} 
             onPress={handlePickImage}
+            disabled={isPickingImage || isPickingDocument}
           >
-            <Ionicons name="image-outline" size={22} color={Colors.text.secondary} />
+            {isPickingImage ? (
+              <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : (
+              <Ionicons name="image-outline" size={22} color={Colors.text.secondary} />
+            )}
           </ScalePressable>
           <ScalePressable 
             style={styles.attachIconBtn} 
             onPress={handlePickDocument}
+            disabled={isPickingImage || isPickingDocument}
           >
-            <Ionicons name="document-text-outline" size={22} color={Colors.text.secondary} />
+            {isPickingDocument ? (
+              <ActivityIndicator size="small" color={Colors.accent.primary} />
+            ) : (
+              <Ionicons name="document-text-outline" size={22} color={Colors.text.secondary} />
+            )}
           </ScalePressable>
           <TextInput 
             style={styles.textInput}
@@ -1868,7 +1890,17 @@ export default function AdminCommunityScreen() {
                           activeOpacity={0.7}
                           onPress={() => {
                             if (item.url) {
-                              downloadAndOpenSaf(item.url, item.name);
+                              const localUri = localMediaMap[item.id];
+                              if (localUri && item.name.toLowerCase().endsWith('.pdf')) {
+                                router.push({
+                                  pathname: '/(admin)/pdf-viewer',
+                                  params: { uri: localUri, title: item.name }
+                                });
+                              } else if (!localUri && item.name.toLowerCase().endsWith('.pdf')) {
+                                handleDownloadDocument(item.id, item.url, item.name);
+                              } else {
+                                downloadAndOpenSaf(item.url, item.name);
+                              }
                             }
                           }}
                         >
