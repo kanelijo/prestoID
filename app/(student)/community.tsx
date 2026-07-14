@@ -18,6 +18,7 @@ import {
   Pressable,
   PanResponder,
   Linking,
+  ImageBackground,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -785,7 +786,12 @@ export default function StudentCommunityScreen() {
       )}
 
       {/* Chat Background & Message List */}
-      <FlatList
+      <ImageBackground
+        source={require('../../assets/images/community chat wallpaper.jpeg')}
+        style={{ flex: 1 }}
+        resizeMode="cover"
+      >
+        <FlatList
         ref={flatListRef}
         data={filteredMessages}
         keyExtractor={(item) => String(item.id)}
@@ -1026,6 +1032,7 @@ export default function StudentCommunityScreen() {
           );
         }}
       />
+    </ImageBackground>
 
       {/* WhatsApp-Style Avatar Preview Modal */}
       <Modal
