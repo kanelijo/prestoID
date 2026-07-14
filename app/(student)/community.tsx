@@ -91,6 +91,138 @@ const renderTextWithLinks = (text: string, linkColor: string = '#0066CC') => {
   });
 };
 
+interface LinkPreviewData {
+  title: string;
+  image?: string;
+  description?: string;
+  url: string;
+}
+
+const previewCache: Record<string, LinkPreviewData | null> = {};
+
+const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) => {
+  const [preview, setPreview] = useState<LinkPreviewData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|org|net|co|in|edu|gov|io|info)(?:\/[^\s]*)?)/gi;
+  const match = text.match(urlRegex);
+  const rawUrl = match ? match[0] : null;
+
+  useEffect(() => {
+    if (!rawUrl) {
+      setPreview(null);
+      return;
+    }
+
+    let cleanUrl = rawUrl.trim();
+    if (!/^https?:\/\//i.test(cleanUrl)) {
+      cleanUrl = `https://${cleanUrl}`;
+    }
+
+    if (previewCache[cleanUrl] !== undefined) {
+      setPreview(previewCache[cleanUrl]);
+      return;
+    }
+
+    setLoading(true);
+    fetch(cleanUrl)
+      .then(res => res.text())
+      .then(html => {
+        const getMetaTag = (property: string) => {
+          const regex = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
+          const m = html.match(regex);
+          if (m) return m[1];
+          const revRegex = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${property}["']`, 'i');
+          const revMatch = html.match(revRegex);
+          return revMatch ? revMatch[1] : null;
+        };
+
+        let title = getMetaTag('og:title') || getMetaTag('twitter:title');
+        if (!title) {
+          const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
+          title = titleMatch ? titleMatch[1] : '';
+        }
+
+        let image = getMetaTag('og:image') || getMetaTag('twitter:image');
+        let description = getMetaTag('og:description') || getMetaTag('twitter:description') || '';
+
+        if (image && !/^https?:\/\//i.test(image)) {
+          try {
+            const urlObj = new URL(cleanUrl);
+            image = `${urlObj.origin}${image.startsWith('/') ? '' : '/'}${image}`;
+          } catch (e) {}
+        }
+
+        if (title) {
+          const data = { title, image: image || undefined, description, url: cleanUrl };
+          previewCache[cleanUrl] = data;
+          setPreview(data);
+        } else {
+          previewCache[cleanUrl] = null;
+          setPreview(null);
+        }
+      })
+      .catch(() => {
+        previewCache[cleanUrl] = null;
+        setPreview(null);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
+  }, [rawUrl]);
+
+  if (loading) {
+    return (
+      <View style={{ padding: 8, flexDirection: 'row', alignItems: 'center', backgroundColor: isSelf ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: 8, marginTop: 6 }}>
+        <ActivityIndicator size="small" color={isSelf ? '#FFF' : '#AF2800'} />
+        <Text style={{ fontSize: 12, marginLeft: 8, color: isSelf ? '#FFF' : '#666' }}>Fetching preview...</Text>
+      </View>
+    );
+  }
+
+  if (!preview) return null;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.8}
+      onPress={() => Linking.openURL(preview.url).catch(e => console.warn(e))}
+      style={{
+        marginTop: 8,
+        borderRadius: 12,
+        overflow: 'hidden',
+        backgroundColor: '#FFFFFF',
+        borderWidth: 1,
+        borderColor: '#E0E0E0',
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        shadowOffset: { width: 0, height: 2 }
+      }}
+    >
+      {preview.image ? (
+        <Image
+          source={{ uri: preview.image }}
+          style={{ width: '100%', height: 140, resizeMode: 'cover' }}
+        />
+      ) : null}
+      <View style={{ padding: 10 }}>
+        <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: 'bold', color: '#111' }}>
+          {preview.title}
+        </Text>
+        {preview.description ? (
+          <Text numberOfLines={2} style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+            {preview.description}
+          </Text>
+        ) : null}
+        <Text numberOfLines={1} style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+          {preview.url.replace(/^https?:\/\/(?:www\.)?/i, '')}
+        </Text>
+      </View>
+    </TouchableOpacity>
+  );
+};
+
 // Date separator helper
 const getFormattedDividerDate = (dateString: string) => {
   if (!dateString) return 'Today';
@@ -1003,9 +1135,12 @@ export default function StudentCommunityScreen() {
                     );
                   })() : (
                     item.text !== '[Attached Image]' && !item.text?.startsWith('[Image:') && (
-                      <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
-                        {renderTextWithLinks(item.text, isSelf ? '#FFFFFF' : '#0066CC')}
-                      </Text>
+                      <View style={{ minWidth: 160 }}>
+                        <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
+                          {renderTextWithLinks(item.text, isSelf ? '#FFFFFF' : '#0066CC')}
+                        </Text>
+                        <LinkPreviewCard text={item.text} isSelf={isSelf} />
+                      </View>
                     )
                   )}
 
