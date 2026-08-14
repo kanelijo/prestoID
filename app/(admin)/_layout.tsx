@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Tabs, Redirect } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
@@ -86,6 +86,8 @@ function TabIcon({ name, label, focused }: TabIconProps) {
   );
 }
 
+import { CustomAlert } from '@/components/CustomAlert';
+
 export default function AdminLayout() {
   const insets = useSafeAreaInsets();
   const { user, businessId, role } = useAuthStore();
@@ -98,22 +100,51 @@ export default function AdminLayout() {
   useEffect(() => {
     if (user?.id && businessId) {
       useNotificationStore.getState().fetchAdminUnreadCount(user.id, businessId);
+
+      // Realtime listener for new student registrations
+      const channelId = `admin_realtime_students_${businessId}_${Math.random().toString(36).substring(7)}`;
+      const studentSub = supabase
+        .channel(channelId)
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'students',
+            filter: `business_id=eq.${businessId}`,
+          },
+          (payload) => {
+            const newStudent = payload.new;
+            if (newStudent) {
+              CustomAlert.alert(
+                '🎉 New Student Registered!',
+                `${newStudent.name || 'A new student'} (ID: ${newStudent.enrollment_id || 'N/A'}) has registered in ${newStudent.batch_name || 'your institute'}.`
+              );
+              useNotificationStore.getState().fetchAdminUnreadCount(user.id, businessId);
+            }
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(studentSub);
+      };
     }
   }, [user, businessId]);
 
   return (
-    <>
+    <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
       {/* <TrialBanner /> */}
       <OfflineBanner />
       <Tabs
-        backBehavior="history"
+        backBehavior="initialRoute"
         screenOptions={{
         headerShown: false,
         tabBarStyle: [
           styles.tabBar,
           {
-            height: 64 + insets.bottom,
-            paddingBottom: insets.bottom > 0 ? insets.bottom - 4 : 8,
+            height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
+            paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
           },
         ],
         tabBarShowLabel: false,
@@ -183,6 +214,7 @@ export default function AdminLayout() {
         />
       <Tabs.Screen name="test/create-ai" options={{ href: null }} />
       <Tabs.Screen name="test/create-manual" options={{ href: null }} />
+      <Tabs.Screen name="test/target-exam-admin" options={{ href: null }} />
       <Tabs.Screen name="test/banks" options={{ href: null }} />
       <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
       <Tabs.Screen name="test/zenza-review" options={{ href: null }} />
@@ -190,8 +222,9 @@ export default function AdminLayout() {
       <Tabs.Screen name="notebank" options={{ href: null }} />
       <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
       <Tabs.Screen name="lab" options={{ href: null }} />
+      <Tabs.Screen name="coaching-profile" options={{ href: null }} />
       </Tabs>
-    </>
+    </View>
   );
 }
 

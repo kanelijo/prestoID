@@ -1,4 +1,4 @@
-package com.kanelijo.prestoid
+package com.kanelijo.zenza
 
 import android.app.Application
 import android.content.res.Configuration

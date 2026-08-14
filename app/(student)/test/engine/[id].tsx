@@ -1,15 +1,18 @@
-import { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, AppState, ActivityIndicator, Dimensions, FlatList, Modal } from 'react-native';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState, ActivityIndicator, Dimensions, FlatList, Modal, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useQuizStore } from '@/stores/useQuizStore';
+import { getTestFromLocal, saveTestToLocal, saveTestProgressToLocal } from '@/lib/localDb';
 import * as Haptics from 'expo-haptics';
-import { activateKeepAwake, deactivateKeepAwake } from 'expo-keep-awake';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { CustomAlert } from '@/components/CustomAlert';
 
 const { width: windowWidth } = Dimensions.get('window');
 
@@ -31,6 +34,7 @@ export default function ZenZaTestEngineScreen() {
   const [isStarted, setIsStarted] = useState(false);
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number>(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const endTimeRef = useRef<number>(0);
   const reqFrameRef = useRef<number>(0);
 
@@ -46,15 +50,43 @@ export default function ZenZaTestEngineScreen() {
   // Only true between startTimer() and submitTest() — NOT during analysis/review
   const isTestActive = useRef<boolean>(false);
 
-  useEffect(() => {
-    loadTest();
-    return () => {
-      cancelAnimationFrame(reqFrameRef.current);
-      if (autoAdvanceTimeoutRef.current) {
-        clearTimeout(autoAdvanceTimeoutRef.current);
-      }
-    };
-  }, [id]);
+  useFocusEffect(
+    useCallback(() => {
+      // 1. Reset all state hooks to default values
+      setTestDetails(null);
+      setQuestions([]);
+      setIsLoading(true);
+      setCurrentQIndex(0);
+      setIsStarted(false);
+      setShowSubmitConfirm(false);
+      setTimeLeft(0);
+      setIsSubmitting(false);
+
+      // 2. Reset all ref containers to default values
+      endTimeRef.current = 0;
+      reqFrameRef.current = 0;
+      backgroundTime.current = null;
+      timeLogsRef.current = {};
+      changesRef.current = {};
+      revisitsRef.current = {};
+      lastTimeRef.current = Date.now();
+      hasSubmitted.current = false;
+      isTestActive.current = false;
+
+      // 3. Clear active answers in quiz store
+      clearAnswers();
+
+      // 4. Load the new test details
+      loadTest();
+
+      return () => {
+        cancelAnimationFrame(reqFrameRef.current);
+        if (autoAdvanceTimeoutRef.current) {
+          clearTimeout(autoAdvanceTimeoutRef.current);
+        }
+      };
+    }, [id])
+  );
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
@@ -99,15 +131,25 @@ export default function ZenZaTestEngineScreen() {
     
     if (appState.current.match(/active/) && nextAppState.match(/inactive|background/)) {
       backgroundTime.current = Date.now();
+      saveActiveTestState({}); // Saves lastActiveTime timestamp automatically
     } else if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
       if (backgroundTime.current) {
         const timeAway = Date.now() - backgroundTime.current;
         lastTimeRef.current += timeAway; // Deduct time spent in background from question timer
-        if (timeAway > GRACE_PERIOD_MS) {
-          Alert.alert('Violation Detected', 'You left the test for too long. Auto-submitting.');
+        
+        if (timeAway > 20 * 60 * 1000) {
+          CustomAlert.alert('Violation Detected', 'You left the test for more than 20 minutes. Auto-submitting.');
           submitTest('violation');
         } else {
-          Alert.alert('Warning', 'Do not leave the app during a test.');
+          // Returned within 20 minutes: Grant 10 minutes bonus time!
+          const bonusMs = 10 * 60 * 1000;
+          endTimeRef.current = endTimeRef.current + bonusMs;
+          saveActiveTestState({ endTime: endTimeRef.current });
+          
+          CustomAlert.alert(
+            'Test Resumed ⏱️',
+            'Welcome back! Since you returned within 20 minutes, an additional 10 minutes has been added to your remaining test duration.'
+          );
         }
       }
       backgroundTime.current = null;
@@ -134,15 +176,25 @@ export default function ZenZaTestEngineScreen() {
         if (st) setStudentId(st.id);
       }
 
-      // Fetch Real Test
-      const { data: test, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
-      if (tErr) throw tErr;
+      // Fetch Test (Try Local SQLite Engine SSOT first for 0ms launch & offline mode)
+      let test: any = getTestFromLocal(String(id));
+      if (!test) {
+        const { data: remoteTest, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
+        if (tErr) throw tErr;
+        test = remoteTest;
+        saveTestToLocal(String(id), test);
+      }
       
-      const { data: qData, error: qErr } = await supabase.from('test_questions').select('*').eq('test_id', id).order('created_at');
-      if (qErr) throw qErr;
+      let finalQuestions: any[] = [];
+      if (test.questions && Array.isArray(test.questions) && test.questions.length > 0) {
+        finalQuestions = test.questions;
+      } else {
+        const { data: qData } = await supabase.from('test_questions').select('*').eq('test_id', id).order('created_at');
+        finalQuestions = qData || [];
+      }
 
       setTestDetails(test);
-      setQuestions(qData || []);
+      setQuestions(finalQuestions);
 
       // Check if there is an active running state for this test
       const cachedStateStr = await AsyncStorage.getItem(`@active_test_state_${id}`);
@@ -150,17 +202,41 @@ export default function ZenZaTestEngineScreen() {
         const cachedState = JSON.parse(cachedStateStr);
         if (cachedState.isStarted) {
           const now = Date.now();
-          const remaining = Math.max(0, Math.floor((cachedState.endTime - now) / 1000));
+          
+          // Calculate time offline/away
+          const lastActive = cachedState.lastActiveTime || cachedState.endTime || now;
+          const timeOffline = now - lastActive;
+          let updatedEndTime = cachedState.endTime;
+          let receivedBonus = false;
+
+          // If they returned within 20 minutes (1200000 ms), grant 10 minutes (600000 ms) bonus
+          if (timeOffline > 0 && timeOffline <= 20 * 60 * 1000) {
+            receivedBonus = true;
+            const bonusMs = 10 * 60 * 1000;
+            if (now < cachedState.endTime) {
+              updatedEndTime = cachedState.endTime + bonusMs;
+            } else {
+              updatedEndTime = now + bonusMs;
+            }
+            // Save immediately back to cache
+            await AsyncStorage.setItem(`@active_test_state_${id}`, JSON.stringify({
+              ...cachedState,
+              endTime: updatedEndTime,
+              lastActiveTime: now
+            }));
+          }
+
+          const remaining = Math.max(0, Math.floor((updatedEndTime - now) / 1000));
           if (remaining > 0) {
             // Load local answers into quiz store first
             await useQuizStore.getState().loadFromLocal(id);
             
-            endTimeRef.current = cachedState.endTime;
+            endTimeRef.current = updatedEndTime;
             timeLogsRef.current = cachedState.timeLogs || {};
             changesRef.current = cachedState.changes || {};
             revisitsRef.current = cachedState.revisits || {};
             isTestActive.current = true;
-            activateKeepAwake();
+            activateKeepAwakeAsync();
             setCurrentQIndex(cachedState.currentQIndex || 0);
             setTimeLeft(remaining);
             setIsStarted(true);
@@ -168,11 +244,19 @@ export default function ZenZaTestEngineScreen() {
             // Scroll to cached question index
             setTimeout(() => {
               flatListRef.current?.scrollToIndex({ index: cachedState.currentQIndex || 0, animated: false });
+              if (receivedBonus) {
+                setTimeout(() => {
+                  CustomAlert.alert(
+                    'Test Resumed ⏱️',
+                    'Welcome back! Since you returned within 20 minutes, an additional 10 minutes has been added to your remaining test duration.'
+                  );
+                }, 400);
+              }
             }, 150);
           } else {
             // Time has expired while the app was closed
             await useQuizStore.getState().loadFromLocal(id);
-            endTimeRef.current = cachedState.endTime;
+            endTimeRef.current = updatedEndTime;
             timeLogsRef.current = cachedState.timeLogs || {};
             changesRef.current = cachedState.changes || {};
             revisitsRef.current = cachedState.revisits || {};
@@ -187,7 +271,7 @@ export default function ZenZaTestEngineScreen() {
       setIsLoading(false);
     } catch (e) {
       console.warn(e);
-      Alert.alert('Error', 'Failed to load test');
+      CustomAlert.alert('Error', 'Failed to load test');
     }
   };
 
@@ -206,11 +290,10 @@ export default function ZenZaTestEngineScreen() {
   const clearActiveTestState = async () => {
     try {
       await AsyncStorage.removeItem(`@active_test_state_${id}`);
-      const { documentDirectory, getInfoAsync, deleteAsync } = require('expo-file-system/legacy');
-      const path = `${documentDirectory}test_${id}_progress.json`;
-      const info = await getInfoAsync(path);
+      const path = `${FileSystem.documentDirectory}test_${id}_progress.json`;
+      const info = await FileSystem.getInfoAsync(path);
       if (info.exists) {
-        await deleteAsync(path);
+        await FileSystem.deleteAsync(path);
       }
     } catch (err) {
       console.warn('Failed to clear active test state:', err);
@@ -220,7 +303,7 @@ export default function ZenZaTestEngineScreen() {
   const startTimer = (durationMinutes: number) => {
     endTimeRef.current = Date.now() + (durationMinutes * 60 * 1000);
     isTestActive.current = true; // Mark test as live — anti-cheat now active
-    activateKeepAwake();          // Prevent screen from sleeping during test
+    activateKeepAwakeAsync();          // Prevent screen from sleeping during test
     setIsStarted(true);
 
     // Initialize first question revisit count to 1
@@ -291,6 +374,7 @@ export default function ZenZaTestEngineScreen() {
   const submitTest = async (reason: string = 'manual') => {
     if (hasSubmitted.current) return;
     hasSubmitted.current = true;
+    setIsSubmitting(true);
     await clearActiveTestState();
     isTestActive.current = false; // Deactivate anti-cheat so post-test review is safe
     deactivateKeepAwake();         // Allow screen to sleep again after test
@@ -320,7 +404,28 @@ export default function ZenZaTestEngineScreen() {
 
     if (id === 'demo') {
       clearAnswers();
+      setIsSubmitting(false);
       router.replace(`/(student)/test/result/${id}`);
+      return;
+    }
+
+    let activeStudentId = studentId || useAuthStore.getState().studentData?.id;
+    if (!activeStudentId) {
+      const currentUser = useAuthStore.getState().user;
+      if (currentUser) {
+        const { data: st } = await supabase.from('students').select('id').eq('user_id', currentUser.id).maybeSingle();
+        if (st) {
+          activeStudentId = st.id;
+        }
+      }
+    }
+
+    if (!activeStudentId) {
+      setIsSubmitting(false);
+      hasSubmitted.current = false;
+      setTimeout(() => {
+        CustomAlert.alert('Error', 'Unable to verify your student profile. Please ensure you are logged in correctly.');
+      }, 400);
       return;
     }
 
@@ -340,29 +445,131 @@ export default function ZenZaTestEngineScreen() {
       }
     });
 
-    try {
-      const { data: newSub, error } = await supabase
-        .from('test_submissions')
-        .upsert({
+    let correctCount = 0;
+    let wrongCount = 0;
+    let skippedCount = 0;
+    questions.forEach((q) => {
+      const studentAns = latestAnswers[q.id];
+      if (studentAns === undefined || studentAns === null) {
+        skippedCount++;
+      } else if (studentAns === q.correct_option) {
+        correctCount++;
+      } else {
+        wrongCount++;
+      }
+    });
+
+    let retryCount = 0;
+    const maxRetries = 4;
+    let success = false;
+    let newSubId = null;
+    let lastError = null;
+
+    while (retryCount < maxRetries && !success) {
+      try {
+        // Get student table record ID for dual-ID lookup safety
+        const { data: stRec } = await supabase.from('students').select('id').eq('user_id', activeStudentId).maybeSingle();
+        const possibleStudentIds = [activeStudentId];
+        if (stRec?.id) possibleStudentIds.push(stRec.id);
+
+        // Check if submission already exists for student & test
+        const { data: existingSubs } = await supabase
+          .from('test_submissions')
+          .select('id, score')
+          .eq('test_id', id)
+          .in('student_id', possibleStudentIds)
+          .limit(1);
+
+        const existingSub = existingSubs && existingSubs.length > 0 ? existingSubs[0] : null;
+
+        if (existingSub) {
+          // Update score and answers on existing submission row
+          const { data: updatedData, error: upErr } = await supabase
+            .from('test_submissions')
+            .update({
+              score: totalScore,
+              answers: latestAnswers,
+              time_logs: timeLogsSeconds,
+              submitted_at: new Date().toISOString()
+            })
+            .eq('id', existingSub.id)
+            .select('id')
+            .single();
+
+          if (upErr) throw upErr;
+          newSubId = updatedData.id;
+        } else {
+          // Create new submission row
+          const { data: insertedData, error: insErr } = await supabase
+            .from('test_submissions')
+            .insert({
+              test_id: id,
+              student_id: activeStudentId,
+              answers: latestAnswers,
+              time_logs: timeLogsSeconds,
+              score: totalScore,
+              total_questions: questions.length,
+              submitted_at: new Date().toISOString()
+            })
+            .select('id')
+            .single();
+
+          if (insErr) throw insErr;
+          newSubId = insertedData.id;
+        }
+
+        success = true;
+      } catch (err) {
+        lastError = err;
+        retryCount++;
+        if (retryCount < maxRetries) {
+          const delay = 400 * Math.pow(2, retryCount);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // 1. Buffer attempt progress into local SQLite engine (ACID persistence)
+    saveTestProgressToLocal(String(id), activeStudentId, latestAnswers, timeLogsSeconds, totalScore, questions.length, success);
+
+    if (success && newSubId) {
+      clearAnswers();
+      setIsSubmitting(false);
+      router.replace(`/(student)/test/result/${newSubId}`);
+    } else {
+      console.warn('Supabase submission failed. Saving attempt offline:', lastError);
+      try {
+        const stored = await AsyncStorage.getItem('@offline_test_submissions');
+        const queue = stored ? JSON.parse(stored) : [];
+        queue.push({
           test_id: id,
-          student_id: studentId,
+          student_id: activeStudentId,
           answers: latestAnswers,
           time_logs: timeLogsSeconds,
           score: totalScore,
           total_questions: questions.length
-        }, { onConflict: 'test_id, student_id' })
-        .select('id')
-        .single();
-        
-      if (error) throw error;
-      
+        });
+        await AsyncStorage.setItem('@offline_test_submissions', JSON.stringify(queue));
+      } catch (e) {
+        console.warn('Failed to cache offline test submission:', e);
+      }
+
       clearAnswers();
-      // Pass the *submission* ID to the results page, not the test ID
-      router.replace(`/(student)/test/result/${newSub.id}`);
-    } catch (err: any) {
-      console.warn('Submission Error:', err);
-      hasSubmitted.current = false; // Reset so they can retry submitting!
-      Alert.alert('Error', 'Failed to submit test. Please check connection and try again.');
+      setIsSubmitting(false);
+      router.replace({
+        pathname: `/(student)/test/result/offline`,
+        params: {
+          testId: String(id),
+          score: totalScore,
+          total: questions.length,
+          correct: correctCount,
+          wrong: wrongCount,
+          skipped: skippedCount,
+          testTitle: testDetails?.title || 'Online Mock Test',
+          answers: JSON.stringify(latestAnswers),
+          timeLogs: JSON.stringify(timeLogsSeconds)
+        }
+      });
     }
   };
 
@@ -384,75 +591,75 @@ export default function ZenZaTestEngineScreen() {
     const posMarks = testDetails?.positive_marks ?? 5;
     const negMarks = testDetails?.negative_marks ?? 0;
     return (
-      <SafeAreaView style={[styles.container, { justifyContent: 'space-between', padding: 24, backgroundColor: '#F8F9FA' }]}>
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingTop: 20 }}>
-          <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: Colors.accent.primary + '15', justifyContent: 'center', alignItems: 'center', marginBottom: 24 }}>
-            <Ionicons name="document-text" size={40} color={Colors.accent.primary} />
+      <SafeAreaView style={[styles.container, { paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 8 : 16, backgroundColor: '#F8F9FA' }]}>
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 16 }}>
+          <View style={{ width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.accent.primary + '15', justifyContent: 'center', alignItems: 'center', marginBottom: 12, marginTop: 4 }}>
+            <Ionicons name="document-text" size={28} color={Colors.accent.primary} />
           </View>
           
-          <Text style={{ fontSize: 24, fontWeight: '800', color: Colors.text.primary, textAlign: 'center', marginBottom: 8 }}>
+          <Text style={{ fontSize: 20, fontWeight: '800', color: Colors.text.primary, textAlign: 'center', marginBottom: 4 }}>
             {testDetails?.title || 'Online Mock Test'}
           </Text>
-          <Text style={{ fontSize: 14, color: Colors.text.secondary, textAlign: 'center', marginBottom: 32 }}>
+          <Text style={{ fontSize: 13, color: Colors.text.secondary, textAlign: 'center', marginBottom: 16 }}>
             Please read the instructions carefully before starting the test.
           </Text>
 
-          <View style={{ backgroundColor: '#fff', borderRadius: 16, padding: 20, width: '100%', borderWidth: 1, borderColor: '#EBEBEB', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-              <Ionicons name="help-circle-outline" size={20} color={Colors.accent.primary} style={{ marginRight: 12 }} />
+          <View style={{ backgroundColor: '#fff', borderRadius: 12, padding: 14, width: '100%', borderWidth: 1, borderColor: '#EBEBEB', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name="help-circle-outline" size={18} color={Colors.accent.primary} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Total Questions</Text>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: Colors.text.primary }}>{questions.length} Multiple Choice Questions</Text>
+                <Text style={{ fontSize: 10, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Total Questions</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>{questions.length} Multiple Choice Questions</Text>
               </View>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-              <Ionicons name="time-outline" size={20} color={Colors.accent.primary} style={{ marginRight: 12 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name="time-outline" size={18} color={Colors.accent.primary} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Test Duration</Text>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: Colors.text.primary }}>{testDetails?.duration_minutes || 60} Minutes</Text>
+                <Text style={{ fontSize: 10, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Test Duration</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>{testDetails?.duration_minutes || 60} Minutes</Text>
               </View>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 16 }}>
-              <Ionicons name="gift-outline" size={20} color={Colors.accent.primary} style={{ marginRight: 12 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Ionicons name="gift-outline" size={18} color={Colors.accent.primary} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Marking Scheme</Text>
-                <Text style={{ fontSize: 15, fontWeight: '700', color: Colors.text.primary }}>
+                <Text style={{ fontSize: 10, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Marking Scheme</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>
                   +{posMarks} for Correct, {negMarks > 0 ? `-${negMarks} for Incorrect` : '0 Negative Marking'}
                 </Text>
               </View>
             </View>
 
-            <View style={{ flexDirection: 'row', alignItems: 'flex-start', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 16, marginTop: 8 }}>
-              <Ionicons name="warning-outline" size={20} color={Colors.status.warning} style={{ marginRight: 12, marginTop: 2 }} />
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 12, marginTop: 6 }}>
+              <Ionicons name="warning-outline" size={18} color={Colors.status.warning} style={{ marginRight: 10, marginTop: 2 }} />
               <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 11, color: Colors.status.warning, fontWeight: '700', textTransform: 'uppercase' }}>Exit Warning</Text>
-                <Text style={{ fontSize: 13, color: Colors.text.secondary, lineHeight: 18 }}>
+                <Text style={{ fontSize: 10, color: Colors.status.warning, fontWeight: '700', textTransform: 'uppercase' }}>Exit Warning</Text>
+                <Text style={{ fontSize: 12, color: Colors.text.secondary, lineHeight: 16 }}>
                   Do not lock your device or exit the app during the test. Doing so for more than 20 seconds will trigger automatic submission.
                 </Text>
               </View>
             </View>
           </View>
-        </View>
+        </ScrollView>
 
-        <View style={{ gap: 12, paddingBottom: 10, width: '100%' }}>
+        <View style={{ gap: 8, paddingBottom: 0, width: '100%' }}>
           <TouchableOpacity 
-            style={{ backgroundColor: Colors.accent.primary, paddingVertical: 16, borderRadius: 14, alignItems: 'center', shadowColor: Colors.accent.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}
+            style={{ backgroundColor: Colors.accent.primary, paddingVertical: 14, borderRadius: 12, alignItems: 'center', shadowColor: Colors.accent.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}
             onPress={() => {
               setIsStarted(true);
               lastTimeRef.current = Date.now();
               startTimer(testDetails?.duration_minutes || 60);
             }}
           >
-            <Text style={{ color: '#fff', fontSize: 17, fontWeight: '700' }}>Start Test</Text>
+            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Start Test</Text>
           </TouchableOpacity>
           
           <TouchableOpacity 
-            style={{ paddingVertical: 14, alignItems: 'center' }}
+            style={{ paddingVertical: 10, alignItems: 'center' }}
             onPress={() => router.back()}
           >
-            <Text style={{ color: Colors.text.secondary, fontSize: 15, fontWeight: '600' }}>Cancel</Text>
+            <Text style={{ color: Colors.text.secondary, fontSize: 14, fontWeight: '600' }}>Cancel</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -496,6 +703,7 @@ export default function ZenZaTestEngineScreen() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         scrollEventThrottle={16}
+        extraData={answers}
         getItemLayout={(data, index) => ({
           length: windowWidth,
           offset: windowWidth * index,
@@ -517,26 +725,28 @@ export default function ZenZaTestEngineScreen() {
         renderItem={({ item: q }) => (
           <View style={[styles.page, { width: windowWidth }]}>
             <View style={styles.questionCard}>
-              <Text style={styles.questionText}>{q.question_text}</Text>
-              
-              <View style={styles.optionsList}>
-                {q.options.map((opt: string, oIdx: number) => {
-                  const isSelected = answers[q.id] === oIdx;
-                  return (
-                    <TouchableOpacity 
-                      key={oIdx}
-                      style={[styles.optionBtn, isSelected && styles.optionSelected]}
-                      onPress={() => handleSelectOption(q.id, oIdx)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.radio, isSelected && styles.radioSelected]}>
-                        {isSelected && <View style={styles.radioDot} />}
-                      </View>
-                      <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, paddingBottom: 10 }}>
+                <Text style={styles.questionText}>{q.question_text}</Text>
+                
+                <View style={styles.optionsList}>
+                  {q.options.map((opt: string, oIdx: number) => {
+                    const isSelected = answers[q.id] === oIdx;
+                    return (
+                      <TouchableOpacity 
+                        key={oIdx}
+                        style={[styles.optionBtn, isSelected && styles.optionSelected]}
+                        onPress={() => handleSelectOption(q.id, oIdx)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.radio, isSelected && styles.radioSelected]}>
+                          {isSelected && <View style={styles.radioDot} />}
+                        </View>
+                        <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </ScrollView>
             </View>
           </View>
         )}
@@ -619,6 +829,12 @@ export default function ZenZaTestEngineScreen() {
           </View>
         </View>
       </Modal>
+      {isSubmitting && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color={Colors.accent.primary} />
+          <Text style={styles.loadingOverlayText}>Submitting your test, please wait...</Text>
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -638,18 +854,41 @@ const styles = StyleSheet.create({
   pagerView: { flex: 1 },
   page: { flex: 1, padding: 16 },
   questionCard: { flex: 1, backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
-  questionText: { fontSize: 18, fontWeight: '600', color: '#222', marginBottom: 24, lineHeight: 28 },
+  questionText: { fontSize: 18, fontWeight: '600', color: '#222', marginBottom: 24, lineHeight: 30, paddingVertical: 4, includeFontPadding: false },
   optionsList: { gap: 12 },
   optionBtn: { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 12, borderWidth: 1, borderColor: '#eee', backgroundColor: '#fafafa' },
   optionSelected: { borderColor: Colors.accent.primary, backgroundColor: '#f0f5ff' },
   radio: { width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#ccc', marginRight: 16, justifyContent: 'center', alignItems: 'center' },
   radioSelected: { borderColor: Colors.accent.primary },
   radioDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: Colors.accent.primary },
-  optionText: { flex: 1, fontSize: 16, color: '#444' },
+  optionText: { flex: 1, fontSize: 16, color: '#444', lineHeight: 26, paddingVertical: 4, includeFontPadding: false },
   optionTextSelected: { color: Colors.accent.primary, fontWeight: '600' },
-  footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#eee' },
-  navBtn: { flexDirection: 'row', alignItems: 'center', padding: 8 },
-  navText: { fontSize: 16, fontWeight: '600', color: Colors.accent.primary, marginHorizontal: 4 },
-  submitBtn: { backgroundColor: Colors.status.success, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
-  submitBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }
+  footer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    paddingHorizontal: 16, 
+    paddingTop: 8, 
+    paddingBottom: Platform.OS === 'android' ? 12 : 24, 
+    backgroundColor: '#fff', 
+    borderTopWidth: 1, 
+    borderTopColor: '#eee' 
+  },
+  navBtn: { flexDirection: 'row', alignItems: 'center', padding: 6 },
+  navText: { fontSize: 14, fontWeight: '600', color: Colors.accent.primary, marginHorizontal: 4 },
+  submitBtn: { backgroundColor: Colors.status.success, paddingHorizontal: 18, paddingVertical: 8, borderRadius: 16 },
+  submitBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  loadingOverlayText: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
 });

@@ -10,6 +10,7 @@ import {
   Alert,
   ActivityIndicator,
   Modal,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -20,11 +21,16 @@ import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 import { useOfflineQueue } from '@/stores/useOfflineQueue';
 import { registerForPushNotificationsAsync, sendPushNotification, CHANNELS } from '@/lib/notifications';
 import CachedImage from '@/components/CachedImage';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
 
-const BATCHES = ['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC'];
+// Batch filter list will be populated dynamically from the database
+
 
 export const DEMO_STUDENTS = [
   { id: 'demo-1', name: 'Amit Sharma', batch_name: 'MPPSC', enrollment_id: 'UCI-2026-001', phone: '9876543210', parent_phone: '9876543211', email: 'amit@email.com', course: 'MPPSC Prelims', fee_amount: 2500, fee_status: 'paid', dob: '15 Mar 2001', address: 'Indore, MP', joinDate: '15 Jan 2026', validTill: '15 Jan 2027', father_name: 'Rajesh Sharma', whatsapp: '9876543210', blood_group: 'O+', duration: '1 Year', batch_timing: '10:00 AM - 01:00 PM' },
@@ -42,15 +48,19 @@ export default function StudentsListScreen() {
   const [viewMode, setViewMode] = useState<'students' | 'fees'>('students');
   const [search, setSearch] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('All');
+  const [batches, setBatches] = useState<string[]>(['All']);
   const [feeFilter, setFeeFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Overdue'>('All');
-  const [students, setStudents] = useState<any[]>([]);
-  const [stats, setStats] = useState({ totalStudents: 0, presentToday: 0, feeCollected: '₹0' });
-  const [isLoading, setIsLoading] = useState(true);
+  const prefetch = usePrefetchStore.getState();
+  const [students, setStudents] = useState<any[]>(prefetch.adminStudents || []);
+  const [stats, setStats] = useState({ totalStudents: prefetch.adminStudents.length, presentToday: 0, feeCollected: '₹0' });
+  const [isLoading, setIsLoading] = useState(students.length === 0);
   const [adminName, setAdminName] = useState('Admin');
-  const { user, verified, businessId, businessName, avatarUrl } = useAuthStore();
+  const [, setTimeTick] = useState(0); // forces re-render every minute for "X min ago"
+  const { user, verified, businessId, businessName, avatarUrl, onlineUserIds, onlinePresence } = useAuthStore();
   const { adminUnreadCount } = useNotificationStore();
   const logoUrl = avatarUrl || user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null;
   const [isSendingReminders, setIsSendingReminders] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const { attendanceQueue, addAttendance, syncAttendance, loadQueue, clearQueue } = useOfflineQueue();
 
   // Scanner states
@@ -58,12 +68,37 @@ export default function StudentsListScreen() {
   const [isScannerVisible, setIsScannerVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
 
+  // Pulse animation for skeleton loading
+  const skeletonPulse = useRef(new Animated.Value(0.3)).current;
+
+  useEffect(() => {
+    if (isLoading) {
+      const anim = Animated.loop(
+        Animated.sequence([
+          Animated.timing(skeletonPulse, {
+            toValue: 0.7,
+            duration: 900,
+            useNativeDriver: true,
+          }),
+          Animated.timing(skeletonPulse, {
+            toValue: 0.3,
+            duration: 900,
+            useNativeDriver: true,
+          }),
+        ])
+      );
+      anim.start();
+      return () => anim.stop();
+    }
+  }, [isLoading]);
+
   const fetchStudentsAndStats = async (silent = false) => {
     if (!silent) setIsLoading(true);
     if (!verified) {
       // Test Mode (Sandbox)
       setStudents(DEMO_STUDENTS);
       setAdminName('Upendra Sir');
+      setBatches(['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC']);
       setStats({
         totalStudents: DEMO_STUDENTS.length,
         presentToday: 6,
@@ -102,6 +137,17 @@ export default function StudentsListScreen() {
       if (listError) throw listError;
       setStudents(list || []);
 
+      // Pre-populate onlinePresence store with last_seen_at from DB
+      // This makes last seen visible immediately on restart without waiting for presence sync
+      const dbPresence: Record<string, string> = {};
+      (list || []).forEach((s: any) => {
+        if (s.user_id && s.last_seen_at) dbPresence[s.user_id] = s.last_seen_at;
+      });
+      if (Object.keys(dbPresence).length > 0) {
+        const cur = useAuthStore.getState().onlinePresence;
+        // DB values as base, live presence values take priority
+        useAuthStore.getState().setOnlinePresence({ ...dbPresence, ...cur });
+      }
       // 2. Fetch today's attendance count
       const todayStr = new Date().toISOString().split('T')[0];
       const { count: presentCount, error: attError } = await supabase
@@ -141,6 +187,24 @@ export default function StudentsListScreen() {
         presentToday: presentCount || 0,
         feeCollected: feeCollectedStr,
       });
+
+      // 4. Fetch batches list — scoped to this business only
+      if (businessId) {
+        const { data: batchesList, error: batchesError } = await supabase
+          .from('batches')
+          .select('name')
+          .eq('business_id', businessId)
+          .order('name');
+        
+        if (!batchesError && batchesList) {
+          const names = ['All', ...batchesList.map(b => b.name)];
+          setBatches(names);
+        } else {
+          setBatches(['All']);
+        }
+      } else {
+        setBatches(['All']);
+      }
     } catch (err) {
       console.warn('Failed to load admin students roster:', err);
     } finally {
@@ -160,14 +224,21 @@ export default function StudentsListScreen() {
     }, [verified, businessId])
   );
 
+  // Tick every 60s so "X min ago" text auto-refreshes
+  useEffect(() => {
+    const interval = setInterval(() => setTimeTick(t => t + 1), 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     if (user) {
       registerForPushNotificationsAsync(user.id);
     }
     
     // Set up postgres realtime subscription for auto-syncing updates
+    const channelId = `admin-students-channel-${Math.random().toString(36).substring(7)}`;
     const channel = supabase
-      .channel('admin-students-channel')
+      .channel(channelId)
       .on(
         'postgres_changes',
         {
@@ -479,8 +550,155 @@ export default function StudentsListScreen() {
     );
   };
 
-  const handleExport = () => {
-    Alert.alert('Export Report', 'Fee report will be downloaded as a CSV file.');
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      if (!students || students.length === 0) {
+        Alert.alert('No Data', 'There are no student records to export.');
+        return;
+      }
+
+      // 1. Generate HTML list rows
+      const studentRowsHTML = students.map((s, idx) => {
+        let statusBadgeColor = '#16A34A'; // green
+        let statusText = 'PAID';
+        if (s.fee_status === 'unpaid') {
+          statusBadgeColor = '#F59E0B'; // orange
+          statusText = 'DUE';
+        } else if (s.fee_status === 'overdue') {
+          statusBadgeColor = '#EF4444'; // red
+          statusText = 'OVERDUE';
+        }
+
+        return `
+          <tr>
+            <td>${idx + 1}</td>
+            <td><strong>${s.name || 'N/A'}</strong></td>
+            <td>${s.phone || 'N/A'}</td>
+            <td>${s.batch || 'General'}</td>
+            <td><span class="status-badge" style="background-color: ${statusBadgeColor};">${statusText}</span></td>
+            <td>Rs. ${s.fee_amount || 0}</td>
+            <td>${s.fee_due_date ? new Date(s.fee_due_date).toLocaleDateString('en-IN') : 'N/A'}</td>
+          </tr>
+        `;
+      }).join('');
+
+      // 2. Calculated stats
+      const totalPaid = students.filter(s => s.fee_status === 'paid').reduce((sum, s) => sum + Number(s.fee_amount || 0), 0);
+      const totalDueCount = students.filter(s => s.fee_status === 'unpaid').length;
+      const totalOverdueCount = students.filter(s => s.fee_status === 'overdue').length;
+
+      const dateStr = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      const contactInfo = user?.phone || user?.email || 'N/A';
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            @page {
+              size: A4;
+              margin: 20mm 15mm 20mm 15mm;
+            }
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 0; color: #333; margin: 0; position: relative; min-height: 100%; }
+            .header-container { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #AF2800; padding-bottom: 12px; margin-bottom: 20px; }
+            .logo-placeholder { width: 50px; height: 50px; border-radius: 25px; object-fit: cover; }
+            .logo-text-placeholder { width: 50px; height: 50px; border-radius: 25px; background-color: #AF2800; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; }
+            .header-center { flex: 1; text-align: center; margin: 0 16px; }
+            .coaching-title { font-size: 22px; font-weight: bold; color: #AF2800; margin: 0; text-transform: uppercase; }
+            .header-right { text-align: right; font-size: 11px; color: #666; line-height: 1.4; max-width: 200px; }
+            
+            .report-title { font-size: 16px; font-weight: bold; color: #111; text-align: center; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 0.5px; }
+            
+            .stats-grid { display: flex; gap: 16px; margin-bottom: 24px; }
+            .stat-card { flex: 1; background-color: #F9FAFB; border: 1px solid #F3F4F6; border-radius: 8px; padding: 12px; text-align: center; }
+            .stat-val { font-size: 18px; font-weight: bold; margin-top: 4px; }
+            .stat-label { font-size: 11px; color: #6B7280; font-weight: 600; text-transform: uppercase; }
+            
+            table { width: 100%; border-collapse: collapse; margin-bottom: 30px; font-size: 11px; }
+            th { background-color: #F3F4F6; color: #374151; font-weight: bold; text-align: left; padding: 8px 10px; border-bottom: 1px solid #E5E7EB; }
+            td { padding: 8px 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563; }
+            tr:nth-child(even) td { background-color: #F9FAFB; }
+            
+            .status-badge { display: inline-block; font-size: 9px; font-weight: bold; padding: 2px 6px; border-radius: 4px; color: white; text-align: center; min-width: 50px; }
+            
+            .footer-watermark { position: fixed; bottom: -12mm; left: 0; right: 0; text-align: center; font-size: 9px; color: #9CA3AF; font-weight: bold; border-top: 1px solid #E5E7EB; padding-top: 6px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-container">
+            ${logoUrl 
+              ? `<img src="${logoUrl}" class="logo-placeholder" />` 
+              : `<div class="logo-text-placeholder">${(adminName || 'Z').charAt(0).toUpperCase()}</div>`
+            }
+            <div class="header-center">
+              <div class="coaching-title">${adminName || 'Zenza Academy'}</div>
+            </div>
+            <div class="header-right">
+              <strong>Contact:</strong> ${contactInfo}<br/>
+              <strong>Date:</strong> ${dateStr}
+            </div>
+          </div>
+          
+          <div class="report-title">Monthly Student Fee Report</div>
+          
+          <div class="stats-grid">
+            <div class="stat-card">
+              <div class="stat-label">Total Collected</div>
+              <div class="stat-val" style="color: #16A34A;">Rs. ${totalPaid}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Students with Dues</div>
+              <div class="stat-val" style="color: #F59E0B;">${totalDueCount}</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Overdue Invoices</div>
+              <div class="stat-val" style="color: #EF4444;">${totalOverdueCount}</div>
+            </div>
+          </div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>No.</th>
+                <th>Student Name</th>
+                <th>Phone</th>
+                <th>Batch</th>
+                <th>Status</th>
+                <th>Amount</th>
+                <th>Due Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${studentRowsHTML}
+            </tbody>
+          </table>
+          
+          <div class="footer-watermark">Zenza Learning Platform</div>
+        </body>
+        </html>
+      `;
+
+      // 3. Render to PDF
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+      
+      // 4. Share/Save PDF
+      const pdfName = `Fee_Report_${new Date().toISOString().split('T')[0]}.pdf`;
+      const targetUri = `${FileSystem.documentDirectory}${pdfName}`;
+      await FileSystem.moveAsync({ from: uri, to: targetUri });
+      
+      await Sharing.shareAsync(targetUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Export Fee Report',
+        UTI: 'com.adobe.pdf'
+      });
+    } catch (error: any) {
+      console.warn('Failed to export PDF fee report:', error);
+      Alert.alert('Error', error.message || 'Failed to export fee report.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   const getFeeStatusStyle = (status: string) => {
@@ -503,8 +721,37 @@ export default function StudentsListScreen() {
       : name.substring(0, 2).toUpperCase();
   };
 
+  const getLastSeen = (item: any): string => {
+    const uid = item.user_id || item.id;
+    // Live in-memory presence takes priority (updated by leave event & heartbeat)
+    // Falls back to DB last_seen_at which persists across restarts
+    const ts = onlinePresence[uid] || item.last_seen_at;
+    if (!ts) return '';
+    const diff = Date.now() - new Date(ts).getTime();
+    const mins = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+    if (mins < 1) return 'last seen just now';
+    if (mins < 60) return `last seen ${mins} min ago`;
+    if (hours < 24) return `last seen ${hours}h ago`;
+    if (days === 1) return 'last seen yesterday';
+    return `last seen ${new Date(ts).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
+  };
+
   const renderStudent = ({ item }: { item: any }) => {
     const fee = getFeeStatusStyle(item.fee_status);
+    const uid = item.user_id || item.id;
+    const inPresence = Boolean(
+      (item.user_id && onlineUserIds.includes(item.user_id)) ||
+      (item.id && onlineUserIds.includes(item.id))
+    );
+    // Heartbeat check: online_at must be < 45s old, else treat as offline
+    const lastHeartbeat = onlinePresence[uid];
+    const heartbeatFresh = lastHeartbeat
+      ? (Date.now() - new Date(lastHeartbeat).getTime()) < 45000
+      : false;
+    const isOnline = inPresence && heartbeatFresh;
+
     return (
       <TouchableOpacity
         style={styles.studentCard}
@@ -516,19 +763,37 @@ export default function StudentsListScreen() {
           })
         }
       >
-        {item.photo_url ? (
-          <CachedImage uri={item.photo_url} style={styles.studentAvatarImage} fallbackInitial={item.name} priority="normal" />
-        ) : (
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
-          </View>
-        )}
+        <View style={styles.avatarWrapper}>
+          {item.photo_url ? (
+            <CachedImage uri={item.photo_url} style={styles.studentAvatarImage} fallbackInitial={item.name} priority="normal" />
+          ) : (
+            <View style={styles.avatar}>
+              <Text style={styles.avatarText}>{getInitials(item.name)}</Text>
+            </View>
+          )}
+          {isOnline && <View style={styles.onlineBadgeDot} />}
+        </View>
+
         <View style={styles.studentInfo}>
-          <Text style={styles.studentName}>{item.name}</Text>
+          <View style={styles.studentNameRow}>
+            <Text style={styles.studentName}>{item.name}</Text>
+            {isOnline && (
+              <View style={styles.onlinePill}>
+                <View style={styles.onlineDotPulse} />
+                <Text style={styles.onlinePillText}>Online</Text>
+              </View>
+            )}
+          </View>
           <Text style={styles.studentMeta}>
             {item.batch_name} • {item.enrollment_id}
           </Text>
+          {!isOnline && getLastSeen(item) !== '' && (
+            <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>
+              {getLastSeen(item)}
+            </Text>
+          )}
         </View>
+
         <View style={[styles.feeBadge, { backgroundColor: fee.color + '15' }]}>
           <Text style={[styles.feeBadgeText, { color: fee.color }]}>
             {fee.label}
@@ -543,17 +808,20 @@ export default function StudentsListScreen() {
       {/* Header Bar */}
       <View style={styles.headerBar}>
         <TouchableOpacity
-          style={styles.headerAvatar}
-          onPress={() => router.push('/(admin)/profile')}
+          style={styles.headerAvatar3DContainer}
+          onPress={() => router.push('/(admin)/coaching-profile')}
+          activeOpacity={0.8}
         >
-          {logoUrl ? (
-            <CachedImage uri={logoUrl} style={styles.headerAvatarImage} priority="high" />
-          ) : (
-            <Text style={styles.headerAvatarText}>{getInitials(adminName)}</Text>
-          )}
+          <View style={styles.headerAvatarInner}>
+            {logoUrl ? (
+              <CachedImage uri={logoUrl} style={styles.headerAvatarImage} priority="high" />
+            ) : (
+              <Text style={styles.headerAvatarText}>{getInitials(adminName)}</Text>
+            )}
+          </View>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>PrestoID</Text>
-        <View style={{ width: 38 }} />
+        <Text style={styles.headerTitle}>Zenza</Text>
+        <View style={{ width: 44 }} />
       </View>
 
       {/* Test Mode Banner */}
@@ -726,7 +994,7 @@ export default function StudentsListScreen() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.batchContainer}
       >
-        {BATCHES.map((batch) => (
+        {batches.map((batch) => (
           <TouchableOpacity
             key={batch}
             style={[
@@ -781,8 +1049,16 @@ export default function StudentsListScreen() {
                 </>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.actionBtnSecondary} onPress={handleExport}>
-              <Ionicons name="download-outline" size={18} color={Colors.accent.primary} />
+            <TouchableOpacity 
+              style={[styles.actionBtnSecondary, isExporting && { opacity: 0.7 }]} 
+              onPress={handleExport}
+              disabled={isExporting}
+            >
+              {isExporting ? (
+                <ActivityIndicator size="small" color={Colors.accent.primary} />
+              ) : (
+                <Ionicons name="download-outline" size={18} color={Colors.accent.primary} />
+              )}
             </TouchableOpacity>
           </View>
 
@@ -807,8 +1083,42 @@ export default function StudentsListScreen() {
 
   if (isLoading) {
     return (
-      <SafeAreaView style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]} edges={['top']}>
-        <ActivityIndicator size="large" color={Colors.accent.primary} />
+      <SafeAreaView style={[styles.container, { backgroundColor: Colors.bg.primary }]} edges={['top']}>
+        {/* Skeleton Header */}
+        <View style={{ paddingHorizontal: 20, paddingTop: 15, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <View style={{ gap: 6 }}>
+            <Animated.View style={{ opacity: skeletonPulse, width: 140, height: 24, borderRadius: 6, backgroundColor: '#E0E0E0' }} />
+            <Animated.View style={{ opacity: skeletonPulse, width: 90, height: 14, borderRadius: 4, backgroundColor: '#E0E0E0' }} />
+          </View>
+          <Animated.View style={{ opacity: skeletonPulse, width: 42, height: 42, borderRadius: 21, backgroundColor: '#E0E0E0' }} />
+        </View>
+
+        {/* Skeleton Stats Grid */}
+        <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 20, marginVertical: 12 }}>
+          {[1, 2, 3].map((i) => (
+            <Animated.View key={i} style={{ opacity: skeletonPulse, flex: 1, height: 75, borderRadius: 16, backgroundColor: '#E0E0E0' }} />
+          ))}
+        </View>
+
+        {/* Skeleton Search and Filter */}
+        <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginBottom: 15 }}>
+          <Animated.View style={{ opacity: skeletonPulse, flex: 1, height: 46, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
+          <Animated.View style={{ opacity: skeletonPulse, width: 46, height: 46, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
+        </View>
+
+        {/* Skeleton Student List */}
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }} showsVerticalScrollIndicator={false}>
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, backgroundColor: '#F8F9FA', borderWidth: 1, borderColor: '#F1F3F5', gap: 12 }}>
+              <Animated.View style={{ opacity: skeletonPulse, width: 48, height: 48, borderRadius: 24, backgroundColor: '#E0E0E0' }} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <Animated.View style={{ opacity: skeletonPulse, width: '60%', height: 16, borderRadius: 4, backgroundColor: '#E0E0E0' }} />
+                <Animated.View style={{ opacity: skeletonPulse, width: '40%', height: 12, borderRadius: 3, backgroundColor: '#E0E0E0' }} />
+              </View>
+              <Animated.View style={{ opacity: skeletonPulse, width: 65, height: 24, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
+            </View>
+          ))}
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -819,6 +1129,7 @@ export default function StudentsListScreen() {
         data={filteredStudents}
         renderItem={renderStudent}
         keyExtractor={(item) => item.id}
+        extraData={{ onlineUserIds, onlinePresence }}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={ListHeaderComponent}
@@ -935,13 +1246,26 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
   },
-  headerAvatar: {
+  headerAvatar3DContainer: {
+    padding: 2,
+    borderRadius: 14,
+    backgroundColor: '#FFF',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    shadowColor: Colors.text.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  headerAvatarInner: {
     width: 38,
     height: 38,
-    borderRadius: 12,
-    backgroundColor: Colors.stitch.primaryFixed,
+    borderRadius: 11,
+    backgroundColor: Colors.bg.secondary,
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
   },
   headerAvatarText: {
     fontSize: 16,
@@ -949,9 +1273,9 @@ const styles = StyleSheet.create({
     color: Colors.accent.primary,
   },
   headerAvatarImage: {
-    width: 38,
-    height: 38,
-    borderRadius: 12,
+    width: '100%',
+    height: '100%',
+    borderRadius: 11,
   },
   headerTitle: {
     fontSize: 20,
@@ -1139,6 +1463,25 @@ const styles = StyleSheet.create({
     borderColor: Colors.card.border,
     gap: 12,
   },
+  avatarWrapper: {
+    position: 'relative',
+  },
+  onlineBadgeDot: {
+    position: 'absolute',
+    bottom: -1,
+    right: -1,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#34C759',
+    borderWidth: 2,
+    borderColor: Colors.bg.secondary,
+    shadowColor: '#34C759',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.8,
+    shadowRadius: 3,
+    elevation: 3,
+  },
   avatar: {
     width: 44,
     height: 44,
@@ -1159,6 +1502,31 @@ const styles = StyleSheet.create({
   },
   studentInfo: {
     flex: 1,
+  },
+  studentNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  onlinePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#34C75915',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 4,
+  },
+  onlineDotPulse: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#34C759',
+  },
+  onlinePillText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#34C759',
   },
   studentName: {
     fontSize: 14,

@@ -1,20 +1,25 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Image, FlatList, Modal, BackHandler
+  ActivityIndicator, Image, FlatList, Modal, BackHandler, Alert, Platform
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { getTestFromLocal } from '@/lib/localDb';
 
 type Tab = 'summary' | 'review' | 'time';
 
 export default function TestResultScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>(); // submission id from completed list
+  const params = useLocalSearchParams<any>();
+  const id = params.id; // submission id from completed list
   const router = useRouter();
   const { verified, user } = useAuthStore();
   const activeStudentId = user?.id;
@@ -52,6 +57,127 @@ export default function TestResultScreen() {
     return () => handler.remove();
   }, [activeTab, activeQuestionModal]);
 
+  const downloadTestPDF = async () => {
+    try {
+      const isSharingAvail = await Sharing.isAvailableAsync();
+      if (!isSharingAvail) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+
+      if (!testDetails || !questions || questions.length === 0) {
+        Alert.alert('Error', 'Test details or questions not loaded yet.');
+        return;
+      }
+
+      // Generate HTML content
+      const optLabels = ['A', 'B', 'C', 'D'];
+      const scoreNum = submission?.score || 0;
+      const totalPossible = (testDetails?.positive_marks || 5) * questions.length;
+      const dateStr = new Date(submission?.submitted_at || new Date()).toLocaleString('en-IN', {
+        day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+      });
+
+      const questionCardsHTML = questions.map((q, idx) => {
+        const studentAns = submission?.answers?.[q.id];
+        const isSkipped = studentAns === undefined || studentAns === null || studentAns === -1;
+        const isCorrect = !isSkipped && studentAns === q.correct_option;
+        
+        let verdictText = 'SKIPPED';
+        let verdictClass = 'verdict-skipped';
+        if (!isSkipped) {
+          verdictText = isCorrect ? 'CORRECT' : 'WRONG';
+          verdictClass = isCorrect ? 'verdict-correct' : 'verdict-wrong';
+        }
+
+        const optionsHTML = (q.options || ['A', 'B', 'C', 'D']).map((opt: string, oIdx: number) => {
+          const isStudentPick = studentAns === oIdx;
+          const isCorrectOpt = q.correct_option === oIdx;
+          let optClass = 'option-normal';
+          if (isCorrectOpt) optClass = 'option-correct';
+          else if (isStudentPick && !isCorrect) optClass = 'option-wrong';
+
+          return `
+            <div class="option ${optClass}">
+              <strong>${optLabels[oIdx]}.</strong> &nbsp; ${opt}
+              ${isCorrectOpt ? ' &nbsp; (Correct)' : ''}
+              ${isStudentPick && !isCorrect ? ' &nbsp; (Your Pick - Wrong)' : ''}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <div class="q-card">
+            <div class="verdict-badge ${verdictClass}">Q${idx + 1} &middot; ${verdictText}</div>
+            <div class="q-text">${q.question_text}</div>
+            ${q.question_image_url ? `<img src="${q.question_image_url}" style="max-width:100%; height:auto; margin-bottom:12px; display:block;" />` : ''}
+            <div style="margin-top: 8px;">${optionsHTML}</div>
+            ${q.explanation ? `<div class="explanation"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 20px; color: #333; }
+            .header { text-align: center; border-bottom: 2px solid #AF2800; padding-bottom: 12px; margin-bottom: 20px; }
+            .title { font-size: 24px; font-weight: bold; color: #AF2800; margin: 0; }
+            .subtitle { font-size: 14px; color: #666; margin-top: 4px; }
+            .meta-box { background-color: #F8F9FA; border: 1px solid #EBEBEB; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px; line-height: 1.6; }
+            .q-card { border: 1px solid #EAEAEA; border-radius: 8px; padding: 14px; margin-bottom: 16px; page-break-inside: avoid; }
+            .q-text { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+            .option { padding: 6px 10px; border-radius: 4px; margin-bottom: 4px; font-size: 13px; }
+            .option-correct { background-color: #E2F0D9; border: 1px solid #385723; color: #385723; }
+            .option-wrong { background-color: #FCE4D6; border: 1px solid #C00000; color: #C00000; }
+            .option-normal { background-color: #F2F2F2; border: 1px solid #D9D9D9; color: #595959; }
+            .verdict-badge { font-weight: bold; margin-bottom: 8px; display: inline-block; font-size: 11px; padding: 2px 6px; border-radius: 3px; }
+            .verdict-correct { background-color: #D4EDDA; color: #155724; }
+            .verdict-wrong { background-color: #F8D7DA; color: #721C24; }
+            .verdict-skipped { background-color: #FFF3CD; color: #856404; }
+            .explanation { font-size: 12px; color: #666; font-style: italic; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #eee; }
+          </style>
+        </head>
+        <body>
+          <div class="header">
+            <div class="title">${testDetails?.title || 'Online Mock Test'}</div>
+            <div class="subtitle">Test Performance & Answer Key Report</div>
+          </div>
+          
+          <div class="meta-box">
+            <strong>Date Submitted:</strong> ${dateStr}<br/>
+            <strong>Test Duration:</strong> ${testDetails?.duration_minutes || 60} mins<br/>
+            <strong>Obtained Score:</strong> <strong>${scoreNum}</strong> / ${totalPossible} marks
+          </div>
+
+          <h3 style="color:#AF2800; border-bottom:1px solid #eee; padding-bottom:6px;">Questions & Review</h3>
+          ${questionCardsHTML}
+        </body>
+        </html>
+      `;
+
+      // Render to PDF
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+      
+      // Share/Save PDF
+      const pdfName = `${(testDetails?.title || 'Test_Result').replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '')}_Result.pdf`;
+      const targetUri = `${FileSystem.documentDirectory}${pdfName}`;
+      await FileSystem.moveAsync({ from: uri, to: targetUri });
+      
+      await Sharing.shareAsync(targetUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Download Test PDF',
+        UTI: 'com.adobe.pdf'
+      });
+    } catch (err: any) {
+      console.warn('Failed to download test PDF:', err);
+      Alert.alert('Error', err.message || 'Failed to download test PDF.');
+    }
+  };
+
   const fetchResults = async () => {
     setIsLoading(true);
     try {
@@ -80,6 +206,33 @@ export default function TestResultScreen() {
         .eq('user_id', activeStudentId)
         .maybeSingle();
 
+      if (id === 'offline') {
+        const testId = params.testId as string;
+        const localTest = testId ? getTestFromLocal(testId) : null;
+        const mockSub = {
+          id: 'offline',
+          score: Number(params.score || 0),
+          total_questions: Number(params.total || 0),
+          answers: params.answers ? JSON.parse(params.answers as string) : {},
+          time_logs: params.timeLogs ? JSON.parse(params.timeLogs as string) : {},
+          tests: {
+            title: (params.testTitle as string) || localTest?.title || 'Online Test',
+            positive_marks: localTest?.positive_marks || 5,
+            negative_marks: localTest?.negative_marks || 0
+          }
+        };
+        setSubmission(mockSub);
+        setTestDetails(mockSub.tests);
+
+        if (localTest?.questions && Array.isArray(localTest.questions)) {
+          setQuestions(localTest.questions);
+        } else {
+          setQuestions([]);
+        }
+        setIsLoading(false);
+        return;
+      }
+
       // The `id` param is the submission_id from the completed list
       const { data: sub, error: subErr } = await supabase
         .from('test_submissions')
@@ -91,14 +244,19 @@ export default function TestResultScreen() {
       setSubmission(sub);
       setTestDetails(sub.tests);
 
-      // Load questions for this test (including explanation)
-      const { data: qs, error: qErr } = await supabase
-        .from('test_questions')
-        .select('id, question_text, question_image_url, options, correct_option, explanation')
-        .eq('test_id', sub.test_id)
-        .order('created_at', { ascending: true });
-      if (qErr) throw qErr;
-      setQuestions(qs || []);
+      // Load questions for this test (check JSONB on test first, fallback to test_questions)
+      let finalQuestions: any[] = [];
+      if (sub.tests?.questions && Array.isArray(sub.tests.questions) && sub.tests.questions.length > 0) {
+        finalQuestions = sub.tests.questions;
+      } else {
+        const { data: qs } = await supabase
+          .from('test_questions')
+          .select('id, question_text, question_image_url, options, correct_option, explanation')
+          .eq('test_id', sub.test_id)
+          .order('created_at', { ascending: true });
+        finalQuestions = qs || [];
+      }
+      setQuestions(finalQuestions);
 
     } catch (err: any) {
       console.warn('Failed to load test results', err);
@@ -116,25 +274,29 @@ export default function TestResultScreen() {
   }
 
   const score = submission.score ?? 0;
+  const activeAnswers = submission.answers || {};
+  const activeTimeLogs = submission.time_logs || {};
   const totalQ = submission.total_questions || questions.length || 1;
   const posMarks = testDetails?.positive_marks ?? 5;
   const negMarks = testDetails?.negative_marks ?? 0;
   const totalPossible = totalQ * posMarks;
 
-  let correctCount = 0;
-  let wrongCount = 0;
-  let skippedCount = 0;
+  let correctCount = id === 'offline' ? Number(params.correct || 0) : 0;
+  let wrongCount = id === 'offline' ? Number(params.wrong || 0) : 0;
+  let skippedCount = id === 'offline' ? Number(params.skipped || 0) : 0;
 
-  questions.forEach((q) => {
-    const ans = submission.answers?.[q.id];
-    if (ans === undefined || ans === null) {
-      skippedCount++;
-    } else if (ans === q.correct_option) {
-      correctCount++;
-    } else {
-      wrongCount++;
-    }
-  });
+  if (id !== 'offline') {
+    questions.forEach((q) => {
+      const ans = activeAnswers[q.id];
+      if (ans === undefined || ans === null) {
+        skippedCount++;
+      } else if (ans === q.correct_option) {
+        correctCount++;
+      } else {
+        wrongCount++;
+      }
+    });
+  }
 
   const exitCount = submission.exit_logs?.length ?? 0;
   const scorePercentage = totalPossible > 0 ? (score / totalPossible) * 100 : 0;
@@ -152,7 +314,7 @@ export default function TestResultScreen() {
   const optLabels = ['A', 'B', 'C', 'D'];
 
   const renderQuestion = ({ item, index }: { item: any; index: number }) => {
-    const studentAnswer = submission.answers?.[item.id];
+    const studentAnswer = activeAnswers[item.id];
     const isCorrect = studentAnswer === item.correct_option;
     const isUnattempted = studentAnswer === undefined || studentAnswer === null;
 
@@ -392,15 +554,37 @@ export default function TestResultScreen() {
     );
   };
 
+  const handleBackPress = () => {
+    if (activeQuestionModal) {
+      setActiveQuestionModal(null);
+      return;
+    }
+    if (activeTab === 'time') {
+      setActiveTab('review');
+      return;
+    }
+    if (activeTab === 'review') {
+      setActiveTab('summary');
+      return;
+    }
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(student)/test');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.replace('/(student)/test')} style={styles.backBtn}>
+        <TouchableOpacity onPress={handleBackPress} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={Colors.text.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle} numberOfLines={1}>{testDetails?.title || 'Test Result'}</Text>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity onPress={downloadTestPDF} style={{ padding: 8 }}>
+          <Ionicons name="download-outline" size={24} color={Colors.accent.primary} />
+        </TouchableOpacity>
       </View>
 
       {/* Tabs */}
@@ -408,12 +592,16 @@ export default function TestResultScreen() {
         <TouchableOpacity style={[styles.tab, activeTab === 'summary' && styles.tabActive]} onPress={() => setActiveTab('summary')}>
           <Text style={[styles.tabText, activeTab === 'summary' && styles.tabTextActive]}>📊 Summary</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === 'review' && styles.tabActive]} onPress={() => setActiveTab('review')}>
-          <Text style={[styles.tabText, activeTab === 'review' && styles.tabTextActive]}>📝 Review ({questions.length})</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.tab, activeTab === 'time' && styles.tabActive]} onPress={() => setActiveTab('time')}>
-          <Text style={[styles.tabText, activeTab === 'time' && styles.tabTextActive]}>⏱ Time</Text>
-        </TouchableOpacity>
+        {id !== 'offline' && (
+          <>
+            <TouchableOpacity style={[styles.tab, activeTab === 'review' && styles.tabActive]} onPress={() => setActiveTab('review')}>
+              <Text style={[styles.tabText, activeTab === 'review' && styles.tabTextActive]}>📝 Review ({questions.length})</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.tab, activeTab === 'time' && styles.tabActive]} onPress={() => setActiveTab('time')}>
+              <Text style={[styles.tabText, activeTab === 'time' && styles.tabTextActive]}>⏱ Time</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
 
       {activeTab === 'summary' ? (
@@ -466,10 +654,21 @@ export default function TestResultScreen() {
             </View>
           )}
 
-          <TouchableOpacity style={styles.reviewBtn} onPress={() => setActiveTab('review')}>
-            <Ionicons name="list" size={18} color={Colors.accent.primary} />
-            <Text style={styles.reviewBtnText}>Review All Questions →</Text>
-          </TouchableOpacity>
+          {id === 'offline' && (
+            <View style={[styles.warningCard, { backgroundColor: '#FFF9C4', borderColor: '#FBC02D' }]}>
+              <Ionicons name="cloud-offline" size={20} color="#F57F17" />
+              <Text style={[styles.warningText, { color: '#5D4037' }]}>
+                You are offline. Your test score is calculated locally and queued to sync once internet is back.
+              </Text>
+            </View>
+          )}
+
+          {id !== 'offline' && (
+            <TouchableOpacity style={styles.reviewBtn} onPress={() => setActiveTab('review')}>
+              <Ionicons name="list" size={18} color={Colors.accent.primary} />
+              <Text style={styles.reviewBtnText}>Review All Questions →</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       ) : activeTab === 'review' ? (
         <FlatList
@@ -620,7 +819,7 @@ const styles = StyleSheet.create({
   },
   qBadgeText: { fontSize: 11, fontWeight: '700' },
   qImage: { width: '100%', height: 160, borderRadius: 8, marginBottom: 12, backgroundColor: Colors.bg.tertiary },
-  qText: { fontSize: 14, color: Colors.text.primary, fontWeight: '500', lineHeight: 20, marginBottom: 12 },
+  qText: { fontSize: 14, color: Colors.text.primary, fontWeight: '500', lineHeight: 24, paddingVertical: 2, includeFontPadding: false, marginBottom: 12 },
 
   optionsGrid: { gap: 6 },
   optRow: {
@@ -628,5 +827,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1,
   },
   optLabel: { fontSize: 13, fontWeight: '800', width: 20 },
-  optText: { flex: 1, fontSize: 13, fontWeight: '500' },
+  optText: { flex: 1, fontSize: 13, fontWeight: '500', lineHeight: 20, paddingVertical: 2, includeFontPadding: false },
 });

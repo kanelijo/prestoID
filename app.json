@@ -1,37 +1,31 @@
 {
   "expo": {
-    "name": "PrestoID",
-    "slug": "prestoid",
+    "name": "Zenza",
+    "slug": "Zenza",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "scheme": "prestoid",
+    "scheme": "zenza",
     "icon": "./assets/images/icon.png",
-    "notification": {
-      "icon": "./assets/images/notification_icon.png",
-      "color": "#AF2800"
-    },
-    "splash": {
-      "backgroundColor": "#FFF8F6"
-    },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.kanelijo.prestoid",
+      "bundleIdentifier": "com.kanelijo.zenza",
       "infoPlist": {
-        "NSCameraUsageDescription": "PrestoID needs camera access to scan student QR codes for attendance.",
+        "NSCameraUsageDescription": "Zenza needs camera access to scan student QR codes for attendance.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
-      "launchMode": "singleTask",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#FFF8F6"
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#000000"
       },
-      "package": "com.kanelijo.prestoid",
+      "package": "com.kanelijo.zenza",
       "googleServicesFile": "./google-services.json",
       "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
         "CAMERA",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
@@ -46,7 +40,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "PrestoID needs camera access to scan student QR codes."
+          "cameraPermission": "Zenza needs camera access to scan student QR codes."
         }
       ],
       "expo-font",
@@ -55,14 +49,27 @@
       "expo-sharing",
       "@react-native-google-signin/google-signin",
       "expo-image",
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#AF2800"
+        }
+      ],
+      "react-native-video",
+      "expo-mail-composer"
     ],
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "21c7809d-2515-4745-b2d6-ea7e6337e0ad"
+        "projectId": "e1b1d0b2-c04d-4e47-bbde-ec7873709e4b"
       }
     },
-    "owner": "andrewnks-team"
+    "owner": "nilesh_kuntal",
+    "runtimeVersion": "1.0.0",
+    "updates": {
+      "url": "https://u.expo.dev/e1b1d0b2-c04d-4e47-bbde-ec7873709e4b"
+    }
   }
 }

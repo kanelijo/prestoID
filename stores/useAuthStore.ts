@@ -15,6 +15,8 @@ interface AuthState {
   verified: boolean;
   avatarUrl: string | null;
   studentData: any | null;
+  onlineUserIds: string[];
+  onlinePresence: Record<string, string>; // userId → online_at ISO string
 
   setUser: (user: any) => void;
   setSession: (session: any) => void;
@@ -25,6 +27,8 @@ interface AuthState {
   setVerified: (verified: boolean) => void;
   setAvatarUrl: (avatarUrl: string | null) => void;
   setStudentData: (data: any | null) => void;
+  setOnlineUserIds: (ids: string[]) => void;
+  setOnlinePresence: (presence: Record<string, string>) => void;
   reset: () => void;
 }
 
@@ -41,6 +45,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   verified: true,
   avatarUrl: null,
   studentData: null,
+  onlineUserIds: [],
+  onlinePresence: {},
 
   setUser: (user) => set({ user }),
   setSession: (session) => set({ session }),
@@ -52,6 +58,8 @@ export const useAuthStore = create<AuthState>((set) => ({
   setVerified: (verified) => set({ verified }),
   setAvatarUrl: (avatarUrl) => set({ avatarUrl }),
   setStudentData: (studentData) => set({ studentData }),
+  setOnlineUserIds: (onlineUserIds) => set({ onlineUserIds }),
+  setOnlinePresence: (onlinePresence) => set({ onlinePresence }),
   reset: () =>
     set({
       user: null,
@@ -65,5 +73,7 @@ export const useAuthStore = create<AuthState>((set) => ({
       verified: true,
       avatarUrl: null,
       studentData: null,
+      onlineUserIds: [],
+      onlinePresence: {},
     }),
 }));

@@ -15,6 +15,8 @@ try {
 }
 import { decode } from 'base64-arraybuffer';
 import * as FileSystem from 'expo-file-system/legacy';
+import { CustomAlert } from '@/components/CustomAlert';
+import { sendPushNotification, fetchStudentPushTokens, CHANNELS } from '@/lib/notifications';
 
 const BATCHES = ['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC'];
 const optLabels = ['A', 'B', 'C', 'D'];
@@ -25,6 +27,7 @@ export default function CreateManualTestScreen() {
   const { user, verified, businessId } = useAuthStore();
   
   const [title, setTitle] = useState('');
+  const [subject, setSubject] = useState('');
   const [targetBatch, setTargetBatch] = useState('All');
   const [duration, setDuration] = useState('60');
   const [isSavingTest, setIsSavingTest] = useState(false);
@@ -32,6 +35,7 @@ export default function CreateManualTestScreen() {
   const [questions, setQuestions] = useState<any[]>([]);
 
   // Edit Modal State
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
   const [editorMode, setEditorMode] = useState<'text' | 'image'>('text');
   const [editQText, setEditQText] = useState('');
@@ -50,6 +54,7 @@ export default function CreateManualTestScreen() {
 
   const openEditModal = (qId: string | null, qData?: any) => {
     setEditingQuestionId(qId);
+    setIsModalOpen(true);
     if (!qId) {
       setEditorMode('text');
       setEditQText('');
@@ -64,7 +69,7 @@ export default function CreateManualTestScreen() {
       setEditOptions(qData.options && qData.options.length === 4 ? [...qData.options] : ['', '', '', '']);
       setEditCorrectIdx(qData.correct_option !== undefined ? qData.correct_option : 0);
       setEditExplanation(qData.explanation || '');
-      setRawImageUri(qData.question_image_url || null); // Note: For local preview, base64 or file URIs will be stored here
+      setRawImageUri(qData.question_image_url || null);
       setCroppedImageUri(qData.question_image_url || null);
     }
   };
@@ -123,8 +128,19 @@ export default function CreateManualTestScreen() {
         setCroppedImageUri(rawImageUri);
         return;
       }
+      let sourceUri = rawImageUri;
+      if (Platform.OS === 'android' && sourceUri.startsWith('content://')) {
+        try {
+          const tempPath = `${FileSystem.cacheDirectory}crop_src_${Date.now()}.jpg`;
+          await FileSystem.copyAsync({ from: sourceUri, to: tempPath });
+          sourceUri = tempPath;
+        } catch (e) {
+          console.warn('Cache copy fallback:', e);
+        }
+      }
+
       const result = await ImageManipulator.manipulateAsync(
-        rawImageUri,
+        sourceUri,
         [{ crop: { originX: 0, originY: safeOriginY, width: imageWidth, height: safeHeight } }],
         { compress: 0.8, format: ImageManipulator.SaveFormat.JPEG }
       );
@@ -166,6 +182,7 @@ export default function CreateManualTestScreen() {
     } else {
       setQuestions(prev => [...prev, newQuestionData]);
     }
+    setIsModalOpen(false);
     setEditingQuestionId(null);
   };
 
@@ -205,10 +222,11 @@ export default function CreateManualTestScreen() {
         .insert({
           business_id: businessId,
           title,
+          subject: subject.trim() || 'General',
           batch_name: targetBatch === 'All' ? null : targetBatch,
           duration_minutes: parseInt(duration),
           total_marks: questions.length,
-          status: 'published', // manual tests publish directly by default
+          status: 'published',
         })
         .select()
         .single();
@@ -236,6 +254,7 @@ export default function CreateManualTestScreen() {
         }
 
         inserts.push({
+          id: `q_manual_${Date.now()}_${inserts.length}`,
           test_id: newTest.id,
           question_text: q.question_text,
           question_image_url: finalImageUrl,
@@ -245,9 +264,36 @@ export default function CreateManualTestScreen() {
         });
       }
 
-      // 3. Insert questions
-      const { error: qErr } = await supabase.from('test_questions').insert(inserts);
-      if (qErr) throw qErr;
+      // 3. Save questions JSONB column on the test row if column exists
+      try {
+        await supabase.from('tests').update({ questions: inserts }).eq('id', newTest.id);
+      } catch (e) {
+        console.warn('JSONB update skipped if column missing:', e);
+      }
+
+      // Fallback insert to legacy test_questions table
+      try {
+        await supabase.from('test_questions').insert(inserts);
+      } catch (e) {
+        console.warn('Legacy test_questions insert ignored:', e);
+      }
+
+      // Send push notification to target batch students
+      try {
+        const tokens = await fetchStudentPushTokens(businessId, user?.id, targetBatch);
+        if (tokens.length > 0) {
+          await sendPushNotification(
+            tokens,
+            'New Test Published 📝',
+            `A new test "${title || 'Mock Test'}" has been published. Duration: ${duration || 60} mins.`,
+            { screen: 'test', testId: newTest.id },
+            1,
+            CHANNELS.tests
+          );
+        }
+      } catch (pushErr) {
+        console.warn('Failed to send push notification for manual test:', pushErr);
+      }
 
       Alert.alert('Success', 'Test published successfully!');
       router.back();
@@ -262,7 +308,7 @@ export default function CreateManualTestScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.push('/(admin)/test')}>
           <Ionicons name="close" size={24} color={Colors.text.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Manual Test Builder</Text>
@@ -275,6 +321,10 @@ export default function CreateManualTestScreen() {
           <View style={styles.inputContainer}>
             <Text style={styles.inputLabel}>Test Title *</Text>
             <TextInput style={styles.input} placeholder="e.g., Weekly Mock Test" placeholderTextColor={Colors.text.tertiary} value={title} onChangeText={setTitle} />
+          </View>
+          <View style={styles.inputContainer}>
+            <Text style={styles.inputLabel}>Subject / Category</Text>
+            <TextInput style={styles.input} placeholder="e.g., Mathematics, Physics, History" placeholderTextColor={Colors.text.tertiary} value={subject} onChangeText={setSubject} />
           </View>
           <View style={styles.row}>
             <View style={[styles.inputContainer, { flex: 1 }]}>
@@ -339,13 +389,21 @@ export default function CreateManualTestScreen() {
       </View>
 
       {/* Editor Modal */}
-      <Modal visible={editingQuestionId !== null} animationType="slide" transparent={true} onRequestClose={() => setEditingQuestionId(null)}>
-        <View style={styles.modalOverlay}>
+      <Modal visible={isModalOpen} animationType="slide" transparent={true} onRequestClose={() => { setIsModalOpen(false); setEditingQuestionId(null); }}>
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => { setIsModalOpen(false); setEditingQuestionId(null); }}
+        >
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalContainer}>
-            <View style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}>
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={(e) => e.stopPropagation?.()}
+              style={[styles.modalContent, { paddingBottom: Math.max(insets.bottom, 20) }]}
+            >
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>{editingQuestionId ? 'Edit Question' : 'Add Question'}</Text>
-                <TouchableOpacity onPress={() => setEditingQuestionId(null)}><Ionicons name="close" size={24} color={Colors.text.primary} /></TouchableOpacity>
+                <TouchableOpacity onPress={() => { setIsModalOpen(false); setEditingQuestionId(null); }}><Ionicons name="close" size={24} color={Colors.text.primary} /></TouchableOpacity>
               </View>
 
               <View style={styles.toggleRow}>
@@ -453,12 +511,12 @@ export default function CreateManualTestScreen() {
               </ScrollView>
               
               <View style={styles.modalFooter}>
-                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setEditingQuestionId(null)}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity>
+                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setIsModalOpen(false); setEditingQuestionId(null); }}><Text style={styles.modalCancelText}>Cancel</Text></TouchableOpacity>
                 <TouchableOpacity style={styles.modalSaveBtn} onPress={handleSaveQuestion}><Text style={styles.modalSaveText}>Save Question</Text></TouchableOpacity>
               </View>
-            </View>
+            </TouchableOpacity>
           </KeyboardAvoidingView>
-        </View>
+        </TouchableOpacity>
       </Modal>
     </SafeAreaView>
   );

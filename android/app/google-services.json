@@ -14,11 +14,40 @@
       },
       "oauth_client": [
         {
-          "client_id": "698075781767-679pka2elrgp2hqvc6tr2tokf3t3afk7.apps.googleusercontent.com",
+          "client_id": "698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBDErTVNdyO5YKjQ1JDNWHGEXPBA4SpTj0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:698075781767:android:561865dc4a4b6c560d3622",
+        "android_client_info": {
+          "package_name": "com.kanelijo.zenza"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "698075781767-r587sr718shgd9kr6jfubboeig3dd5te.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
-            "package_name": "com.kanelijo.prestoid",
-            "certificate_hash": "9e40f87245d7a966e9f5ec1912dbbd22062c1935"
+            "package_name": "com.kanelijo.zenza",
+            "certificate_hash": "cde4db7149f4a1dde26c578685591d0ecb0bdd85"
           }
         },
         {

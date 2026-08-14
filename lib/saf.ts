@@ -2,14 +2,16 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Alert, Platform } from 'react-native';
 import PrestostorageModule from '../modules/prestostorage/src/PrestostorageModule';
 
+import { DIRS } from './storage';
+
 export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) => {
   try {
     const safeName = fileName.replace(/[^a-zA-Z0-9.\-_]/g, '_');
 
     if (Platform.OS === 'android') {
       try {
-        // 1. Download to persistent app document directory
-        const localUri = `${FileSystem.documentDirectory}${safeName}`;
+        // 1. Download to persistent app Zenza Documents directory
+        const localUri = `${DIRS.docs}${safeName}`;
         const downloadResult = await FileSystem.downloadAsync(downloadUrl, localUri);
         
         if (downloadResult.status < 200 || downloadResult.status >= 300) {
@@ -17,7 +19,7 @@ export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) 
           throw new Error(`Server returned HTTP status code ${downloadResult.status} (failed to download).`);
         }
 
-        // 2. Call our custom native module to insert it into MediaStore (Downloads/PrestoID)
+        // 2. Call our custom native module to insert it into MediaStore (Downloads/Zenza)
         await PrestostorageModule.saveDocument(localUri, safeName);
         
         return { success: true, uri: localUri };

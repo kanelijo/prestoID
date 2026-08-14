@@ -11,7 +11,6 @@ import {
   ActivityIndicator,
   Image,
   Dimensions,
-  Alert,
   Modal,
   ScrollView,
   Animated,
@@ -26,6 +25,9 @@ import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
+import { DIRS, saveImageToPublicGallery } from '@/lib/storage';
+import { updateMediaLocalPointer } from '@/lib/localDb';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { downloadAndOpenSaf } from '@/lib/saf';
 import PrestostorageModule from '@/modules/prestostorage/src/PrestostorageModule';
@@ -34,9 +36,11 @@ import * as Sharing from 'expo-sharing';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import { setCurrentActiveScreen } from '@/lib/notifications';
 import { usePrefetchStore } from '@/stores/usePrefetchStore';
+import { CustomAlert } from '@/components/CustomAlert';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -91,6 +95,32 @@ const renderTextWithLinks = (text: string, linkColor: string = '#0066CC') => {
   });
 };
 
+const FILE_EXT_REGEX = /\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar|apk)(\?|#|$)/i;
+
+const getImagesFromMessage = (msg: any): string[] => {
+  if (!msg) return [];
+  if (msg.media_url) {
+    if (msg.media_url.startsWith('[')) {
+      try {
+        const arr: string[] = JSON.parse(msg.media_url);
+        return arr.filter(u => !FILE_EXT_REGEX.test(u));
+      } catch (e) {
+        return FILE_EXT_REGEX.test(msg.media_url) ? [] : [msg.media_url];
+      }
+    }
+    if (FILE_EXT_REGEX.test(msg.media_url)) return [];
+    return [msg.media_url];
+  }
+  // Don't parse image URLs out of Document messages
+  if (msg.text && msg.text.startsWith('[Document:')) return [];
+  const parsed = extractUrlAndName(msg.text);
+  if (parsed?.url && !FILE_EXT_REGEX.test(parsed.url)) {
+    return [parsed.url];
+  }
+  return [];
+};
+
+
 interface LinkPreviewData {
   title: string;
   image?: string;
@@ -100,7 +130,13 @@ interface LinkPreviewData {
 
 const previewCache: Record<string, LinkPreviewData | null> = {};
 
-const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) => {
+const getYoutubeVideoId = (url: string): string | null => {
+  const regExp = /^.*(?:youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[1].length === 11) ? match[1] : null;
+};
+
+const LinkPreviewCard = ({ text, isSelf, onLongPress }: { text: string; isSelf: boolean; onLongPress?: () => void }) => {
   const [preview, setPreview] = useState<LinkPreviewData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -119,59 +155,65 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
       cleanUrl = `https://${cleanUrl}`;
     }
 
+    // Skip preview for direct file links (PDF, docs, etc.)
+    if (/\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar|apk)$/i.test(cleanUrl)) {
+      setPreview(null);
+      return;
+    }
+
     if (previewCache[cleanUrl] !== undefined) {
       setPreview(previewCache[cleanUrl]);
       return;
     }
 
+    // Set high-quality YouTube preview placeholder immediately if YouTube link detected
+    const ytId = getYoutubeVideoId(cleanUrl);
+    if (ytId) {
+      const initialYTData = {
+        title: "YouTube Video",
+        image: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
+        description: "Watch this video on YouTube.",
+        url: cleanUrl
+      };
+      setPreview(initialYTData);
+    }
+
     setLoading(true);
-    fetch(cleanUrl)
-      .then(res => res.text())
-      .then(html => {
-        const getMetaTag = (property: string) => {
-          const regex = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
-          const m = html.match(regex);
-          if (m) return m[1];
-          const revRegex = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${property}["']`, 'i');
-          const revMatch = html.match(revRegex);
-          return revMatch ? revMatch[1] : null;
-        };
-
-        let title = getMetaTag('og:title') || getMetaTag('twitter:title');
-        if (!title) {
-          const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
-          title = titleMatch ? titleMatch[1] : '';
-        }
-
-        let image = getMetaTag('og:image') || getMetaTag('twitter:image');
-        let description = getMetaTag('og:description') || getMetaTag('twitter:description') || '';
-
-        if (image && !/^https?:\/\//i.test(image)) {
-          try {
-            const urlObj = new URL(cleanUrl);
-            image = `${urlObj.origin}${image.startsWith('/') ? '' : '/'}${image}`;
-          } catch (e) {}
+    fetch(`https://jsonlink.io/api/extract?url=${encodeURIComponent(cleanUrl)}`)
+      .then(res => res.json())
+      .then(json => {
+        const title = json.title || (ytId ? 'YouTube Video' : '');
+        const description = json.description || (ytId ? 'Watch this video on YouTube.' : '');
+        let image = Array.isArray(json.images) && json.images.length > 0 ? json.images[0] : json.image;
+        
+        if (!image && ytId) {
+          image = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
         }
 
         if (title) {
-          const data = { title, image: image || undefined, description, url: cleanUrl };
+          const data = { title, image, description, url: cleanUrl };
           previewCache[cleanUrl] = data;
           setPreview(data);
+        } else if (ytId) {
+          // Keep the local youtube placeholder if api fetch returned empty
+          previewCache[cleanUrl] = preview;
         } else {
           previewCache[cleanUrl] = null;
           setPreview(null);
         }
       })
       .catch(() => {
-        previewCache[cleanUrl] = null;
-        setPreview(null);
+        if (!ytId) {
+          previewCache[cleanUrl] = null;
+          setPreview(null);
+        }
       })
       .finally(() => {
         setLoading(false);
       });
   }, [rawUrl]);
 
-  if (loading) {
+  if (loading && !preview) {
     return (
       <View style={{ padding: 8, flexDirection: 'row', alignItems: 'center', backgroundColor: isSelf ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: 8, marginTop: 6 }}>
         <ActivityIndicator size="small" color={isSelf ? '#FFF' : '#AF2800'} />
@@ -184,8 +226,10 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
 
   return (
     <TouchableOpacity
-      activeOpacity={0.8}
+      activeOpacity={0.85}
       onPress={() => Linking.openURL(preview.url).catch(e => console.warn(e))}
+      onLongPress={() => onLongPress && onLongPress()}
+      delayLongPress={200}
       style={{
         marginTop: 8,
         borderRadius: 12,
@@ -197,25 +241,26 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
         shadowColor: '#000',
         shadowOpacity: 0.05,
         shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 }
+        shadowOffset: { width: 0, height: 2 },
+        width: 260,
       }}
     >
       {preview.image ? (
         <Image
           source={{ uri: preview.image }}
-          style={{ width: '100%', height: 140, resizeMode: 'cover' }}
+          style={{ width: '100%', height: 150, resizeMode: 'cover' }}
         />
       ) : null}
-      <View style={{ padding: 10 }}>
-        <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: 'bold', color: '#111' }}>
+      <View style={{ padding: 12 }}>
+        <Text numberOfLines={2} style={{ fontSize: 13, fontWeight: 'bold', color: '#111', lineHeight: 17 }}>
           {preview.title}
         </Text>
         {preview.description ? (
-          <Text numberOfLines={2} style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+          <Text numberOfLines={2} style={{ fontSize: 11, color: '#555', marginTop: 6, lineHeight: 15 }}>
             {preview.description}
           </Text>
         ) : null}
-        <Text numberOfLines={1} style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+        <Text numberOfLines={1} style={{ fontSize: 10, color: '#0066CC', marginTop: 6, fontWeight: '500' }}>
           {preview.url.replace(/^https?:\/\/(?:www\.)?/i, '')}
         </Text>
       </View>
@@ -409,17 +454,23 @@ const ZoomableImage = ({ uri, onZoomStateChange }: { uri: string, onZoomStateCha
 
 export default function StudentCommunityScreen() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, businessName, avatarUrl, studentData } = useAuthStore();
   const prefetch = usePrefetchStore();
+  const currentBizId = studentData?.business_id;
+  const hasValidCache = prefetch.communityReady && 
+    prefetch.communityMessages.length > 0 && 
+    prefetch.communityMessages[0].business_id === currentBizId;
+
   // Bootstrap from prefetch — shows messages instantly if they loaded in background
-  const [messages, setMessages] = useState<any[]>(prefetch.communityReady ? prefetch.communityMessages : []);
+  const [messages, setMessages] = useState<any[]>(hasValidCache ? prefetch.communityMessages : []);
   const [inputText, setInputText] = useState('');
   const [studentProfile, setStudentProfile] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(!prefetch.communityReady);
+  const [isLoading, setIsLoading] = useState(!hasValidCache);
   const [isSending, setIsSending] = useState(false);
-  const [coachingName, setCoachingName] = useState('Community Chat');
-  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
-  const [studentCount, setStudentCount] = useState<number>(0);
+  // Bootstrap from prefetch — shows coaching header instantly
+  const [coachingName, setCoachingName] = useState(prefetch.coachingMeta?.name || businessName || 'Community Chat');
+  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(prefetch.coachingMeta?.logoUrl || avatarUrl || null);
+  const [studentCount, setStudentCount] = useState<number>(prefetch.coachingMeta?.memberCount || 0);
   const [orgId, setOrgId] = useState('');
 
   // Search & Navigation Modals states
@@ -437,7 +488,15 @@ export default function StudentCommunityScreen() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [currentViewerIndex, setCurrentViewerIndex] = useState<number>(0);
   const [lightboxScrollEnabled, setLightboxScrollEnabled] = useState(true);
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxMessage, setLightboxMessage] = useState<any | null>(null);
   const failedDownloadsRef = useRef<Record<string, boolean>>({});
+  const [deleteModalConfig, setDeleteModalConfig] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Load persisted cache mappings on mount
   useEffect(() => {
@@ -469,18 +528,42 @@ export default function StudentCommunityScreen() {
     loadCache();
   }, []);
 
-  // Automatically download images in the background when messages load
-  const autoDownloadImages = useCallback(async (msgs: any[]) => {
+  // Smart-Sync Media Downloader:
+  // - Images & Thumbnails: Always auto-download (<200KB)
+  // - Documents/PDFs: Auto-download ONLY when on Wi-Fi, tap-to-download on Cellular/Mobile Data
+  const autoDownloadMedia = useCallback(async (msgs: any[]) => {
+    let isWifi = false;
+    try {
+      const netState = await Network.getNetworkStateAsync();
+      isWifi = netState.type === Network.NetworkStateType.WIFI;
+    } catch (_) {
+      isWifi = false;
+    }
+
     for (const msg of msgs) {
-      const isImage = msg.image_url || (msg.text && msg.text.startsWith('[Image:'));
+      const isImage = msg.image_url || msg.media_url?.startsWith('[') || (msg.text && msg.text.startsWith('[Image:'));
       if (isImage) {
         const isSelf = msg.author_id === user?.id;
-        // Don't auto-download if already cached locally, if self, if downloading, or if it already failed
-        if (!localMediaMap[msg.id] && !isSelf && !downloadingIds[msg.id] && !failedDownloadsRef.current[msg.id]) {
-          const parsed = extractUrlAndName(msg.text);
-          const imgUri = msg.image_url || parsed?.url;
-          if (imgUri) {
-            downloadImageLocal(msg.id, imgUri);
+        if (isSelf) continue;
+        
+        const urls = getImagesFromMessage(msg);
+        urls.forEach((imgUri, indexInMsg) => {
+          // Skip local file:// paths — already on device, no download needed
+          if (imgUri.startsWith('file://') || imgUri.startsWith('content://')) return;
+          const cacheKey = msg.id + '_' + indexInMsg;
+          if (!localMediaMap[cacheKey] && !downloadingIds[cacheKey] && !failedDownloadsRef.current[cacheKey]) {
+            downloadImageLocal(msg.id, imgUri, indexInMsg);
+          }
+        });
+      }
+
+      // Auto-download documents on Wi-Fi
+      if (isWifi && msg.text && msg.text.startsWith('[Document:')) {
+        const parsed = extractUrlAndName(msg.text);
+        if (parsed?.url && parsed?.name) {
+          const docKey = String(msg.id);
+          if (!localMediaMap[docKey] && !downloadingIds[docKey] && !failedDownloadsRef.current[docKey]) {
+            downloadDocumentLocal(msg.id, parsed.url, parsed.name);
           }
         }
       }
@@ -494,7 +577,7 @@ export default function StudentCommunityScreen() {
       if (Platform.OS === 'android') {
         const result = await PrestostorageModule.saveDocument(localUri, fileName);
         if (result && result.success) {
-          Alert.alert('Success', 'Image saved successfully to Downloads/PrestoID folder!');
+          CustomAlert.alert('Success', 'Image saved successfully to Downloads/Zenza folder!');
         } else {
           throw new Error('Failed to save via PrestostorageModule');
         }
@@ -504,7 +587,7 @@ export default function StudentCommunityScreen() {
       }
     } catch (e: any) {
       console.warn('Failed to save image:', e);
-      Alert.alert('Error', 'Failed to save image: ' + (e.message || e));
+      CustomAlert.alert('Error', 'Failed to save image: ' + (e.message || e));
     }
   };
 
@@ -523,55 +606,120 @@ export default function StudentCommunityScreen() {
       }
     } catch (e: any) {
       console.warn('Sharing failed:', e);
-      Alert.alert('Error', 'Failed to share image: ' + (e.message || e));
+      CustomAlert.alert('Error', 'Failed to share image: ' + (e.message || e));
     }
   };
 
   // Download image silently to document directory (caches for 0 second loads) and saves to gallery on Android
-  const downloadImageLocal = async (msgId: string, url: string) => {
-    if (downloadingIds[msgId]) return;
-    setDownloadingIds(prev => ({ ...prev, [msgId]: true }));
+  const downloadImageLocal = async (msgId: string, url: string, indexInMsg: number = 0) => {
+    const cacheKey = msgId + '_' + indexInMsg;
+    if (downloadingIds[cacheKey]) return;
+
+    // Guard: file:// and content:// URIs are already local — just register them, never download
+    if (url.startsWith('file://') || url.startsWith('content://')) {
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: url };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      return;
+    }
+
+    setDownloadingIds(prev => ({ ...prev, [cacheKey]: true }));
     
     try {
       const ext = url.split('.').pop()?.split('?')[0] || 'jpg';
-      const safeName = `community_img_${msgId}.${ext}`;
-      const localUri = `${FileSystem.documentDirectory}${safeName}`;
+      const safeName = `community_img_${msgId}_${indexInMsg}.${ext}`;
+      const localUri = `${DIRS.images}${safeName}`;
 
-      // 1. Download to local persistent app storage
+      // 1. Download to local persistent app storage in Zenza Images directory
       const downloadResult = await FileSystem.downloadAsync(url, localUri);
       if (downloadResult.status < 200 || downloadResult.status >= 300) {
         await FileSystem.deleteAsync(localUri, { idempotent: true });
         throw new Error(`Server returned status code ${downloadResult.status}`);
       }
 
-      // 2. Android: save to public Gallery/MediaStore
-      if (Platform.OS === 'android') {
-        try {
-          await PrestostorageModule.saveDocument(localUri, safeName);
-        } catch (e) {
-          console.warn('Silent Android MediaStore gallery save failed:', e);
-        }
-      }
-
-      // 3. Update paths
+      // 2. Update paths in state, AsyncStorage, and SQLite pointer (cached in app sandbox)
+      updateMediaLocalPointer(msgId, localUri);
       setLocalMediaMap(prev => {
-        const updated = { ...prev, [msgId]: localUri };
+        const updated = { ...prev, [cacheKey]: localUri };
         AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(e => console.warn(e));
         return updated;
       });
 
       setDownloadedMap(prev => {
-        const updated = { ...prev, [msgId]: true };
+        const updated = { ...prev, [cacheKey]: true };
         AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(e => console.warn(e));
         return updated;
       });
     } catch (err) {
       console.warn('Silent image cache failed:', err);
-      failedDownloadsRef.current[msgId] = true;
+      failedDownloadsRef.current[cacheKey] = true;
     } finally {
       setDownloadingIds(prev => {
         const copy = { ...prev };
-        delete copy[msgId];
+        delete copy[cacheKey];
+        return copy;
+      });
+    }
+  };
+
+  // Download document silently to app storage in Zenza Documents directory (caches for offline viewing)
+  const downloadDocumentLocal = async (msgId: string, url: string, name: string) => {
+    const cacheKey = msgId;
+    if (downloadingIds[cacheKey]) return;
+
+    // Guard: file:// and content:// URIs are already local — just register them, never download
+    if (url.startsWith('file://') || url.startsWith('content://')) {
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: url };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      return;
+    }
+
+    setDownloadingIds(prev => ({ ...prev, [cacheKey]: true }));
+
+    try {
+      const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      const localUri = `${DIRS.docs}${safeName}`;
+
+      const downloadResult = await FileSystem.downloadAsync(url, localUri);
+      if (downloadResult.status < 200 || downloadResult.status >= 300) {
+        await FileSystem.deleteAsync(localUri, { idempotent: true });
+        throw new Error(`Server returned status code ${downloadResult.status}`);
+      }
+
+      updateMediaLocalPointer(msgId, localUri);
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: localUri };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+    } catch (err) {
+      console.warn('Silent document cache failed:', err);
+      failedDownloadsRef.current[cacheKey] = true;
+    } finally {
+      setDownloadingIds(prev => {
+        const copy = { ...prev };
+        delete copy[cacheKey];
         return copy;
       });
     }
@@ -615,7 +763,7 @@ export default function StudentCommunityScreen() {
       }
     } catch (err: any) {
       console.warn('Doc download failed:', err);
-      Alert.alert('Download Error', err.message || 'Failed to download document.');
+      CustomAlert.alert('Download Error', err.message || 'Failed to download document.');
     } finally {
       setDownloadingIds(prev => {
         const copy = { ...prev };
@@ -649,8 +797,11 @@ export default function StudentCommunityScreen() {
   };
 
   // Load student profile details
-  const loadProfile = async () => {
+  const loadProfile = async (silent = false) => {
     if (!user) return;
+    if (!silent && messages.length === 0 && !prefetch.communityReady) {
+      setIsLoading(true);
+    }
     try {
       const { data: profile, error } = await supabase
         .from('students')
@@ -662,38 +813,47 @@ export default function StudentCommunityScreen() {
       if (profile) {
         setStudentProfile(profile);
         
-        // Fetch coaching details and admin avatar
-        const { data: biz } = await supabase
-          .from('businesses')
-          .select('business_name, admin_id, organization_id')
-          .eq('id', profile.business_id)
-          .maybeSingle();
-        if (biz) {
-          setCoachingName(biz.business_name || 'Community Chat');
-          setOrgId(biz.organization_id || '');
-          
-          if (biz.admin_id) {
-            const { data: adminProf } = await supabase
-              .from('profiles')
-              .select('avatar_url')
-              .eq('id', biz.admin_id)
-              .maybeSingle();
-            if (adminProf?.avatar_url) {
-              setCoachingLogoUrl(adminProf.avatar_url);
+        // Fetch coaching details and admin avatar (skip if preloaded)
+        if (!prefetch.coachingMeta) {
+          const { data: biz } = await supabase
+            .from('businesses')
+            .select('business_name, admin_id, organization_id')
+            .eq('id', profile.business_id)
+            .maybeSingle();
+          if (biz) {
+            setCoachingName(biz.business_name || 'Community Chat');
+            setOrgId(biz.organization_id || '');
+            
+            if (biz.admin_id) {
+              const { data: adminProf } = await supabase
+                .from('profiles')
+                .select('avatar_url')
+                .eq('id', biz.admin_id)
+                .maybeSingle();
+              if (adminProf?.avatar_url) {
+                setCoachingLogoUrl(adminProf.avatar_url);
+              }
             }
           }
-        }
 
-        // Fetch student count
-        const { count } = await supabase
-          .from('students')
-          .select('*', { count: 'exact', head: true })
-          .eq('business_id', profile.business_id);
-        if (count !== null) {
-          setStudentCount(count);
+          // Fetch student count
+          const { count } = await supabase
+            .from('students')
+            .select('*', { count: 'exact', head: true })
+            .eq('business_id', profile.business_id);
+          if (count !== null) {
+            setStudentCount(count);
+          }
+          
+          await loadMemberAvatars(profile.business_id);
+        } else {
+          // Initialize avatar profile mappings with preloaded avatars
+          const map: Record<string, string> = {};
+          prefetch.coachingMeta.memberAvatars.forEach((url, i) => {
+            map[`preload_${i}`] = url;
+          });
+          setProfilesMap(prev => ({ ...prev, ...map }));
         }
-        
-        await loadMemberAvatars(profile.business_id);
 
         // Fetch messages for this business
         await fetchMessages(profile.business_id);
@@ -705,6 +865,9 @@ export default function StudentCommunityScreen() {
     }
   };
 
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
   const fetchMessages = async (businessId: string) => {
     try {
       const { data, error } = await supabase
@@ -712,10 +875,14 @@ export default function StudentCommunityScreen() {
         .select('*')
         .eq('business_id', businessId)
         .neq('is_deleted', true)
-        .order('created_at', { ascending: true }); // chronological order
+        .order('created_at', { ascending: false })
+        .limit(20);
 
       if (error) throw error;
-      setMessages(data || []);
+      const fetched = data || [];
+      const chronological = [...fetched].reverse();
+      setMessages(chronological);
+      setHasMore(fetched.length === 20);
       
       // Scroll to bottom after loading
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 150);
@@ -724,15 +891,46 @@ export default function StudentCommunityScreen() {
     }
   };
 
+  const fetchMoreMessages = async () => {
+    const bizId = studentProfile?.business_id;
+    if (!bizId || isLoadingMore || !hasMore || messages.length === 0) return;
+    try {
+      setIsLoadingMore(true);
+      const oldestTimestamp = messages[0].created_at;
+      const { data, error } = await supabase
+        .from('community_posts')
+        .select('*')
+        .eq('business_id', bizId)
+        .neq('is_deleted', true)
+        .lt('created_at', oldestTimestamp)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      const fetched = data || [];
+      if (fetched.length < 20) {
+        setHasMore(false);
+      }
+      if (fetched.length > 0) {
+        const olderChronological = [...fetched].reverse();
+        setMessages(prev => [...olderChronological, ...prev]);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch more messages:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
     if (messages.length > 0) {
-      autoDownloadImages(messages);
+      autoDownloadMedia(messages);
     }
-  }, [messages, autoDownloadImages]);
+  }, [messages, autoDownloadMedia]);
 
   // When messages are visible and community is open, persist all as "read" in AsyncStorage
   useEffect(() => {
-    if (messages.length > 0 && useNotificationStore.getState().communityIsOpen) {
+    if (messages.length > 0) {
       const persist = async () => {
         try {
           const ids = messages.map(m => String(m.id));
@@ -745,14 +943,15 @@ export default function StudentCommunityScreen() {
       };
       persist();
     }
-  }, [messages.length]);
+  }, [messages]);
 
   // Real-time subscription setup
   useEffect(() => {
     if (!studentProfile?.business_id) return;
 
+    const channelId = `student_community_changes_${studentProfile.business_id}_${Math.random().toString(36).substring(7)}`;
     const channel = supabase
-      .channel('student_community_changes')
+      .channel(channelId)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -761,8 +960,32 @@ export default function StudentCommunityScreen() {
         if (payload.eventType === 'INSERT') {
           const newMsg = payload.new;
           if (newMsg.business_id !== studentProfile.business_id) return;
+
+          const cleanMsgText = (txt: string) => {
+            if (!txt) return '';
+            return txt.replace(/\([^)]+\)/g, '()').trim();
+          };
+
           setMessages(prev => {
             if (prev.some(m => m.id === newMsg.id)) return prev;
+
+            // Try to match and replace the student's optimistic message
+            if (newMsg.author_id === user?.id) {
+              const optIndex = prev.findIndex(m => 
+                String(m.id).startsWith('optimistic_') && 
+                cleanMsgText(m.text) === cleanMsgText(newMsg.text)
+              );
+
+              if (optIndex !== -1) {
+                const copy = [...prev];
+                copy[optIndex] = {
+                  ...newMsg,
+                  local_uri: prev[optIndex].local_uri
+                };
+                return copy;
+              }
+            }
+
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -786,17 +1009,25 @@ export default function StudentCommunityScreen() {
     };
   }, [studentProfile?.business_id]);
 
+  // Synchronize store updates to local state
   useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 250);
+    if (businessName) setCoachingName(businessName);
+  }, [businessName]);
+
+  useEffect(() => {
+    if (avatarUrl) setCoachingLogoUrl(avatarUrl);
+  }, [avatarUrl]);
+
+  // Fetch student profile once user session is loaded
+  useEffect(() => {
+    if (user) {
+      loadProfile(true);
     }
-  }, [messages.length]);
+  }, [user]);
 
   useFocusEffect(
     useCallback(() => {
-      loadProfile();
+      loadProfile(true);
       // Mark community as open so notifications don't increment badge
       useNotificationStore.getState().setCommunityIsOpen(true);
       setCurrentActiveScreen('community'); // suppress notification banners while in chat
@@ -820,31 +1051,81 @@ export default function StudentCommunityScreen() {
   );
 
   const sendMessage = async () => {
-    if (!inputText.trim() || !studentProfile || isSending) return;
-    setIsSending(true);
+    if (!inputText.trim() || !studentProfile) return;
     const textToSend = inputText.trim();
-    setInputText('');
+    setInputText(''); // Clear input instantly — NO button spinner!
+
+    const tempMsgId = `optimistic_txt_${Date.now()}`;
+    const optimisticMsg = {
+      id: tempMsgId,
+      is_optimistic: true,
+      upload_status: 'sending',
+      author_id: user?.id,
+      author_name: studentProfile.name || 'Anonymous Student',
+      author_role: 'student',
+      category: 'announcement',
+      text: textToSend,
+      created_at: new Date().toISOString(),
+      likes: 0,
+      comments: '[]',
+      liked: false,
+    };
+
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const { error } = await supabase
+      const { data: insertedRows, error } = await supabase
         .from('community_posts')
         .insert({
           business_id: studentProfile.business_id,
           author_id: user?.id,
           author_name: studentProfile.name || 'Anonymous Student',
           author_role: 'student',
-          category: 'announcement', // default category
+          category: 'announcement',
           text: textToSend
-        });
+        })
+        .select();
 
       if (error) throw error;
+
+      if (insertedRows && insertedRows.length > 0) {
+        const finalMsg = insertedRows[0];
+        setMessages((prev) => prev.map((m) => (m.id === tempMsgId ? finalMsg : m)));
+      }
     } catch (err) {
       console.warn('Failed to send message:', err);
-      Alert.alert('Error', 'Failed to send message. Please try again.');
+      setMessages((prev) => prev.filter((m) => m.id !== tempMsgId));
       setInputText(textToSend); // restore input text on error
-    } finally {
-      setIsSending(false);
     }
+  };
+
+  const deleteMessage = (msgId: string) => {
+    setDeleteModalConfig({
+      visible: true,
+      title: 'Delete Message?',
+      message: 'Are you sure you want to delete this message? This action cannot be undone.',
+      onConfirm: async () => {
+        setDeleteModalConfig(null);
+        try {
+          const { error: softErr } = await supabase
+            .from('community_posts')
+            .update({ is_deleted: true, text: 'This message was deleted' })
+            .eq('id', msgId);
+
+          if (softErr) {
+            try { await supabase.from('community_comments').delete().eq('post_id', msgId); } catch (_) {}
+            try { await supabase.from('community_likes').delete().eq('post_id', msgId); } catch (_) {}
+            const { error: hardErr } = await supabase.from('community_posts').delete().eq('id', msgId);
+            if (hardErr) throw hardErr;
+          }
+
+          setMessages(prev => prev.filter(m => String(m.id) !== String(msgId)));
+        } catch (err: any) {
+          console.warn('Failed to delete message:', err);
+        }
+      }
+    });
   };
 
   const filteredMessages = messages.filter(msg => {
@@ -855,6 +1136,55 @@ export default function StudentCommunityScreen() {
 
   const parsedMedia = extractMediaDocsLinks(messages);
   const imageMessages = messages.filter(msg => msg.image_url || (msg.text && msg.text.startsWith('[Image:')));
+  const [onlineCount, setOnlineCount] = useState<number>(0);
+  const [isTeacherOnline, setIsTeacherOnline] = useState<boolean>(false);
+
+  // Real-time Supabase Presence tracking (CRDT in-memory online status)
+  useEffect(() => {
+    const bizId = studentProfile?.business_id;
+    if (!bizId || !user?.id) return;
+
+    const presenceChannel = supabase.channel(`presence_student_community_${bizId}`, {
+      config: {
+        presence: {
+          key: user.id,
+        },
+      },
+    });
+
+    presenceChannel
+      .on('presence', { event: 'sync' }, () => {
+        const state = presenceChannel.presenceState();
+        const keys = Object.keys(state);
+        setOnlineCount(keys.length);
+
+        let teacherOnline = false;
+        Object.values(state).forEach((presences: any) => {
+          if (Array.isArray(presences)) {
+            presences.forEach((p: any) => {
+              if (p.role === 'admin' || p.role === 'teacher') {
+                teacherOnline = true;
+              }
+            });
+          }
+        });
+        setIsTeacherOnline(teacherOnline);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await presenceChannel.track({
+            user_id: user.id,
+            role: 'student',
+            name: studentProfile?.name || 'Student',
+            online_at: new Date().toISOString(),
+          });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(presenceChannel);
+    };
+  }, [studentProfile?.business_id, user?.id, studentProfile?.name]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -877,7 +1207,9 @@ export default function StudentCommunityScreen() {
           }}
         >
           <Text style={styles.headerTitle} numberOfLines={1}>{coachingName}</Text>
-          <Text style={styles.headerSubtitle}>{studentCount} members</Text>
+          <Text style={styles.headerSubtitle}>
+            {onlineCount > 0 ? `🟢 ${onlineCount} Online • ${studentCount} members` : `${studentCount} members`}
+          </Text>
         </TouchableOpacity>
 
         {/* Search Icon */}
@@ -918,11 +1250,7 @@ export default function StudentCommunityScreen() {
       )}
 
       {/* Chat Background & Message List */}
-      <ImageBackground
-        source={require('../../assets/images/community chat wallpaper.jpeg')}
-        style={{ flex: 1 }}
-        resizeMode="cover"
-      >
+      <View style={{ flex: 1, backgroundColor: Colors.bg.primary }}>
         <FlatList
         ref={flatListRef}
         data={filteredMessages}
@@ -930,6 +1258,20 @@ export default function StudentCommunityScreen() {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+        maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+        onScroll={({ nativeEvent }) => {
+          if (nativeEvent.contentOffset.y <= 50 && hasMore && !isLoadingMore && !isLoading) {
+            fetchMoreMessages();
+          }
+        }}
+        scrollEventThrottle={16}
+        ListHeaderComponent={
+          isLoadingMore ? (
+            <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+              <ActivityIndicator size="small" color="#AF2800" />
+            </View>
+          ) : null
+        }
         renderItem={({ item, index }) => {
           const isSelf = item.author_id === user?.id;
           
@@ -938,8 +1280,17 @@ export default function StudentCommunityScreen() {
           const showDateSeparator = !prevMsg || 
             new Date(prevMsg.created_at).toDateString() !== new Date(item.created_at).toDateString();
 
+          const urls = getImagesFromMessage(item);
+          const isImageAttachment = urls.length > 0;
+          const captionText = isImageAttachment && item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
+
+          // Link-only message detection (suppress bubble styling)
+          const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|org|net|co|in|edu|gov|io|info)(?:\/[^\s]*)?)/gi;
+          const matchedUrls = item.text ? item.text.match(urlRegex) : null;
+          const isLinkOnly = !!(matchedUrls && matchedUrls.length === 1 && item.text.trim() === matchedUrls[0].trim());
+
+          const shouldShowBubble = (!isImageAttachment || captionText.length > 0) && !isLinkOnly;
           const isTeacher = item.author_role === 'admin' || item.author_role === 'teacher';
-          const isImageAttachment = !!(item.image_url || (item.text && item.text.startsWith('[Image:')));
 
           return (
             <View style={{ width: '100%' }}>
@@ -965,7 +1316,7 @@ export default function StudentCommunityScreen() {
                 {/* Bubble + tail wrapper */}
                 <View style={{ position: 'relative' }}>
                   {/* Tail triangle for non-self messages (bottom-left) */}
-                  {!isSelf && !isImageAttachment && (
+                  {!isSelf && shouldShowBubble && (
                     <View style={{
                       position: 'absolute',
                       bottom: 0,
@@ -979,7 +1330,7 @@ export default function StudentCommunityScreen() {
                     }} />
                   )}
                   {/* Tail triangle for self messages (bottom-right) */}
-                  {isSelf && !isImageAttachment && (
+                  {isSelf && shouldShowBubble && (
                     <View style={{
                       position: 'absolute',
                       bottom: 0,
@@ -993,16 +1344,16 @@ export default function StudentCommunityScreen() {
                     }} />
                   )}
                 <View style={[
-                  styles.bubble,
-                  isSelf ? styles.bubbleSelf : styles.bubbleOther,
-                  isImageAttachment && { padding: 0, paddingHorizontal: 0, paddingVertical: 0 }
+                  shouldShowBubble ? styles.bubble : { backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0, padding: 0 },
+                  shouldShowBubble ? (isSelf ? styles.bubbleSelf : styles.bubbleOther) : null,
+                  (isImageAttachment && shouldShowBubble) && { padding: 0, paddingHorizontal: 0, paddingVertical: 0 }
                 ]}>
                   {/* Render sender name for incoming messages */}
                   {!isSelf && (
                     <Text style={[
                       styles.authorText,
                       isTeacher ? styles.authorTeacher : styles.authorStudent,
-                      isImageAttachment && { marginLeft: 12, marginTop: 8, marginBottom: 4 }
+                      (isImageAttachment || isLinkOnly) && { marginLeft: shouldShowBubble ? 12 : 0, marginTop: shouldShowBubble ? 8 : 2, marginBottom: 4 }
                     ]}>
                       {item.author_name} {isTeacher ? '(Teacher)' : ''}
                     </Text>
@@ -1010,58 +1361,194 @@ export default function StudentCommunityScreen() {
 
                   {/* Image Attachment Rendering */}
                   {isImageAttachment && (() => {
-                    const isDownloaded = downloadedMap[item.id] || isSelf;
-                    const isDownloading = downloadingIds[item.id];
-                    const parsed = extractUrlAndName(item.text);
-                    const imgUri = item.media_url || item.image_url || parsed?.url;
-                    const displayUri = localMediaMap[item.id] || imgUri;
-                    // Always use public URL (media_url) for blur preview
-                    const previewUri = item.media_url || item.image_url || imgUri;
+                    const urls = getImagesFromMessage(item);
+                    if (urls.length === 0) return null;
+                    
+                    const isDownloaded = urls.every((_, idx) => downloadedMap[item.id + '_' + idx] || isSelf);
+                    const isDownloading = urls.some((_, idx) => downloadingIds[item.id + '_' + idx]);
                     const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
-                    // Dynamic height from cached image dimensions (WhatsApp-style aspect ratio)
                     const BOX_W = 260;
                     const cachedDims = imageDimsCache[item.id];
                     const dynHeight = cachedDims
                       ? Math.max(160, Math.min(320, Math.round((cachedDims.h / cachedDims.w) * BOX_W)))
                       : 190;
 
-                    if (!cachedDims && previewUri) {
-                      Image.getSize(previewUri, (w, h) => {
+                    // Lazy-load dimensions — guard: never call getSize on local file:// uris (crashes on Android)
+                    if (!cachedDims && urls[0] && urls[0].startsWith('http')) {
+                      Image.getSize(urls[0], (w, h) => {
                         setImageDimsCache(prev => ({ ...prev, [item.id]: { w, h } }));
                       }, () => {});
                     }
 
+                    // Tapping opens the lightbox with all images from this message
+                    const handlePressImage = (tappedIndex: number) => {
+                      if (isDownloaded) {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                        const resolvedUris = urls.map((url, idx) => localMediaMap[item.id + '_' + idx] || url);
+                        setLightboxImages(resolvedUris);
+                        setLightboxMessage(item);
+                        setLightboxIndex(tappedIndex);
+                        setCurrentViewerIndex(tappedIndex);
+                      }
+                    };
+
+                    const handleDownloadBunch = () => {
+                      urls.forEach((url, idx) => {
+                        downloadImageLocal(item.id, url, idx);
+                      });
+                    };
+
+                    if (urls.length > 1) {
+                      // Multi-image Card Spread (Overlap Fan Layout)
+                      return (
+                        <View style={{ width: BOX_W, overflow: 'visible', marginVertical: 8 }}>
+                          <View style={{ position: 'relative', width: BOX_W, height: dynHeight + 15, overflow: 'visible' }}>
+                            {/* Third card (bottom layer) */}
+                            {urls.length > 2 && (
+                              <View style={{
+                                position: 'absolute',
+                                width: BOX_W - 20,
+                                height: dynHeight - 10,
+                                borderRadius: 16,
+                                backgroundColor: '#E0E0E0',
+                                left: 10,
+                                top: 20,
+                                transform: [{ rotate: '4deg' }],
+                                opacity: 0.7,
+                                elevation: 2,
+                                overflow: 'hidden'
+                              }}>
+                                <Image source={{ uri: urls[2] }} style={{ width: '100%', height: '100%', opacity: 0.8 }} />
+                              </View>
+                            )}
+
+                            {/* Second card (middle layer) */}
+                            <View style={{
+                              position: 'absolute',
+                              width: BOX_W - 20,
+                              height: dynHeight - 10,
+                              borderRadius: 16,
+                              backgroundColor: '#E0E0E0',
+                              left: 10,
+                              top: 12,
+                              transform: [{ rotate: '-4deg' }],
+                              opacity: 0.9,
+                              elevation: 3,
+                              overflow: 'hidden'
+                            }}>
+                              <Image source={{ uri: urls[1] }} style={{ width: '100%', height: '100%', opacity: 0.9 }} />
+                            </View>
+
+                            {/* Top card */}
+                            <View style={{
+                              position: 'absolute',
+                              width: BOX_W - 20,
+                              height: dynHeight - 10,
+                              borderRadius: 16,
+                              backgroundColor: '#E0E0E0',
+                              left: 10,
+                              top: 0,
+                              shadowColor: '#000',
+                              shadowOffset: { width: 0, height: 4 },
+                              shadowOpacity: 0.15,
+                              shadowRadius: 6,
+                              elevation: 5,
+                              overflow: 'hidden'
+                            }}>
+                              <TouchableOpacity
+                                activeOpacity={0.9}
+                                onPress={() => handlePressImage(0)}
+                                disabled={!isDownloaded}
+                                style={{ width: '100%', height: '100%' }}
+                              >
+                                {isDownloaded ? (
+                                  <Image 
+                                    source={{ uri: localMediaMap[item.id + '_0'] || urls[0] }} 
+                                    style={{ width: '100%', height: '100%' }}
+                                  />
+                                ) : (
+                                  <View style={{ width: '100%', height: '100%', backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center' }}>
+                                    <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.3)" />
+                                  </View>
+                                )}
+                                
+                                {/* Glassmorphic Count Badge */}
+                                <View style={{
+                                  position: 'absolute',
+                                  bottom: 12,
+                                  right: 12,
+                                  backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                                  paddingHorizontal: 10,
+                                  paddingVertical: 5,
+                                  borderRadius: 20,
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  gap: 4
+                                }}>
+                                  <Ionicons name="images" size={14} color="#FFF" />
+                                  <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>
+                                    {urls.length} Images
+                                  </Text>
+                                </View>
+                              </TouchableOpacity>
+
+                              {!isDownloaded && (
+                                <View style={styles.downloadOverlay}>
+                                  <TouchableOpacity 
+                                    style={styles.downloadCircle} 
+                                    activeOpacity={0.8}
+                                    onPress={handleDownloadBunch}
+                                    disabled={isDownloading}
+                                  >
+                                    {isDownloading ? (
+                                      <ActivityIndicator size="small" color="#FFF" />
+                                    ) : (
+                                      <Ionicons name="download-outline" size={24} color="#FFF" />
+                                    )}
+                                  </TouchableOpacity>
+                                </View>
+                              )}
+                            </View>
+                          </View>
+                          {captionText ? (
+                            <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 }}>
+                              <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther, { paddingRight: 0 }]}>
+                                {renderTextWithLinks(captionText, isSelf ? '#FFFFFF' : '#0066CC')}
+                              </Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      );
+                    }
+
+                    // Single Image Layout (Same as old normal behavior)
+                    const displayUri = localMediaMap[item.id + '_0'] || localMediaMap[item.id] || urls[0];
                     return (
                       <View style={{ overflow: 'hidden', borderRadius: 16, width: BOX_W }}>
                         <View style={{ position: 'relative', width: BOX_W, height: dynHeight, overflow: 'hidden' }}>
                           <TouchableOpacity 
                             activeOpacity={0.9}
-                            onPress={() => {
-                              if (isDownloaded && displayUri) {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                const idx = imageMessages.findIndex(m => m.id === item.id);
-                                if (idx !== -1) {
-                                  setLightboxIndex(idx);
-                                  setCurrentViewerIndex(idx);
-                                }
-                              }
-                            }}
+                            onPress={() => handlePressImage(0)}
                             disabled={!isDownloaded}
                           >
-                            {/* Blur preview from public URL, full quality from local */}
-                            <Image 
-                              source={{ uri: isDownloaded ? displayUri : previewUri }} 
-                              style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
-                              blurRadius={isDownloaded ? 0 : 18}
-                            />
+                            {isDownloaded ? (
+                              <Image 
+                                source={{ uri: displayUri }} 
+                                style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
+                              />
+                            ) : (
+                              <View style={{ width: BOX_W, height: dynHeight, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center' }}>
+                                <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.3)" />
+                              </View>
+                            )}
                           </TouchableOpacity>
                           {!isDownloaded && (
                             <View style={styles.downloadOverlay}>
                               <TouchableOpacity 
                                 style={styles.downloadCircle} 
                                 activeOpacity={0.8}
-                                onPress={() => imgUri && downloadImageLocal(item.id, imgUri)}
+                                onPress={() => downloadImageLocal(item.id, urls[0], 0)}
                                 disabled={isDownloading}
                               >
                                 {isDownloading ? (
@@ -1136,30 +1623,47 @@ export default function StudentCommunityScreen() {
                   })() : (
                     item.text !== '[Attached Image]' && !item.text?.startsWith('[Image:') && (
                       <View style={{ minWidth: 160 }}>
-                        <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
-                          {renderTextWithLinks(item.text, isSelf ? '#FFFFFF' : '#0066CC')}
-                        </Text>
-                        <LinkPreviewCard text={item.text} isSelf={isSelf} />
+                        {!isLinkOnly && (
+                          <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
+                            {renderTextWithLinks(item.text, isSelf ? '#FFFFFF' : '#0066CC')}
+                          </Text>
+                        )}
+                        <TouchableOpacity
+                          activeOpacity={1}
+                          delayLongPress={200}
+                          onLongPress={() => isSelf && deleteMessage(String(item.id))}
+                        >
+                          <LinkPreviewCard 
+                            text={item.text} 
+                            isSelf={isSelf} 
+                            onLongPress={() => isSelf && deleteMessage(String(item.id))}
+                          />
+                        </TouchableOpacity>
                       </View>
                     )
                   )}
 
-                  <Text style={[
-                    styles.timeText, 
-                    isSelf ? styles.timeSelf : styles.timeOther,
-                    isImageAttachment && { 
-                      position: 'absolute', 
-                      bottom: 8, 
-                      right: 8, 
-                      color: '#FFF', 
-                      backgroundColor: 'rgba(0,0,0,0.5)', 
-                      paddingHorizontal: 6, 
-                      paddingVertical: 2, 
-                      borderRadius: 8 
-                    }
-                  ]}>
-                    {formatBubbleTime(item.created_at)}{item.is_edited ? ' • Edited' : ''}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end' }}>
+                    <Text style={[
+                      styles.timeText, 
+                      isSelf ? styles.timeSelf : styles.timeOther,
+                      (isImageAttachment || isLinkOnly) && { 
+                        position: 'absolute', 
+                        bottom: 8, 
+                        right: 8, 
+                        color: '#FFF', 
+                        backgroundColor: 'rgba(0,0,0,0.5)', 
+                        paddingHorizontal: 6, 
+                        paddingVertical: 2, 
+                        borderRadius: 8 
+                      }
+                    ]}>
+                      {formatBubbleTime(item.created_at)}{item.is_edited ? ' • Edited' : ''}
+                    </Text>
+                    {item.is_optimistic && item.upload_status === 'sending' && (
+                      <Ionicons name="time-outline" size={13} color={isSelf ? "rgba(255,255,255,0.7)" : Colors.text.secondary} style={{ marginLeft: 4 }} />
+                    )}
+                  </View>
                 </View>
                 </View>{/* end tail+bubble wrapper */}
               </View>
@@ -1167,7 +1671,12 @@ export default function StudentCommunityScreen() {
           );
         }}
       />
-    </ImageBackground>
+          <LinearGradient
+            colors={['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.05)']}
+            style={styles.bottomVignette}
+            pointerEvents="none"
+          />
+        </View>
 
       {/* WhatsApp-Style Avatar Preview Modal */}
       <Modal
@@ -1278,7 +1787,7 @@ export default function StudentCommunityScreen() {
                   style={styles.whatsappOptionRow} 
                   activeOpacity={0.7}
                   onPress={() => {
-                    Alert.alert('Backup', 'Community chat backup completed successfully.');
+                    CustomAlert.alert('Backup', 'Community chat backup completed successfully.');
                   }}
                 >
                   <Ionicons name="cloud-upload-outline" size={22} color="#AF2800" style={{ marginRight: 16 }} />
@@ -1417,7 +1926,7 @@ export default function StudentCommunityScreen() {
                               if (canOpen) {
                                 Linking.openURL(item.url);
                               } else {
-                                Alert.alert('Error', 'Cannot open URL');
+                                CustomAlert.alert('Error', 'Cannot open URL');
                               }
                             }
                           }}
@@ -1457,14 +1966,11 @@ export default function StudentCommunityScreen() {
           <View style={styles.lightboxContainer}>
             {/* Top Header Bar Overlay */}
             {(() => {
-              const currentMsg = imageMessages[currentViewerIndex];
-              if (!currentMsg) return null;
-              const isSelf = currentMsg.author_id === user?.id;
-              const senderName = isSelf ? 'You' : currentMsg.author_name;
-              const formattedTime = formatBubbleTime(currentMsg.created_at);
-              const parsed = extractUrlAndName(currentMsg.text);
-              const imgUri = currentMsg.image_url || parsed?.url;
-              const displayUri = localMediaMap[currentMsg.id] || imgUri;
+              if (!lightboxMessage) return null;
+              const isSelf = lightboxMessage.author_id === user?.id;
+              const senderName = isSelf ? 'You' : lightboxMessage.author_name;
+              const formattedTime = formatBubbleTime(lightboxMessage.created_at);
+              const displayUri = lightboxImages[currentViewerIndex];
 
               return (
                 <View style={styles.lightboxHeader}>
@@ -1497,7 +2003,7 @@ export default function StudentCommunityScreen() {
 
             {/* Swipeable FlatList for Images */}
             <FlatList
-              data={imageMessages}
+              data={lightboxImages}
               horizontal
               pagingEnabled
               scrollEnabled={lightboxScrollEnabled}
@@ -1508,15 +2014,12 @@ export default function StudentCommunityScreen() {
                 offset: screenWidth * index,
                 index,
               })}
-              keyExtractor={(item) => String(item.id)}
+              keyExtractor={(item, index) => String(index)}
               onMomentumScrollEnd={(e) => {
                 const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
                 setCurrentViewerIndex(idx);
               }}
-              renderItem={({ item }) => {
-                const parsed = extractUrlAndName(item.text);
-                const imgUri = item.image_url || parsed?.url;
-                const displayUri = localMediaMap[item.id] || imgUri;
+              renderItem={({ item: displayUri }) => {
                 return (
                   <View style={{ width: screenWidth, height: '100%' }}>
                     {displayUri ? (
@@ -1532,12 +2035,61 @@ export default function StudentCommunityScreen() {
           </View>
         </Modal>
       )}
+
+      {/* Sleek Pure Milk White Compact Delete Confirmation Modal */}
+      {deleteModalConfig && (
+        <Modal visible={deleteModalConfig.visible} transparent animationType="fade" onRequestClose={() => setDeleteModalConfig(null)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 }}>
+            <View style={{ width: '100%', maxWidth: 290, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 }}>
+              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#FEF2F2', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                <Ionicons name="trash-outline" size={24} color="#EF4444" />
+              </View>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 6 }}>{deleteModalConfig.title}</Text>
+              <Text style={{ fontSize: 12, color: '#6B7280', textAlign: 'center', lineHeight: 16, marginBottom: 20 }}>{deleteModalConfig.message}</Text>
+              <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                <TouchableOpacity 
+                  style={{ flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' }}
+                  onPress={() => setDeleteModalConfig(null)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151' }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={{ flex: 1, height: 40, borderRadius: 12, backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center' }}
+                  onPress={deleteModalConfig.onConfirm}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#FFFFFF' }}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  topVignette: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 40,
+    zIndex: 2,
+  },
+  bottomVignette: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 10,
+    zIndex: 2,
+  },
   container: { flex: 1, backgroundColor: Colors.bg.primary },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.bg.primary },
   header: { 
@@ -1571,9 +2123,9 @@ const styles = StyleSheet.create({
   rowOther: { alignSelf: 'flex-start' },
   bubbleAvatar: { width: 32, height: 32, borderRadius: 16, marginRight: 8 },
   bubble: { 
-    borderRadius: 20, 
-    paddingHorizontal: 16, 
-    paddingVertical: 10, 
+    borderRadius: 16, 
+    paddingHorizontal: 12, 
+    paddingVertical: 8, 
     elevation: 1,
     shadowColor: '#000',
     shadowOpacity: 0.03,
@@ -1593,10 +2145,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.card.border,
     borderWidth: 1
   },
-  authorText: { fontSize: 11, fontWeight: '700', marginBottom: 2 },
+  authorText: { fontSize: 10.5, fontWeight: '700', marginBottom: 2 },
   authorTeacher: { color: '#AF2800' },
   authorStudent: { color: '#7E57C2' },
-  messageText: { fontSize: 14, color: Colors.text.primary, lineHeight: 18, paddingRight: 32 },
+  messageText: { fontSize: 13, color: Colors.text.primary, lineHeight: 17, paddingRight: 32 },
   bubbleImageAttachment: {
     width: 260,
     height: 190,

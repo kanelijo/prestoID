@@ -1,4 +1,4 @@
-package com.kanelijo.prestoid
+package com.kanelijo.zenza
 
 import android.os.Build
 import android.os.Bundle

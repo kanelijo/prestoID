@@ -5,12 +5,12 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Alert,
   Switch,
   ActivityIndicator,
   Modal,
   TextInput,
   Platform,
+  Alert,
   KeyboardAvoidingView,
   RefreshControl,
 } from 'react-native';
@@ -18,6 +18,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CustomAlert } from '@/components/CustomAlert';
 import { Colors, Shadows } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { supabase, signOutAll } from '@/lib/supabase';
@@ -56,6 +57,33 @@ export default function StudentSettingsScreen() {
   // Settings switches
   const [attendanceAlerts, setAttendanceAlerts] = useState(true);
   const [feeReminders, setFeeReminders] = useState(true);
+
+  const [developerTapCount, setDeveloperTapCount] = useState(0);
+  const [isPlaygroundPasswordVisible, setIsPlaygroundPasswordVisible] = useState(false);
+  const [playgroundPassword, setPlaygroundPassword] = useState('');
+
+  const handleDeveloperTap = () => {
+    setDeveloperTapCount(prev => {
+      const next = prev + 1;
+      if (next >= 5) {
+        setIsPlaygroundPasswordVisible(true);
+        return 0;
+      }
+      return next;
+    });
+  };
+
+  const handleUnlockPlayground = () => {
+    if (playgroundPassword === 'zenzadev2026') {
+      setIsPlaygroundPasswordVisible(false);
+      setPlaygroundPassword('');
+      router.push('/playground');
+    } else {
+      Alert.alert('Access Denied', 'Incorrect developer passcode entered.');
+      setPlaygroundPassword('');
+      setIsPlaygroundPasswordVisible(false);
+    }
+  };
 
   // Load settings on mount
   useEffect(() => {
@@ -164,21 +192,21 @@ export default function StudentSettingsScreen() {
 
   const handleChangePassword = async () => {
     if (!newPassword || !confirmPassword) {
-      Alert.alert('Error', 'Please fill in both password fields.');
+      CustomAlert.alert('Error', 'Please fill in both password fields.');
       return;
     }
     if (newPassword.length < 6) {
-      Alert.alert('Weak Password', 'Password must be at least 6 characters.');
+      CustomAlert.alert('Weak Password', 'Password must be at least 6 characters.');
       return;
     }
     const hasLetter = /[A-Za-z]/.test(newPassword);
     const hasNumber = /[0-9]/.test(newPassword);
     if (!hasLetter || !hasNumber) {
-      Alert.alert('Weak Password', 'Password must contain both letters and numbers.');
+      CustomAlert.alert('Weak Password', 'Password must contain both letters and numbers.');
       return;
     }
     if (newPassword !== confirmPassword) {
-      Alert.alert('Mismatch', 'Passwords do not match.');
+      CustomAlert.alert('Mismatch', 'Passwords do not match.');
       return;
     }
 
@@ -188,21 +216,21 @@ export default function StudentSettingsScreen() {
         password: newPassword,
       });
       if (error) throw error;
-      Alert.alert('Success', 'Password changed successfully.');
+      CustomAlert.alert('Success', 'Password changed successfully.');
       setIsChangePasswordVisible(false);
       setNewPassword('');
       setConfirmPassword('');
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to change password.');
+      CustomAlert.alert('Error', err.message || 'Failed to change password.');
     } finally {
       setIsSavingPassword(false);
     }
   };
 
   const handleLogout = () => {
-    Alert.alert(
+    CustomAlert.alert(
       'Logout',
-      'Are you sure you want to logout of PrestoID?',
+      'Are you sure you want to logout of Zenza?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -215,7 +243,7 @@ export default function StudentSettingsScreen() {
               reset();
               router.replace('/(auth)/login');
             } catch (err) {
-              Alert.alert('Error', 'Failed to log out.');
+              CustomAlert.alert('Error', 'Failed to log out.');
             } finally {
               setIsLoading(false);
             }
@@ -226,7 +254,7 @@ export default function StudentSettingsScreen() {
   };
 
   const handleDeleteAccount = () => {
-    Alert.alert(
+    CustomAlert.alert(
       'Delete Account',
       'Are you sure you want to delete your account? Tapping yes will queue your account for permanent deletion in 7 days and restrict active ID card usage.',
       [
@@ -235,7 +263,7 @@ export default function StudentSettingsScreen() {
           text: 'Yes, Delete',
           style: 'destructive',
           onPress: () => {
-            Alert.alert(
+            CustomAlert.alert(
               'Final Confirmation Required',
               'This is your last warning. Tapping confirm will immediately log you out and send the deletion request to your organization admin. You will have 7 days to cancel this request.',
               [
@@ -270,7 +298,7 @@ export default function StudentSettingsScreen() {
       if (error) {
         // Handle constraint violation (already requested)
         if (error.code === '23505') {
-          Alert.alert('Request Already Sent', 'You have already submitted an account deletion request. Please wait for the admin to approve or deny.');
+          CustomAlert.alert('Request Already Sent', 'You have already submitted an account deletion request. Please wait for the admin to approve or deny.');
           return;
         }
         throw error;
@@ -278,7 +306,7 @@ export default function StudentSettingsScreen() {
 
       // Log out
       await signOutAll();
-      Alert.alert(
+      CustomAlert.alert(
         'Request Sent Successfully',
         'Your deletion request is now pending admin approval. You have been logged out. If you wish to recover your account, log in again within 7 days.',
         [
@@ -289,7 +317,7 @@ export default function StudentSettingsScreen() {
         ]
       );
     } catch (err: any) {
-      Alert.alert('Request Failed', err.message || 'Failed to submit deletion request.');
+      CustomAlert.alert('Request Failed', err.message || 'Failed to submit deletion request.');
     } finally {
       setIsLoading(false);
     }
@@ -435,16 +463,8 @@ export default function StudentSettingsScreen() {
 
         {/* Lab Settings */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Experimental</Text>
+          <Text style={styles.sectionTitle}>App Roadmap</Text>
           <View style={styles.card}>
-            <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(student)/lab')}>
-              <Ionicons name="beaker-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
-              <Text style={styles.menuLabel}>UI Design Lab</Text>
-              <Ionicons name="chevron-forward" size={18} color={Colors.text.tertiary} />
-            </TouchableOpacity>
-
-            <View style={styles.divider} />
-
             <TouchableOpacity style={styles.menuRow} onPress={() => setIsUpcomingVisible(true)}>
               <Ionicons name="rocket-outline" size={20} color={Colors.text.secondary} style={{ marginRight: 12 }} />
               <Text style={styles.menuLabel}>Upcoming Features</Text>
@@ -617,8 +637,60 @@ export default function StudentSettingsScreen() {
           </View>
         )}
 
-        <Text style={styles.versionText}>PrestoID v1.0.0 • by Team43</Text>
+        <TouchableOpacity activeOpacity={0.8} onPress={handleDeveloperTap}>
+          <Text style={styles.versionText}>Zenza v1.0.0 • by Team43</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      {/* Developer Passcode Modal */}
+      <Modal
+        visible={isPlaygroundPasswordVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setIsPlaygroundPasswordVisible(false);
+          setPlaygroundPassword('');
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+            style={styles.modalContent}
+          >
+            <Text style={styles.modalTitle}>🔒 Developer Access Control</Text>
+            <Text style={{ fontSize: 13, color: Colors.text.secondary, marginBottom: 12, lineHeight: 18 }}>
+              This area contains experimental sandbox features. Enter the developer passcode to unlock:
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              value={playgroundPassword}
+              onChangeText={setPlaygroundPassword}
+              placeholder="Developer Passcode"
+              placeholderTextColor={Colors.text.tertiary}
+              secureTextEntry={true}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={styles.modalCancelBtn} 
+                onPress={() => {
+                  setIsPlaygroundPasswordVisible(false);
+                  setPlaygroundPassword('');
+                }}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalSaveBtn} 
+                onPress={handleUnlockPlayground}
+              >
+                <Text style={styles.modalSaveText}>Unlock</Text>
+              </TouchableOpacity>
+            </View>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
 
       {/* Change Password Modal */}
       <Modal
@@ -714,7 +786,7 @@ export default function StudentSettingsScreen() {
             <ScrollView style={{ maxHeight: 300, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
               <Text style={styles.documentHeader}>1. Information We Collect</Text>
               <Text style={styles.documentBody}>
-                PrestoID collects minimal student profile data (name, DOB, email, batch information) and avatar photos to verify your ID card status and record school attendance securely.
+                Zenza collects minimal student profile data (name, DOB, email, batch information) and avatar photos to verify your ID card status and record school attendance securely.
               </Text>
               <Text style={styles.documentHeader}>2. Usage of Data</Text>
               <Text style={styles.documentBody}>
@@ -741,24 +813,29 @@ export default function StudentSettingsScreen() {
               <Text style={[styles.modalTitle, { marginBottom: 0 }]}>Upcoming Features</Text>
             </View>
             <ScrollView style={{ maxHeight: 350, marginBottom: 15 }} showsVerticalScrollIndicator={false}>
-              <Text style={styles.documentHeader}>1. ZenZa Community</Text>
+              <Text style={styles.documentHeader}>1. ZenZa Peer Connect (Now Live! 🎉)</Text>
               <Text style={styles.documentBody}>
-                Chat with any other student in your coaching securely. Privacy is our top priority—you'll connect through a follow request system.
+                Secure student-to-student connection requests, customized educational bios, and real-time chat are now active.
               </Text>
 
-              <Text style={styles.documentHeader}>2. In-App Fee Payments</Text>
+              <Text style={styles.documentHeader}>2. Practice Target Exams (Now Live! 🚀)</Text>
               <Text style={styles.documentBody}>
-                Pay your tuition and fees directly within Kanelijo via UPI, cards, and net banking with instant digital receipts.
+                Personalized exam syllabus breakdowns, strategies, and AI-powered practice mocks are now live in your organization.
               </Text>
 
-              <Text style={styles.documentHeader}>3. Parents Attendance Alert</Text>
+              <Text style={styles.documentHeader}>3. Daily AI Test Scheduler (Coming Soon)</Text>
               <Text style={styles.documentBody}>
-                Automated SMS and push notifications to parents the moment attendance is marked or if a student is absent.
+                Receive automated, custom practice worksheets generated dynamically by Gemini AI every single morning.
               </Text>
 
-              <Text style={styles.documentHeader}>4. Teacher Branding Royalties</Text>
+              <Text style={styles.documentHeader}>4. Auto Fee Billing & Digital Receipts (Coming Soon)</Text>
               <Text style={styles.documentBody}>
-                A complete ecosystem for teachers to monetize their brand, premium content, and exclusive live sessions directly through the app.
+                Pay tuition fees directly inside the app via UPI, cards, and net banking with instant receipt downloads.
+              </Text>
+
+              <Text style={styles.documentHeader}>5. Automated Parents Attendance Alerts (Coming Soon)</Text>
+              <Text style={styles.documentBody}>
+                Automated SMS alerts and push notifications sent to parents instantly when attendance is marked.
               </Text>
             </ScrollView>
             <TouchableOpacity style={styles.modalSaveBtn} onPress={() => setIsUpcomingVisible(false)}>

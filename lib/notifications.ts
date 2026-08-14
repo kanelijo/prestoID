@@ -12,6 +12,11 @@ export const setCurrentActiveScreen = (screen: string) => {
   currentActiveScreen = screen;
 };
 
+export let currentActivePeerId = '';
+export const setCurrentActivePeerId = (peerId: string) => {
+  currentActivePeerId = peerId;
+};
+
 try {
   Notifications = require('expo-notifications');
   Device = require('expo-device');
@@ -21,9 +26,31 @@ try {
 }
 
 if (Notifications) {
+  // Define notification categories for WhatsApp-style quick replies & mark as read
+  Notifications.setNotificationCategoryAsync('chat_reply', [
+    {
+      identifier: 'reply',
+      buttonTitle: '💬 Reply',
+      options: {
+        opensAppToForeground: false,
+      },
+      textInput: {
+        submitButtonTitle: 'Send',
+        placeholder: 'Type your message...',
+      },
+    },
+    {
+      identifier: 'mark_as_read',
+      buttonTitle: '✓ Mark as Read',
+      options: {
+        opensAppToForeground: false,
+      },
+    },
+  ]).catch((err: any) => console.warn('Failed to set notification category:', err));
+
   Notifications.setNotificationHandler({
     handleNotification: async (notification: any) => {
-      const channelId = notification.request.trigger.channelId;
+      const channelId = notification.request.trigger?.channelId;
       const data = notification.request.content.data;
       
       // If we are on the community screen, and this is a community notification, suppress banner and sound
@@ -41,6 +68,19 @@ if (Notifications) {
            shouldShowAlert: false,
          };
       }
+
+      // If we are actively chatting with a peer, and a message arrives from that specific peer, suppress banner/sound
+      const isChatNotification = data?.screen === 'chat' || data?.screen === 'student-chat';
+      const notificationPeerId = data?.peerId || data?.senderId;
+
+      if (isChatNotification) {
+         // Suppress native popup/sound for chats because InAppNotification handles it!
+         return {
+           shouldPlaySound: false,
+           shouldSetBadge: true,
+           shouldShowAlert: false,
+         };
+      }
       
       return {
         shouldPlaySound: true,
@@ -53,23 +93,25 @@ if (Notifications) {
 
 // Notification channel IDs
 export const CHANNELS = {
-  community:  'kf_community_v2',
-  fees:       'kf_fees_v2',
-  tests:      'kf_tests_v2',
-  attendance: 'kf_attendance_v2',
-  admin:      'kf_admin_v2',
-  general:    'kf_general_v2',
+  chat:       'kf_chat_v3',
+  community:  'kf_community_v3',
+  fees:       'kf_fees_v3',
+  tests:      'kf_tests_v3',
+  attendance: 'kf_attendance_v3',
+  admin:      'kf_admin_v3',
+  general:    'kf_general_v3',
 };
 
 async function ensureChannels() {
   if (!Notifications || Platform.OS !== 'android') return;
   const channelDefs = [
-    { id: CHANNELS.community,  name: '💬 Community',   desc: 'Likes, comments and replies on posts' },
+    { id: CHANNELS.chat,       name: '💬 Peer Chat & Requests', desc: 'Direct messages, doubt discussions, and chat requests' },
+    { id: CHANNELS.community,  name: '🌐 Community',   desc: 'Likes, comments and replies on posts' },
     { id: CHANNELS.fees,       name: '💰 Fee Alerts',  desc: 'Fee reminders and payment notices' },
     { id: CHANNELS.tests,      name: '📝 Tests',       desc: 'New tests and results' },
     { id: CHANNELS.attendance, name: '✅ Attendance',  desc: 'Attendance marked notifications' },
     { id: CHANNELS.admin,      name: '🔔 Admin Alerts',desc: 'New registrations and admin events' },
-    { id: CHANNELS.general,    name: '📣 PrestoID',    desc: 'General app notifications' },
+    { id: CHANNELS.general,    name: '📣 Zenza',       desc: 'General app notifications' },
   ];
   for (const ch of channelDefs) {
     try {
@@ -77,10 +119,9 @@ async function ensureChannels() {
         name: ch.name,
         description: ch.desc,
         importance: Notifications.AndroidImportance.HIGH,
-        vibrationPattern: [0, 150, 100, 150],
+        vibrationPattern: [0, 200, 100, 200],
         enableVibrate: true,
         showBadge: true,
-        // No custom sound — Android uses system default automatically
         enableLights: true,
         lightColor: '#AF2800',
       });
@@ -116,13 +157,20 @@ export async function registerForPushNotificationsAsync(userId: string): Promise
 
       const projectId =
         Constants.expoConfig?.extra?.eas?.projectId ??
-        Constants.easConfig?.projectId;
+        Constants.easConfig?.projectId ??
+        'e1b1d0b2-c04d-4e47-bbde-ec7873709e4b';
 
-      const tokenData = await Notifications.getExpoPushTokenAsync({
-        projectId,
-      });
-      const token = tokenData.data;
-      console.log('[SUCCESS] Fetched Expo Push Token:', token);
+      let token: string | null = null;
+      try {
+        const tokenData = await Notifications.getExpoPushTokenAsync({
+          projectId,
+        });
+        token = tokenData.data;
+        console.log('[SUCCESS] Fetched Expo Push Token:', token);
+      } catch (tokenErr: any) {
+        console.log('Push token fetch skipped (FCM/Google Play Services unavailable):', tokenErr?.message || tokenErr);
+        return null;
+      }
 
       // Get or create persistent device ID
       let deviceId = await AsyncStorage.getItem('device_id');
@@ -178,6 +226,64 @@ export async function registerForPushNotificationsAsync(userId: string): Promise
 }
 
 /**
+ * Fetch Expo Push Tokens for all students belonging to a business.
+ * Excludes the current user (e.g. teacher/admin) so teachers don't receive push notifications intended for students.
+ */
+export async function fetchStudentPushTokens(
+  businessId: string,
+  currentUserId?: string,
+  targetBatch?: string
+): Promise<string[]> {
+  if (!businessId) return [];
+
+  try {
+    // 1. Fetch user_ids from students table for this business
+    let studentQuery = supabase
+      .from('students')
+      .select('user_id')
+      .eq('business_id', businessId)
+      .not('user_id', 'is', null);
+
+    if (targetBatch && targetBatch !== 'All') {
+      studentQuery = studentQuery.eq('batch_name', targetBatch);
+    }
+
+    const { data: studentRecords } = await studentQuery;
+    const studentUserIds = (studentRecords || []).map((s: any) => s.user_id).filter(Boolean);
+
+    // 2. Fetch push tokens from profiles table
+    let profileQuery = supabase
+      .from('profiles')
+      .select('id, push_token, role')
+      .not('push_token', 'is', null);
+
+    if (currentUserId) {
+      profileQuery = profileQuery.neq('id', currentUserId);
+    }
+
+    if (studentUserIds.length > 0) {
+      profileQuery = profileQuery.or(`business_id.eq.${businessId},id.in.(${studentUserIds.join(',')})`);
+    } else {
+      profileQuery = profileQuery.eq('business_id', businessId);
+    }
+
+    const { data: profiles, error } = await profileQuery;
+    if (error || !profiles) return [];
+
+    // Filter tokens and ensure teacher/admin accounts are excluded
+    const tokens = (profiles || [])
+      .filter((p: any) => p.role !== 'admin' && p.role !== 'teacher')
+      .map((p: any) => p.push_token)
+      .filter(Boolean) as string[];
+
+    return Array.from(new Set(tokens));
+  } catch (e) {
+    console.warn('Failed to fetch student push tokens:', e);
+    return [];
+  }
+}
+
+/**
  * Call the Expo push notification service to deliver a notification to specified tokens.
  */
 export async function sendPushNotification(
@@ -186,7 +292,8 @@ export async function sendPushNotification(
   body: string,
   data: any = {},
   badge?: number,
-  channelId?: string
+  channelId?: string,
+  imageUrl?: string
 ): Promise<void> {
   if (!to || to.length === 0) return;
 
@@ -215,12 +322,17 @@ export async function sendPushNotification(
           priority: 'high',
           channelId: channel,
           badge: badge ?? 1,
+          categoryIdentifier: data?.categoryIdentifier || undefined,
+          // Top level image for attachment expansion if available
+          image: imageUrl || undefined,
           // Android notification shade style
           android: {
             channelId: channel,
             smallIcon: 'ic_notification',
             color: '#AF2800',
             priority: 'high',
+            largeIcon: imageUrl || undefined,
+            groupKey: data?.peerId ? `peer_chat_${data.peerId}` : undefined,
           },
         }),
       });
@@ -270,6 +382,9 @@ export async function scheduleLocalNotification(title: string, body: string, cha
       content: {
         title,
         body,
+        sound: true,
+        vibrate: [0, 250, 250, 250],
+        priority: Notifications.AndroidNotificationPriority?.HIGH || 'high',
         channelId: channelId || CHANNELS.tests,
       },
       trigger: null,

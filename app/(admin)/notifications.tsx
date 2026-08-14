@@ -139,8 +139,10 @@ export default function AdminNotificationsScreen() {
   // Load/save local read state from AsyncStorage
   const loadReadNotifications = async (): Promise<string[]> => {
     try {
-      const readIdsJSON = await AsyncStorage.getItem('@presto_admin_read_notifications');
-      return readIdsJSON ? JSON.parse(readIdsJSON) : [];
+      const key = user?.id ? `@presto_admin_read_notifications_${user.id}` : '@presto_admin_read_notifications';
+      const readIdsJSON = await AsyncStorage.getItem(key);
+      const fallbackJSON = await AsyncStorage.getItem('@presto_admin_read_notifications');
+      return readIdsJSON ? JSON.parse(readIdsJSON) : (fallbackJSON ? JSON.parse(fallbackJSON) : []);
     } catch (e) {
       console.warn('Failed to load read notifications:', e);
       return [];
@@ -149,6 +151,8 @@ export default function AdminNotificationsScreen() {
 
   const saveReadNotifications = async (ids: string[]) => {
     try {
+      const key = user?.id ? `@presto_admin_read_notifications_${user.id}` : '@presto_admin_read_notifications';
+      await AsyncStorage.setItem(key, JSON.stringify(ids));
       await AsyncStorage.setItem('@presto_admin_read_notifications', JSON.stringify(ids));
     } catch (e) {
       console.warn('Failed to save read notifications:', e);
@@ -467,7 +471,7 @@ export default function AdminNotificationsScreen() {
               <Text style={styles.avatarText}>{getInitials(adminName)}</Text>
             )}
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>PrestoID</Text>
+          <Text style={styles.headerTitle}>Zenza</Text>
           <TouchableOpacity
             style={styles.headerIconButton}
             onPress={() => router.push('/(admin)/profile')}

@@ -1,8 +1,7 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
-const genAI = new GoogleGenerativeAI(process.env.EXPO_PUBLIC_GEMINI_API_KEY || "");
 import { useState, useEffect, useRef } from 'react';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, KeyboardAvoidingView, Platform, Modal, Keyboard, Animated, Easing, AppState, StatusBar } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,6 +9,7 @@ import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { scheduleLocalNotification } from '@/lib/notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
@@ -30,15 +30,22 @@ When you have all the necessary information and the teacher says they are ready 
 
 {
   "is_test_ready": true,
-  "metadata": { "title": "...", "duration_minutes": 10, "batch_name": "All", "total_marks": 10, "positive_marks": 5, "negative_marks": 0 },
+  "metadata": { "title": "...", "subject": "Mathematics", "duration_minutes": 10, "batch_name": "All", "total_marks": 10, "positive_marks": 5, "negative_marks": 0 },
   "questions": [
     { "question_text": "...", "options": ["A","B","C","D"], "correct_option": 0, "explanation": "..." }
   ]
 }
 
+For the "subject" field, use a clear, short subject name that describes the topic of the test (e.g., "Mathematics", "Physics", "Chemistry", "Biology", "History", "Geography", "English", "Reasoning", "General Science", "Polity", "Economics"). Pick the most accurate subject based on the test topic.
 DO NOT output the JSON until the teacher confirms they want to create the test. Chat normally until then.
 If the teacher provides a PDF/Document attachment, base your questions strictly on that document.
-Assume each question has 5 positive marks and 0 negative marks, unless the teacher specifies otherwise. Output these as numbers in positive_marks and negative_marks.`;
+Assume each question has 5 positive marks and 0 negative marks, unless the teacher specifies otherwise. Output these as numbers in positive_marks and negative_marks.
+
+CRITICAL MATH FORMATTING RULES (For question_text, options, and explanation):
+1. Exponents & Powers: DO NOT write exponents/powers using '*' or '^' (e.g., do NOT write "X*2" or "X^2"). Instead, ALWAYS use standard Unicode superscript characters (e.g., "x²", "y³", "aⁿ").
+2. Fractions & Division: DO NOT write confusing nested flat division slashes. For fractions, write them clearly with parentheses (e.g., "(2/3)" or "2 upon 3"). For complex fraction divisions like (5+5+5+5/5) whole upon (3+3+3+3)/3, write it clearly using clear phrasing, e.g. "(5 + 5 + 5 + 5/5) divided by (3 + 3 + 3 + 3)/3" or similar explicit representation.
+3. Square Roots & Nested Roots: For square roots/underroots, use the Unicode square root symbol '√' with clear brackets. For an infinite nested sum of underroots (like underroot 7 + underroot 7 ... to infinity), write it exactly as: "√(7 + √(7 + √(7 + ... to infinity)))".
+4. Standard Math Symbols: Use standard Unicode math symbols where appropriate (e.g., '∞' for infinity, '÷' for division, '×' for multiplication, '≠' for not equal, '±' for plus-minus).`;
 
 type AgentStep = {
   text: string;
@@ -206,18 +213,26 @@ function renderMessageText(text: string | undefined | null) {
 
 export default function CreateAITestChatScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, verified, businessId } = useAuthStore();
   
   const [messages, setMessages] = useState<Message[]>([
-    { id: '1', role: 'model', text: "Hi! I'm your AI Test Creator. 🤖\n\nTell me what topic you want the test on, how long it should be, and how many questions you need!" }
+    { id: '1', role: 'model', text: "Hi! I'm your AI Test Creator. 🤖\n\nConfigure the target batch, difficulty, and duration at the top, then tell me what topic or chapter you want to generate the test on!" }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   
   const [banks, setBanks] = useState<any[]>([]);
   const [selectedBankId, setSelectedBankId] = useState<string | null>(null);
-  const [localAttachment, setLocalAttachment] = useState<{ uri: string; mimeType: string; base64: string; name: string } | null>(null);
+  const [localAttachments, setLocalAttachments] = useState<{ uri: string; mimeType: string; base64: string; name: string }[]>([]);
+  const [pastTestsContext, setPastTestsContext] = useState<string>('');
   const [showBankModal, setShowBankModal] = useState(false);
+
+  // Selector Settings States
+  const [batches, setBatches] = useState<string[]>(['All']);
+  const [selectedBatch, setSelectedBatch] = useState('All');
+  const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
+  const [duration, setDuration] = useState('30');
   
   const scrollViewRef = useRef<ScrollView>(null);
   const appStateRef = useRef(AppState.currentState);
@@ -229,23 +244,140 @@ export default function CreateAITestChatScreen() {
     return () => subscription.remove();
   }, []);
 
+  // Fetch coaching center batches
+  useEffect(() => {
+    const fetchBatches = async () => {
+      if (!businessId) return;
+      try {
+        const { data, error } = await supabase
+          .from('batches')
+          .select('name')
+          .eq('business_id', businessId);
+        if (!error && data) {
+          setBatches(['All', ...data.map((b: any) => b.name)]);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch batches in AI creator:', err);
+      }
+    };
+    fetchBatches();
+  }, [businessId]);
+
+  // Persistent Chat History Loader
+  useEffect(() => {
+    const loadHistory = async () => {
+      try {
+        const key = `@ai_creator_messages_${businessId || 'default'}`;
+        const stored = await AsyncStorage.getItem(key);
+        if (stored) {
+          setMessages(JSON.parse(stored));
+        }
+      } catch (e) {
+        console.warn('Failed to load chat history:', e);
+      }
+    };
+    if (businessId) {
+      loadHistory();
+    }
+  }, [businessId]);
+
+  // Persistent Chat History Saver
+  useEffect(() => {
+    const saveHistory = async () => {
+      try {
+        const key = `@ai_creator_messages_${businessId || 'default'}`;
+        if (messages.length === 1 && messages[0].id === '1') return; // Skip initial state
+        await AsyncStorage.setItem(key, JSON.stringify(messages));
+      } catch (e) {
+        console.warn('Failed to save chat history:', e);
+      }
+    };
+    if (businessId && messages.length > 0) {
+      saveHistory();
+    }
+  }, [messages, businessId]);
+
   useFocusEffect(
     useCallback(() => {
       if (verified && businessId) {
         fetchBanks();
+        fetchPastTestsContext();
       }
     }, [verified, businessId])
   );
 
+  const fetchPastTestsContext = async () => {
+    if (!businessId) return;
+    try {
+      const { data: pastTests, error } = await supabase
+        .from('tests')
+        .select(`
+          id,
+          title,
+          subject,
+          duration_minutes,
+          test_questions (
+            question_text,
+            options,
+            correct_option
+          )
+        `)
+        .eq('business_id', businessId)
+        .neq('is_deleted', true)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) throw error;
+      if (pastTests && pastTests.length > 0) {
+        let contextText = "\n\n=== TEACHER'S HISTORICAL TESTS (DATABASE MEMORY) ===\n";
+        contextText += "You have direct memory access to the teacher's past created tests. Use this to compare new requests, analyze patterns, or modify past tests:\n";
+        pastTests.forEach((test, idx) => {
+          contextText += `\n[Test #${idx + 1}] Title: "${test.title}", Subject: "${test.subject}", Duration: ${test.duration_minutes} mins\n`;
+          const questions = (test.test_questions || []) as any[];
+          contextText += `Questions (${questions.length}):\n`;
+          questions.forEach((q, qIdx) => {
+            contextText += `  Q${qIdx + 1}: "${q.question_text}" | Options: [${q.options?.join(', ')}] | Correct Option Index: ${q.correct_option}\n`;
+          });
+        });
+        contextText += "\n=====================================================\n";
+        setPastTestsContext(contextText);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch past tests context for AI memory:', e);
+    }
+  };
+
   const fetchBanks = async () => {
     try {
-      const { data } = await supabase
+      const deletedIdsRaw = await AsyncStorage.getItem('@deleted_test_bank_ids');
+      const deletedIds: string[] = deletedIdsRaw ? JSON.parse(deletedIdsRaw) : [];
+
+      const { data: testBanksData } = await supabase
         .from('test_banks')
         .select('id, name, file_url')
         .eq('business_id', businessId);
-      if (data) setBanks(data);
+
+      const { data: studyMaterialsData } = await supabase
+        .from('study_materials')
+        .select('id, title, file_url')
+        .eq('business_id', businessId);
+
+      const combined: any[] = [];
+      if (testBanksData) {
+        combined.push(...testBanksData
+          .filter(tb => !deletedIds.includes(tb.id))
+          .map(tb => ({ id: tb.id, name: tb.name, file_url: tb.file_url, type: 'test_bank' }))
+        );
+      }
+      if (studyMaterialsData) {
+        combined.push(...studyMaterialsData
+          .filter(sm => !deletedIds.includes(sm.id))
+          .map(sm => ({ id: sm.id, name: sm.title, file_url: sm.file_url, type: 'study_material' }))
+        );
+      }
+      setBanks(combined);
     } catch (e) {
-      console.warn(e);
+      console.warn('Failed to load study materials bank:', e);
     }
   };
 
@@ -271,12 +403,26 @@ export default function CreateAITestChatScreen() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/pdf', 'text/plain'],
-        copyToCacheDirectory: true
+        copyToCacheDirectory: true,
+        multiple: true
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const file = result.assets[0];
-        const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
-        setLocalAttachment({ uri: file.uri, mimeType: file.mimeType || 'application/pdf', base64, name: file.name });
+        if (localAttachments.length + result.assets.length > 5) {
+          Alert.alert('Limit Exceeded', 'You can select up to 5 attachments in total.');
+          return;
+        }
+
+        const newAttachments = [...localAttachments];
+        for (const file of result.assets) {
+          const base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+          newAttachments.push({
+            uri: file.uri,
+            mimeType: file.mimeType || 'application/pdf',
+            base64,
+            name: file.name
+          });
+        }
+        setLocalAttachments(newAttachments);
         setSelectedBankId(null);
         setShowBankModal(false);
       }
@@ -289,13 +435,30 @@ export default function CreateAITestChatScreen() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
+        allowsMultipleSelection: true,
         quality: 0.8,
         base64: true,
       });
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const file = result.assets[0];
-        setLocalAttachment({ uri: file.uri, mimeType: 'image/jpeg', base64: file.base64!, name: 'Attached Image' });
+        if (localAttachments.length + result.assets.length > 5) {
+          Alert.alert('Limit Exceeded', 'You can select up to 5 attachments in total.');
+          return;
+        }
+
+        const newAttachments = [...localAttachments];
+        for (const file of result.assets) {
+          let base64 = file.base64;
+          if (!base64) {
+            base64 = await FileSystem.readAsStringAsync(file.uri, { encoding: 'base64' });
+          }
+          newAttachments.push({
+            uri: file.uri,
+            mimeType: 'image/jpeg',
+            base64: base64!,
+            name: file.fileName || 'Attached Image'
+          });
+        }
+        setLocalAttachments(newAttachments);
         setSelectedBankId(null);
         setShowBankModal(false);
       }
@@ -305,18 +468,15 @@ export default function CreateAITestChatScreen() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() && !selectedBankId && !localAttachment) return;
-    if (!process.env.EXPO_PUBLIC_GEMINI_API_KEY) {
-      Alert.alert('Missing API Key', 'Please add EXPO_PUBLIC_GEMINI_API_KEY to your .env file.');
-      return;
-    }
+    if (!input.trim() && !selectedBankId && localAttachments.length === 0) return;
 
     const userText = input.trim();
     const bank = banks.find(b => b.id === selectedBankId);
     
     let displayMsg = userText;
-    if (localAttachment) {
-      displayMsg = `📎 [Attached: ${localAttachment.name}]\n` + userText;
+    if (localAttachments.length > 0) {
+      const names = localAttachments.map(a => a.name).join(', ');
+      displayMsg = `📎 [Attached ${localAttachments.length} file(s): ${names}]\n` + userText;
     } else if (bank) {
       displayMsg = `📎 [Attached: ${bank.name}]\n` + userText;
     }
@@ -324,14 +484,16 @@ export default function CreateAITestChatScreen() {
     const parts: any[] = [];
     if (userText) parts.push({ text: userText });
     
-    if (localAttachment) {
-      parts.push({
-         inlineData: {
-           data: localAttachment.base64,
-           mimeType: localAttachment.mimeType
-         }
-      });
-      parts.push({ text: "\n\nPlease base your questions on this attached file." });
+    if (localAttachments.length > 0) {
+      for (const att of localAttachments) {
+        parts.push({
+          inlineData: {
+            data: att.base64,
+            mimeType: att.mimeType
+          }
+        });
+      }
+      parts.push({ text: "\n\nPlease base your questions on these attached files." });
     } else if (bank && bank.file_url) {
       const localUri = FileSystem.cacheDirectory + 'temp_chat_' + Date.now();
       const downloadRes = await FileSystem.downloadAsync(bank.file_url, localUri);
@@ -366,21 +528,27 @@ export default function CreateAITestChatScreen() {
     setInput('');
     setIsTyping(true);
     
-
     try {
       let groqSupported = true;
-      if (localAttachment || (bank && bank.file_url)) {
+      if (localAttachments.length > 0 || (bank && bank.file_url)) {
         groqSupported = false; 
       }
       
-      setLocalAttachment(null);
+      setLocalAttachments([]); // Clear local attachments after queueing
       setSelectedBankId(null);
       setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
 
-      const actualMessages = messages.filter(m => m.id !== '1');
+       const actualMessages = messages.filter(m => m.id !== '1');
+       const overrideInstruction = `\n\n[OVERRIDE CONFIGURATION]
+You must enforce these specific parameter configurations in the test metadata:
+- Target Batch: "${selectedBatch}" (The metadata.batch_name field MUST be set exactly to this value)
+- Difficulty Level: "${difficulty}" (Modify question complexity accordingly)
+- Duration in minutes: ${duration} (The metadata.duration_minutes field MUST be set exactly to this value)
+`;
+       const systemPromptWithContext = SYSTEM_PROMPT + overrideInstruction + pastTestsContext;
 
       const geminiHistory = [
-        { role: 'user', parts: [{ text: SYSTEM_PROMPT }] },
+        { role: 'user', parts: [{ text: systemPromptWithContext }] },
         { role: 'model', parts: [{ text: "Understood! I will act as the AI Test Creator." }] },
         ...actualMessages.map(m => ({
           role: m.role === 'model' ? 'model' : 'user',
@@ -391,7 +559,7 @@ export default function CreateAITestChatScreen() {
 
       const recentMessages = actualMessages.slice(-4);
       const groqHistory = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPromptWithContext },
         { role: 'assistant', content: "Understood! I will act as the AI Test Creator." },
         ...recentMessages.map(m => ({
           role: m.role === 'model' ? 'assistant' : 'user',
@@ -402,80 +570,80 @@ export default function CreateAITestChatScreen() {
       
       let responseText = "";
 
-      const attemptGemini = async (modelName: string) => {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        // Disable thinking for 2.5, 3.1, and 3.5 models to conserve free-tier quota
-        const generationConfig: any = (modelName.includes('2.5') || modelName.includes('3.1') || modelName.includes('3.5'))
-          ? { thinkingConfig: { thinkingBudget: 0 } }
-          : {};
-        const result = await model.generateContent({ contents: geminiHistory, generationConfig });
-        return result.response.text();
-      };
-
-      const attemptGroq = async () => {
-        const groqKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
-        if (!groqKey) throw new Error("Missing EXPO_PUBLIC_GROQ_API_KEY");
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${groqKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            messages: groqHistory,
-            temperature: 0.4,
-          })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
-        return data.choices[0].message.content;
-      };
-
-      // --- FAILOVER WATERFALL (best → newest → fallback) ---
-      // gemini-3.5-flash: latest, largest free quota
-      // gemini-3.1-flash-lite: lightweight 3.x fallback
-      // gemini-2.5-flash / gemini-2.5-pro: high quality 2.5 series
-      // gemini-2.0-flash / gemini-2.0-flash-lite: 2.0 series
-      // groq llama-3.3-70b: final backup (text-only)
+      // 1. Try Supabase Edge Function first
       try {
-        console.log("Attempt 1: Gemini 3.5 Flash");
-        responseText = await attemptGemini("gemini-3.5-flash");
-      } catch (err1: any) {
-        console.warn("Gemini 3.5 Flash failed:", err1?.message || err1);
-        try {
-          console.log("Attempt 2: Gemini 3.1 Flash Lite");
-          responseText = await attemptGemini("gemini-3.1-flash-lite");
-        } catch (err2: any) {
-          console.warn("Gemini 3.1 Flash Lite failed:", err2?.message || err2);
+        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('zenza-ai-chat', {
+          body: { geminiHistory, groqHistory, groqSupported }
+        });
+        if (!edgeError && edgeData?.responseText) {
+          responseText = edgeData.responseText;
+        } else if (edgeData?.error) {
+          throw new Error(edgeData.error);
+        } else if (edgeError) {
+          throw edgeError;
+        }
+      } catch (errEdge: any) {
+        console.warn("Edge Function zenza-ai-chat failed, using direct client waterfall:", errEdge?.message || errEdge);
+        
+        // 2. Direct Client Waterfall Fallback using Official GoogleGenerativeAI SDK + Groq
+        const attemptDirectGemini = async (modelName: string) => {
+          const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
+          if (!geminiKey) throw new Error("Missing EXPO_PUBLIC_GEMINI_API_KEY");
+          const genAI = new GoogleGenerativeAI(geminiKey);
+          const model = genAI.getGenerativeModel({ model: modelName });
+          const result = await model.generateContent({ contents: geminiHistory });
+          return result.response.text();
+        };
+
+        const attemptDirectGroq = async () => {
+          const groqKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
+          if (!groqKey) throw new Error("Missing EXPO_PUBLIC_GROQ_API_KEY");
+          const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${groqKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              model: "llama-3.3-70b-versatile",
+              messages: groqHistory,
+              temperature: 0.4
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || "Groq Error");
+          return data.choices[0].message.content;
+        };
+
+        const modelsToTry = [
+          "gemini-3.6-flash",
+          "gemini-3.6-pro",
+          "gemini-3.5-flash",
+          "gemini-3.1-flash-lite",
+          "gemini-2.5-flash",
+          "gemini-2.5-pro",
+          "gemini-2.0-flash"
+        ];
+
+        let geminiSuccess = false;
+        for (const mName of modelsToTry) {
           try {
-            console.log("Attempt 3: Gemini 2.5 Flash");
-            responseText = await attemptGemini("gemini-2.5-flash");
-          } catch (err3: any) {
-            console.warn("Gemini 2.5 Flash failed:", err3?.message || err3);
-            try {
-              console.log("Attempt 4: Gemini 2.5 Pro");
-              responseText = await attemptGemini("gemini-2.5-pro");
-            } catch (err4: any) {
-              console.warn("Gemini 2.5 Pro failed:", err4?.message || err4);
-              try {
-                console.log("Attempt 5: Gemini 2.0 Flash");
-                responseText = await attemptGemini("gemini-2.0-flash");
-              } catch (err5: any) {
-                console.warn("Gemini 2.0 Flash failed:", err5?.message || err5);
-                if (groqSupported) {
-                  try {
-                    console.log("Attempt 6: Groq Llama 3.3 70B");
-                    responseText = await attemptGroq();
-                  } catch (err6) {
-                    console.error("Groq failed:", err6);
-                    throw new Error("All AI servers are currently overloaded. Please wait a minute and try again.");
-                  }
-                } else {
-                  throw new Error("All Gemini models are overloaded. Please try again in a minute.");
-                }
-              }
-            }
+            console.log(`[AI Waterfall] Attempting Gemini model: ${mName}...`);
+            responseText = await attemptDirectGemini(mName);
+            geminiSuccess = true;
+            break;
+          } catch (mErr: any) {
+            console.warn(`[AI Waterfall] ${mName} failed:`, mErr?.message || mErr);
+          }
+        }
+
+        if (!geminiSuccess) {
+          try {
+            console.log("[AI Waterfall] Attempting Groq Llama 3.3 70B...");
+            responseText = await attemptDirectGroq();
+          } catch (groqErr: any) {
+            console.error("[AI Waterfall] All models failed:", groqErr?.message || groqErr);
+            throw new Error("AI service is currently busy. Please try again in a moment.");
           }
         }
       }
@@ -541,33 +709,72 @@ export default function CreateAITestChatScreen() {
     try {
       if (!businessId) throw new Error("Business ID missing");
       
-      const { data: newTest, error: testErr } = await supabase
+      const aiQuestions = testData.questions.map((q: any, idx: number) => ({
+        id: q.id || `q_${Date.now()}_${idx}`,
+        question_text: q.question_text,
+        options: q.options,
+        correct_option: q.correct_option,
+        explanation: q.explanation || ''
+      }));
+
+      let newTest: any = null;
+
+      // Try inserting with JSONB questions column first
+      const res1 = await supabase
         .from('tests')
         .insert({
           business_id: businessId,
           title: testData.metadata.title || 'AI Generated Test',
+          subject: testData.metadata.subject || 'General',
           batch_name: testData.metadata.batch_name === 'All' ? null : testData.metadata.batch_name,
           duration_minutes: testData.metadata.duration_minutes || 30,
           total_marks: testData.metadata.total_marks || (testData.questions.length * (testData.metadata.positive_marks || 5)),
           positive_marks: testData.metadata.positive_marks ?? 5,
           negative_marks: testData.metadata.negative_marks ?? 0,
           status: 'draft',
+          questions: aiQuestions
         })
         .select()
         .single();
-        
-      if (testErr) throw testErr;
+
+      if (res1.error) {
+        console.warn('questions column missing in schema cache, executing legacy insert:', res1.error.message);
+        // Fallback: insert without questions column
+        const res2 = await supabase
+          .from('tests')
+          .insert({
+            business_id: businessId,
+            title: testData.metadata.title || 'AI Generated Test',
+            subject: testData.metadata.subject || 'General',
+            batch_name: testData.metadata.batch_name === 'All' ? null : testData.metadata.batch_name,
+            duration_minutes: testData.metadata.duration_minutes || 30,
+            total_marks: testData.metadata.total_marks || (testData.questions.length * (testData.metadata.positive_marks || 5)),
+            positive_marks: testData.metadata.positive_marks ?? 5,
+            negative_marks: testData.metadata.negative_marks ?? 0,
+            status: 'draft',
+          })
+          .select()
+          .single();
+
+        if (res2.error) throw res2.error;
+        newTest = res2.data;
+      } else {
+        newTest = res1.data;
+      }
       
-      const aiQuestions = testData.questions.map((q: any) => ({
-         test_id: newTest.id,
-         question_text: q.question_text,
-         options: q.options,
-         correct_option: q.correct_option,
-         explanation: q.explanation
-      }));
-      
-      const { error: qErr } = await supabase.from('test_questions').insert(aiQuestions);
-      if (qErr) throw qErr;
+      // Always insert to test_questions table for legacy backward compatibility
+      try {
+        const legacyQuestions = aiQuestions.map((q: any) => ({
+          test_id: newTest.id,
+          question_text: q.question_text,
+          options: q.options,
+          correct_option: q.correct_option,
+          explanation: q.explanation
+        }));
+        await supabase.from('test_questions').insert(legacyQuestions);
+      } catch (e) {
+        console.warn('Legacy test_questions insert ignored:', e);
+      }
       
       router.push(`/(admin)/test/review/${newTest.id}`);
     } catch(e: any) {
@@ -576,17 +783,92 @@ export default function CreateAITestChatScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container} edges={Platform.OS === 'ios' ? ['top'] : []}>
-      {Platform.OS === 'android' && <StatusBar translucent={false} backgroundColor="#FFF8F6" />}
+    <View style={[styles.container, { paddingTop: insets.top }]}>
+      <StatusBar barStyle="dark-content" />
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={styles.backButton} onPress={() => router.push('/(admin)/test')}>
           <Ionicons name="close" size={24} color={Colors.text.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>AI Test Creator</Text>
-        <View style={{ width: 40 }} />
+        <TouchableOpacity 
+          style={{ padding: 4 }} 
+          onPress={() => {
+            Alert.alert(
+              'Reset Chat',
+              'Are you sure you want to clear the conversation history?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Reset',
+                  style: 'destructive',
+                  onPress: async () => {
+                    const key = `@ai_creator_messages_${businessId || 'default'}`;
+                    await AsyncStorage.removeItem(key);
+                    setMessages([
+                      { id: '1', role: 'model', text: "Hi! I'm your AI Test Creator. 🤖\n\nConfigure the target batch, difficulty, and duration at the top, then tell me what topic or chapter you want to generate the test on!" }
+                    ]);
+                  }
+                }
+              ]
+            );
+          }}
+        >
+          <Ionicons name="trash-outline" size={22} color={Colors.status.danger} />
+        </TouchableOpacity>
       </View>
 
       <View style={{ flex: 1 }}>
+        {/* Sleek Parameter Configuration Toggles Panel */}
+        <View style={styles.settingsBar}>
+          {/* Target Batch Row */}
+          <View style={styles.settingsRow}>
+            <Text style={styles.settingsLabel}>Target Batch:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.settingsScroll}>
+              {batches.map(b => (
+                <TouchableOpacity 
+                  key={b} 
+                  style={[styles.settingPill, selectedBatch === b && styles.settingPillActive]} 
+                  onPress={() => setSelectedBatch(b)}
+                >
+                  <Text style={[styles.settingPillText, selectedBatch === b && styles.settingPillTextActive]}>{b}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+          
+          {/* Difficulty & Duration Row */}
+          <View style={{ flexDirection: 'row', gap: 16, marginTop: 8, alignItems: 'center' }}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.settingsLabel}>Difficulty:</Text>
+              <View style={styles.difficultyContainer}>
+                {(['Easy', 'Medium', 'Hard'] as const).map(diff => (
+                  <TouchableOpacity 
+                    key={diff} 
+                    style={[styles.diffTab, difficulty === diff && styles.diffTabActive]} 
+                    onPress={() => setDifficulty(diff)}
+                  >
+                    <Text style={[styles.diffTabText, difficulty === diff && styles.diffTabTextActive]}>{diff}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            
+            <View style={{ width: 110 }}>
+              <Text style={styles.settingsLabel}>Duration:</Text>
+              <View style={styles.durationInputContainer}>
+                <TextInput
+                  style={styles.durationInput}
+                  value={duration}
+                  onChangeText={setDuration}
+                  keyboardType="number-pad"
+                  maxLength={3}
+                />
+                <Text style={styles.durationSuffix}>mins</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+
         <ScrollView 
           ref={scrollViewRef}
           contentContainerStyle={styles.chatContainer} 
@@ -620,21 +902,37 @@ export default function CreateAITestChatScreen() {
         </ScrollView>
 
         <View style={styles.inputWrapper}>
-          {/* Show either local attachment OR bank attachment */}
-          {(selectedBankId || localAttachment) && (
+          {/* Show either local attachments OR bank attachment */}
+          {selectedBankId && (
             <View style={styles.attachmentBadge}>
               <Ionicons name="document-text" size={12} color="#FFF" />
               <Text style={styles.attachmentBadgeText} numberOfLines={1}>
-                {localAttachment ? localAttachment.name : banks.find(b => b.id === selectedBankId)?.name || 'Document'}
+                {banks.find(b => b.id === selectedBankId)?.name || 'Document'}
               </Text>
-              <TouchableOpacity onPress={() => {
-                setSelectedBankId(null);
-                setLocalAttachment(null);
-              }}>
+              <TouchableOpacity onPress={() => setSelectedBankId(null)}>
                 <Ionicons name="close-circle" size={14} color="#FFF" />
               </TouchableOpacity>
             </View>
           )}
+
+          {localAttachments.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+              {localAttachments.map((att, idx) => (
+                <View key={idx} style={styles.attachmentBadge}>
+                  <Ionicons name="image" size={12} color="#FFF" />
+                  <Text style={styles.attachmentBadgeText} numberOfLines={1}>
+                    {att.name}
+                  </Text>
+                  <TouchableOpacity onPress={() => {
+                    setLocalAttachments(prev => prev.filter((_, i) => i !== idx));
+                  }}>
+                    <Ionicons name="close-circle" size={14} color="#FFF" />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+
           <View style={styles.inputArea}>
             <TouchableOpacity style={styles.attachBtn} onPress={() => setShowBankModal(true)}>
               <Ionicons name="attach" size={26} color={Colors.text.secondary} />
@@ -648,9 +946,9 @@ export default function CreateAITestChatScreen() {
               onChangeText={setInput}
             />
             <TouchableOpacity 
-              style={[styles.sendBtn, (!input.trim() && !selectedBankId && !localAttachment) && { opacity: 0.5 }]} 
+              style={[styles.sendBtn, (!input.trim() && !selectedBankId && localAttachments.length === 0) && { opacity: 0.5 }]} 
               onPress={handleSend}
-              disabled={(!input.trim() && !selectedBankId && !localAttachment) || isTyping}
+              disabled={(!input.trim() && !selectedBankId && localAttachments.length === 0) || isTyping}
             >
               <Ionicons name="arrow-up" size={20} color="#FFF" />
             </TouchableOpacity>
@@ -686,7 +984,7 @@ export default function CreateAITestChatScreen() {
                     style={styles.bankItem}
                     onPress={() => {
                       setSelectedBankId(bank.id);
-                      setLocalAttachment(null);
+                      setLocalAttachments([]);
                       setShowBankModal(false);
                     }}
                   >
@@ -703,7 +1001,7 @@ export default function CreateAITestChatScreen() {
           </View>
         </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -947,5 +1245,97 @@ const styles = StyleSheet.create({
     color: Colors.text.secondary,
     fontStyle: 'italic',
     fontSize: 13,
-  }
+  },
+  settingsBar: {
+    backgroundColor: Colors.bg.secondary,
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.card.border,
+  },
+  settingsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  settingsLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.text.secondary,
+    minWidth: 70,
+  },
+  settingsScroll: {
+    gap: 6,
+    paddingRight: 12,
+  },
+  settingPill: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    backgroundColor: Colors.bg.primary,
+  },
+  settingPillActive: {
+    borderColor: Colors.accent.primary,
+    backgroundColor: Colors.accent.primary + '10',
+  },
+  settingPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  settingPillTextActive: {
+    color: Colors.accent.primary,
+  },
+  difficultyContainer: {
+    flexDirection: 'row',
+    backgroundColor: Colors.bg.primary,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    padding: 2,
+    gap: 2,
+  },
+  diffTab: {
+    flex: 1,
+    paddingVertical: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+  },
+  diffTabActive: {
+    backgroundColor: Colors.accent.primary,
+  },
+  diffTabText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.text.secondary,
+  },
+  diffTabTextActive: {
+    color: '#FFF',
+  },
+  durationInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.bg.primary,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.card.border,
+    paddingHorizontal: 8,
+    height: 32,
+  },
+  durationInput: {
+    flex: 1,
+    fontSize: 12,
+    color: Colors.text.primary,
+    padding: 0,
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  durationSuffix: {
+    fontSize: 10,
+    color: Colors.text.tertiary,
+    marginLeft: 4,
+    fontWeight: '600',
+  },
 });

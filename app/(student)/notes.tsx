@@ -6,16 +6,19 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
   Linking,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import CachedImage from '@/components/CachedImage';
+import { downloadAndOpenSaf } from '@/lib/saf';
+import { CustomAlert } from '@/components/CustomAlert';
 
 type StudyMaterial = {
   id: string;
@@ -77,11 +80,17 @@ export default function StudentNotesScreen() {
 
         if (!allError) {
           setMaterials(allMaterials || []);
+          if (user?.id) {
+            AsyncStorage.setItem(`@last_viewed_notes_timestamp_${user.id}`, new Date().toISOString()).catch(_ => {});
+          }
           return;
         }
       }
 
       setMaterials(materialsData || []);
+      if (user?.id) {
+        AsyncStorage.setItem(`@last_viewed_notes_timestamp_${user.id}`, new Date().toISOString()).catch(_ => {});
+      }
     } catch (err) {
       console.warn('Failed to load study materials:', err);
     } finally {
@@ -93,12 +102,47 @@ export default function StudentNotesScreen() {
     fetchStudentNotes();
   }, [user]);
 
-  const triggerDownload = (url: string, fileName?: string) => {
-    if (!url) return;
-    const downloadUrl = url.includes('?')
-      ? `${url}&download=${encodeURIComponent(fileName || '')}`
-      : `${url}?download=${encodeURIComponent(fileName || '')}`;
-    Linking.openURL(downloadUrl);
+  const [downloadingIds, setDownloadingIds] = useState<Record<string, boolean>>({});
+  const [downloadedMap, setDownloadedMap] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const loadDownloadedNotes = async () => {
+      try {
+        const stored = await AsyncStorage.getItem(`@downloaded_notes_${user?.id}`);
+        if (stored) {
+          setDownloadedMap(JSON.parse(stored));
+        }
+      } catch {}
+    };
+    if (user) {
+      loadDownloadedNotes();
+    }
+  }, [user]);
+
+  const handleDownloadNotesDocument = async (id: string, url: string, name: string) => {
+    if (downloadingIds[id]) return;
+    setDownloadingIds(prev => ({ ...prev, [id]: true }));
+    try {
+      const result = await downloadAndOpenSaf(url, name);
+      if (result && result.success) {
+        CustomAlert.alert('Download Success', `Saved to Zenza folder!`);
+        const newDownloadedMap = { ...downloadedMap, [id]: true };
+        setDownloadedMap(newDownloadedMap);
+        if (user?.id) {
+          AsyncStorage.setItem(`@downloaded_notes_${user.id}`, JSON.stringify(newDownloadedMap)).catch(_ => {});
+        }
+      } else {
+        throw new Error(result?.error || 'Failed to save document.');
+      }
+    } catch (err: any) {
+      CustomAlert.alert('Download Error', err.message || 'Failed to download document.');
+    } finally {
+      setDownloadingIds(prev => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
+    }
   };
 
   const filteredMaterials = materials.filter((m) => m.type === activeTab);
@@ -156,52 +200,68 @@ export default function StudentNotesScreen() {
           </View>
         ) : (
           <View style={{ marginTop: 6 }}>
-            {filteredMaterials.map((item) => (
-              <View key={item.id} style={styles.fileCard}>
-                <View style={styles.fileIconWrap}>
-                  {item.thumbnail_url ? (
-                    <CachedImage uri={item.thumbnail_url} style={styles.fileThumbnail} contentFit="cover" />
-                  ) : (
+            {filteredMaterials.map((item) => {
+              const isPdf = item.file_name?.toLowerCase().endsWith('.pdf') || item.file_url?.toLowerCase().includes('.pdf');
+              
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.fileCard}
+                  activeOpacity={0.75}
+                  onPress={() => {
+                    if (isPdf && item.file_url) {
+                      router.push({
+                        pathname: '/(student)/pdf-viewer',
+                        params: { uri: item.file_url, title: item.title }
+                      });
+                    } else if (item.file_url) {
+                      Linking.openURL(item.file_url);
+                    }
+                  }}
+                >
+                  <View style={styles.fileIconWrap}>
                     <Ionicons
                       name={
                         item.type === 'Notes'
-                          ? 'document-text'
+                          ? 'document-text-outline'
                           : item.type === 'E-Book'
-                          ? 'book'
-                          : 'document'
+                          ? 'book-outline'
+                          : 'document-outline'
                       }
                       size={24}
                       color={Colors.accent.primary}
                     />
-                  )}
-                </View>
-                <View style={{ flex: 1, paddingHorizontal: 12 }}>
-                  <Text style={styles.fileTitle} numberOfLines={1}>
-                    {item.title}
-                  </Text>
-                  <Text style={styles.fileMeta} numberOfLines={1}>
-                    {item.file_name || 'Study Notes'}
-                  </Text>
-                </View>
+                  </View>
+                  <View style={{ flex: 1, paddingHorizontal: 12 }}>
+                    <Text style={styles.fileTitle} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={styles.fileMeta} numberOfLines={1}>
+                      {item.file_name || 'Study Notes'}
+                    </Text>
+                  </View>
 
-                <View style={styles.fileActions}>
-                  <TouchableOpacity
-                    style={styles.actionBtn}
-                    onPress={() => {
-                      if (item.file_url) Linking.openURL(item.file_url);
-                    }}
-                  >
-                    <Ionicons name="eye-outline" size={18} color={Colors.text.secondary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionBtn, styles.downloadBtn]}
-                    onPress={() => triggerDownload(item.file_url, item.file_name)}
-                  >
-                    <Ionicons name="download-outline" size={18} color="#FFF" />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ))}
+                  <View style={styles.fileActions}>
+                    {downloadingIds[item.id] ? (
+                      <View style={[styles.actionBtn, styles.downloadBtn]}>
+                        <ActivityIndicator size="small" color="#FFF" />
+                      </View>
+                    ) : downloadedMap[item.id] ? (
+                      <View style={[styles.actionBtn, { backgroundColor: 'transparent' }]}>
+                        <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        style={[styles.actionBtn, styles.downloadBtn]}
+                        onPress={() => handleDownloadNotesDocument(item.id, item.file_url, item.file_name || item.title)}
+                      >
+                        <Ionicons name="arrow-down" size={18} color="#FFF" />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
       </ScrollView>

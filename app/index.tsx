@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, Animated, Dimensions } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -7,6 +7,11 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { usePrefetchStore } from '@/stores/usePrefetchStore';
+import { useFeatureFlags } from '@/stores/useFeatureFlags';
+import * as Notifications from 'expo-notifications';
+
+
+const { width } = Dimensions.get('window');
 
 export default function SplashScreen() {
   const router = useRouter();
@@ -14,19 +19,24 @@ export default function SplashScreen() {
   const logoOpacity = useRef(new Animated.Value(0)).current;
   const subtitleOpacity = useRef(new Animated.Value(0)).current;
   const glowOpacity = useRef(new Animated.Value(0)).current;
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  const containerOpacity = useRef(new Animated.Value(1)).current;
+
+  const [loadingText, setLoadingText] = useState('Initializing Engine...');
 
   useEffect(() => {
+    // 1. Entrance animation sequence
     Animated.sequence([
       Animated.parallel([
         Animated.spring(logoScale, {
           toValue: 1,
-          tension: 50,
-          friction: 7,
+          tension: 45,
+          friction: 6,
           useNativeDriver: true,
         }),
         Animated.timing(logoOpacity, {
           toValue: 1,
-          duration: 600,
+          duration: 500,
           useNativeDriver: true,
         }),
       ]),
@@ -42,127 +52,31 @@ export default function SplashScreen() {
       }),
     ]).start();
 
-    // Check active auth session in database with timeout safety
-    const checkAuth = async () => {
-      let isDone = false;
+    // 2. Smooth Progress Bar (0% -> 100% over 2.2s)
+    Animated.timing(progressAnim, {
+      toValue: 1,
+      duration: 2200,
+      useNativeDriver: false,
+    }).start();
 
-      // 1. Instant Cache Routing: bypass network and animations if user has a cached profile
-      try {
-        const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
-        if (cachedProfileStr) {
-          const cachedProfile = JSON.parse(cachedProfileStr);
-          if (cachedProfile.role && cachedProfile.userId) {
-            const store = useAuthStore.getState();
-            
-            // Reconstruct a minimal user object since we bypassed Supabase auth init
-            store.setUser({ id: cachedProfile.userId, email: cachedProfile.email });
-            
-            store.setRole(cachedProfile.role);
-            store.setAvatarUrl(cachedProfile.avatarUrl || null);
-            if (cachedProfile.businessId) {
-              store.setBusiness(
-                cachedProfile.businessId,
-                cachedProfile.businessCode,
-                cachedProfile.businessName,
-                cachedProfile.businessType
-              );
-            }
-            
-            if (cachedProfile.role === 'student') {
-              const cachedStudentStr = await AsyncStorage.getItem('@presto_cached_student_data');
-              if (cachedStudentStr) {
-                store.setStudentData(JSON.parse(cachedStudentStr));
-              }
-              // Fire prefetch immediately — user has 2-3s of splash/animation before reaching tabs
-              usePrefetchStore.getState().prefetchAll(cachedProfile.userId);
-            }
+    // Dynamic Loading Subtitles
+    const t1 = setTimeout(() => setLoadingText('Syncing Community & Tests...'), 800);
+    const t2 = setTimeout(() => setLoadingText('Preparing Workspace...'), 1600);
 
-            // Route instantly
-            let dest = '';
-            if (cachedProfile.role === 'admin') {
-              dest = '/(admin)/students';
-            } else {
-              dest = cachedProfile.claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
-            }
-
-            if ((global as any).pendingNotificationRedirect) {
-              dest = (global as any).pendingNotificationRedirect;
-              (global as any).pendingNotificationRedirect = null;
-            }
-
-            router.replace(dest as any);
-            isDone = true;
-            return;
-          }
-        }
-      } catch (cacheErr) {
-        console.warn('Failed to instantly route from cache:', cacheErr);
-      }
-
-      const timeout = setTimeout(async () => {
-        if (!isDone) {
-          isDone = true;
-          console.warn('Splash auth check timed out after 8s. Checking local cache before fallback.');
-          try {
-            // Try cache first — user might just be offline
-            const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
-            if (cachedProfileStr) {
-              const cachedProfile = JSON.parse(cachedProfileStr);
-              if (cachedProfile.role && cachedProfile.userId) {
-                const store = useAuthStore.getState();
-                store.setUser({ id: cachedProfile.userId, email: cachedProfile.email });
-                store.setRole(cachedProfile.role);
-                store.setAvatarUrl(cachedProfile.avatarUrl || null);
-                if (cachedProfile.businessId) {
-                  store.setBusiness(
-                    cachedProfile.businessId,
-                    cachedProfile.businessCode,
-                    cachedProfile.businessName,
-                    cachedProfile.businessType
-                  );
-                }
-               // Route based on cached role
-               let dest = '';
-               if (cachedProfile.role === 'admin') {
-                 dest = '/(admin)/students';
-               } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
-                 dest = '/(student)/id-card';
-               } else {
-                 dest = '/(auth)/login';
-               }
-
-               if ((global as any).pendingNotificationRedirect) {
-                 dest = (global as any).pendingNotificationRedirect;
-                 (global as any).pendingNotificationRedirect = null;
-               }
-
-               router.replace(dest as any);
-               return;
-              }
-            }
-            // No cache — check onboarding
-            const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
-            router.replace(onboardingCompleted === 'true' ? '/(auth)/login' : '/onboarding');
-          } catch {
-            router.replace('/onboarding');
-          }
-        }
-      }, 8000);
+    // 3. Parallel Background Auth Check & Prefetching
+    const runLaunchPipeline = async () => {
+      let dest = '/onboarding';
+      const minAnimPromise = new Promise(res => setTimeout(res, 2300)); // Minimum 2.3s splash experience
+      const flagsPromise = useFeatureFlags.getState().initialize();
 
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        
-        if (isDone) return;
-
+        const { data: { session } } = await supabase.auth.getSession();
         if (session && session.user) {
-          // Fetch user profile from database
-          const { data: profile, error: profileError } = await supabase
+          const { data: profile } = await supabase
             .from('profiles')
             .select('role, business_id, claimed, avatar_url')
             .eq('id', session.user.id)
             .single();
-
-          if (isDone) return;
 
           let role = profile?.role;
           let businessId = profile?.business_id;
@@ -170,62 +84,13 @@ export default function SplashScreen() {
           let avatarUrl = profile?.avatar_url;
           let businessData = null;
 
-          if (profile && !profileError) {
-            // Load business details if linked
-            if (businessId) {
-              const { data: business } = await supabase
-                .from('businesses')
-                .select('id, organization_id, business_name, business_type')
-                .eq('id', businessId)
-                .single();
-
-              if (isDone) return;
-
-              if (business) {
-                businessData = business;
-              }
-            }
-
-            // Save to local cache
-            try {
-              const profileCache = {
-                userId: session.user.id,
-                email: session.user.email,
-                role,
-                businessId,
-                businessCode: businessData?.organization_id || null,
-                businessName: businessData?.business_name || null,
-                businessType: businessData?.business_type || null,
-                claimed,
-                avatarUrl,
-              };
-              await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
-            } catch (cacheErr) {
-              console.warn('Failed to save profile cache:', cacheErr);
-            }
-          } else {
-            // Profile fetch from database failed (e.g. offline/network reconnecting)
-            // Try reading from cache
-            try {
-              const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
-              if (cachedProfileStr) {
-                const cachedProfile = JSON.parse(cachedProfileStr);
-                role = cachedProfile.role;
-                businessId = cachedProfile.businessId;
-                claimed = cachedProfile.claimed;
-                avatarUrl = cachedProfile.avatarUrl;
-                if (businessId) {
-                  businessData = {
-                    id: businessId,
-                    organization_id: cachedProfile.businessCode,
-                    business_name: cachedProfile.businessName,
-                    business_type: cachedProfile.businessType,
-                  };
-                }
-              }
-            } catch (cacheErr) {
-              console.warn('Failed to read profile cache:', cacheErr);
-            }
+          if (businessId) {
+            const { data: business } = await supabase
+              .from('businesses')
+              .select('id, organization_id, business_name, business_type')
+              .eq('id', businessId)
+              .single();
+            if (business) businessData = business;
           }
 
           if (role) {
@@ -243,54 +108,81 @@ export default function SplashScreen() {
               );
             }
 
-            // Route based on role
-            let dest = '';
+            // Fire parallel background data prefetch for all tabs
+            const prefetchPromise = usePrefetchStore
+              .getState()
+              .prefetchAll(session.user.id, role, businessId);
+
             if (role === 'admin') {
               dest = businessId ? '/(admin)/students' : '/(auth)/create-institute';
             } else {
               dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
-              // Fire prefetch — user has splash+animation time before reaching tabs
-              if (session.user?.id) {
-                usePrefetchStore.getState().prefetchAll(session.user.id);
-              }
             }
 
             if ((global as any).pendingNotificationRedirect) {
               dest = (global as any).pendingNotificationRedirect;
               (global as any).pendingNotificationRedirect = null;
+            } else {
+              try {
+                const lastResponse = await Notifications.getLastNotificationResponseAsync();
+                if (lastResponse) {
+                  const data = lastResponse.notification.request.content.data;
+                  const { actionIdentifier, userText } = lastResponse as any;
+
+                  // Quick reply or mark as read in background/foreground
+                  if (actionIdentifier === 'reply' && userText && data?.senderId && data?.receiverId) {
+                    await supabase.from('student_messages').insert({
+                      sender_id: data.receiverId,
+                      receiver_id: data.senderId,
+                      text: userText,
+                    });
+                  } else if (actionIdentifier === 'mark_as_read' && data?.senderId && data?.receiverId) {
+                    await supabase.from('student_messages')
+                      .update({ is_read: true })
+                      .eq('sender_id', data.senderId)
+                      .eq('receiver_id', data.receiverId);
+                  } else if (data && data.screen) {
+                    let targetRoute = '';
+                    if (data.screen === 'chat' && data.peerId) {
+                      targetRoute = `/(student)/student-chat?peerId=${data.peerId}`;
+                    } else if (data.screen === 'peers') {
+                      targetRoute = '/(student)/peers';
+                    } else if (data.screen === 'community') {
+                      targetRoute = '/(student)/community';
+                    } else if (data.screen === 'fees' || data.screen === 'attendance') {
+                      targetRoute = '/(student)/profile';
+                    } else if (data.screen === 'test') {
+                      targetRoute = data.testId ? `/(student)/test/engine/${data.testId}` : '/(student)/test';
+                    } else if (data.screen === 'admin') {
+                      targetRoute = '/(admin)';
+                    }
+                    if (targetRoute) {
+                      dest = targetRoute;
+                    }
+                  }
+                  await Notifications.clearLastNotificationResponseAsync();
+                }
+              } catch (err) {
+                console.warn('[Splash] Last notification check failed:', err);
+              }
             }
 
-            router.replace(dest as any);
-            clearTimeout(timeout);
-            isDone = true;
-            return;
+            // Wait for prefetch, feature flags initialization, and splash animation
+            await Promise.all([prefetchPromise, minAnimPromise, flagsPromise]);
+          } else {
+            await Promise.all([minAnimPromise, flagsPromise]);
           }
-        }
-        
-        if (isDone) return;
-
-        // No session or profile found, check onboarding status
-        const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
-        if (onboardingCompleted === 'true') {
-          router.replace('/(auth)/login');
         } else {
-          router.replace('/onboarding');
-        }
-        clearTimeout(timeout);
-        isDone = true;
-      } catch (err) {
-        if (isDone) return;
-        clearTimeout(timeout);
-        isDone = true;
-        console.error('Splash auth check error:', err);
-        // Check cache before falling back — might be offline
-        try {
+          // Check local cache if offline
           const cachedProfileStr = await AsyncStorage.getItem('@user_profile');
           if (cachedProfileStr) {
             const cachedProfile = JSON.parse(cachedProfileStr);
             const store = useAuthStore.getState();
             store.setRole(cachedProfile.role);
             store.setAvatarUrl(cachedProfile.avatarUrl || null);
+            if (cachedProfile.userId) {
+              store.setUser({ id: cachedProfile.userId, email: cachedProfile.email });
+            }
             if (cachedProfile.businessId) {
               store.setBusiness(
                 cachedProfile.businessId,
@@ -299,7 +191,6 @@ export default function SplashScreen() {
                 cachedProfile.businessType
               );
             }
-            let dest = '';
             if (cachedProfile.role === 'admin') {
               dest = '/(admin)/students';
             } else if (cachedProfile.role === 'student' && cachedProfile.claimed) {
@@ -307,55 +198,78 @@ export default function SplashScreen() {
             } else {
               dest = '/(auth)/login';
             }
-
-            if ((global as any).pendingNotificationRedirect) {
-              dest = (global as any).pendingNotificationRedirect;
-              (global as any).pendingNotificationRedirect = null;
-            }
-
-            router.replace(dest as any);
-            return;
+          } else {
+            const onboardingCompleted = await AsyncStorage.getItem('onboarding_completed');
+            dest = onboardingCompleted === 'true' ? '/(auth)/login' : '/onboarding';
           }
-        } catch {}
-        router.replace('/onboarding');
+          await Promise.all([minAnimPromise, flagsPromise]);
+        }
+      } catch (err) {
+        console.warn('[Splash] Launch check error:', err);
+        await minAnimPromise;
       }
+
+      // Smooth fade-out into app
+      Animated.timing(containerOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => {
+        router.replace(dest as any);
+      });
     };
 
-    const timer = setTimeout(() => {
-      checkAuth();
-    }, 2200);
+    runLaunchPipeline();
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, []);
 
+  const progressBarWidth = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0%', '100%'],
+  });
+
   return (
-    <LinearGradient colors={[Colors.bg.primary, Colors.bg.secondary, Colors.bg.primary]} style={styles.container}>
-      {/* Glow effect behind logo */}
-      <Animated.View style={[styles.glow, { opacity: glowOpacity }]} />
+    <Animated.View style={{ flex: 1, opacity: containerOpacity }}>
+      <LinearGradient colors={[Colors.bg.primary, Colors.bg.secondary, Colors.bg.primary]} style={styles.container}>
+        {/* Glow effect behind logo */}
+        <Animated.View style={[styles.glow, { opacity: glowOpacity }]} />
 
-      <Animated.View
-        style={[
-          styles.logoContainer,
-          {
-            transform: [{ scale: logoScale }],
-            opacity: logoOpacity,
-          },
-        ]}
-      >
-        <View style={styles.logoIcon}>
-          <Text style={styles.logoLetter}>P</Text>
+        <Animated.View
+          style={[
+            styles.logoContainer,
+            {
+              transform: [{ scale: logoScale }],
+              opacity: logoOpacity,
+            },
+          ]}
+        >
+          <View style={styles.logoIcon}>
+            <Text style={styles.logoLetter}>Z</Text>
+          </View>
+          <Text style={styles.logoText}>Zenza</Text>
+        </Animated.View>
+
+        <Animated.Text style={[styles.subtitle, { opacity: subtitleOpacity }]}>
+          Smart Organization Management
+        </Animated.Text>
+
+        {/* Dynamic Progress Bar & Branding at Bottom */}
+        <View style={styles.bottomContainer}>
+          <View style={styles.progressSection}>
+            <Text style={styles.progressText}>{loadingText}</Text>
+            <View style={styles.progressBarBg}>
+              <Animated.View style={[styles.progressBarFill, { width: progressBarWidth }]} />
+            </View>
+          </View>
+
+          <Text style={styles.brandingText}>by Team43</Text>
         </View>
-        <Text style={styles.logoText}>PrestoID</Text>
-      </Animated.View>
-
-      <Animated.Text style={[styles.subtitle, { opacity: subtitleOpacity }]}>
-        Smart Organization Management
-      </Animated.Text>
-
-      <View style={styles.bottomBranding}>
-        <Text style={styles.brandingText}>by Kanelijo</Text>
-      </View>
-    </LinearGradient>
+      </LinearGradient>
+    </Animated.View>
   );
 }
 
@@ -367,35 +281,35 @@ const styles = StyleSheet.create({
   },
   glow: {
     position: 'absolute',
-    width: 220,
-    height: 220,
-    borderRadius: 110,
+    width: 240,
+    height: 240,
+    borderRadius: 120,
     backgroundColor: Colors.accent.glow,
   },
   logoContainer: {
     alignItems: 'center',
   },
   logoIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
+    width: 84,
+    height: 84,
+    borderRadius: 26,
     backgroundColor: Colors.accent.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
     shadowColor: Colors.accent.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 15,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    elevation: 10,
   },
   logoLetter: {
-    fontSize: 44,
+    fontSize: 46,
     fontWeight: '900',
     color: '#FFFFFF',
   },
   logoText: {
-    fontSize: 36,
+    fontSize: 38,
     fontWeight: '800',
     color: Colors.text.primary,
     letterSpacing: 0.5,
@@ -408,14 +322,40 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     fontWeight: '600',
   },
-  bottomBranding: {
+  bottomContainer: {
     position: 'absolute',
-    bottom: 50,
+    bottom: 44,
+    width: width * 0.7,
+    alignItems: 'center',
+  },
+  progressSection: {
+    width: '100%',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  progressText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.text.tertiary,
+    marginBottom: 8,
+    letterSpacing: 0.5,
+  },
+  progressBarBg: {
+    width: '100%',
+    height: 4,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderRadius: 2,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: Colors.accent.primary,
+    borderRadius: 2,
   },
   brandingText: {
     fontSize: 12,
     color: Colors.text.tertiary,
     letterSpacing: 1,
-    fontWeight: '500',
+    fontWeight: '600',
   },
 });

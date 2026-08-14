@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
+import { APP_CONFIG } from '@/constants/config';
 
 /**
  * Invokes the 'telegram-upload' Supabase Edge Function to securely upload a file.
@@ -10,7 +11,7 @@ import { Platform } from 'react-native';
 export async function uploadToTelegramViaEdge(
   fileUri: string,
   fileName: string,
-  onProgress?: (pct: number) => void
+  onProgress?: (loaded: number, total: number) => void
 ): Promise<{ fileId: string; messageId: number | null }> {
   const fileInfo = await FileSystem.getInfoAsync(fileUri);
   if (!fileInfo.exists) throw new Error('File does not exist locally.');
@@ -25,11 +26,11 @@ export async function uploadToTelegramViaEdge(
   const fileBase64 = await FileSystem.readAsStringAsync(fileUri, {
     encoding: FileSystem.EncodingType.Base64,
   });
-  onProgress?.(15); // file read done
+  onProgress?.(15, 100); // file read done (approx 15%)
 
   // Use XMLHttpRequest for real upload progress events
-  const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+  const supabaseUrl = APP_CONFIG.supabaseUrl;
+  const anonKey = APP_CONFIG.supabaseAnonKey;
   const { data: { session } } = await supabase.auth.getSession();
   const token = session?.access_token || anonKey || '';
 
@@ -40,11 +41,10 @@ export async function uploadToTelegramViaEdge(
     xhr.setRequestHeader('Content-Type', 'application/json');
     xhr.timeout = 120000;
 
-    // Progress: XHR upload phase maps to 15% → 90%
+    // Progress: pass loaded and total bytes to callback
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
-        const pct = 15 + Math.round((e.loaded / e.total) * 75);
-        onProgress?.(pct);
+        onProgress?.(e.loaded, e.total);
       }
     };
 
@@ -53,7 +53,7 @@ export async function uploadToTelegramViaEdge(
         try {
           const data = JSON.parse(xhr.responseText);
           if (data?.success) {
-            onProgress?.(100);
+            onProgress?.(100, 100);
             resolve({ fileId: data.file_id, messageId: data.message_id || null });
           } else {
             reject(new Error(`Telegram Upload Failed: ${data?.error || 'Unknown'}`));

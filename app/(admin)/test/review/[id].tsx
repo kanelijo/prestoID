@@ -15,7 +15,7 @@ try {
 }
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
-import { sendPushNotification, CHANNELS } from '@/lib/notifications';
+import { sendPushNotification, fetchStudentPushTokens, CHANNELS } from '@/lib/notifications';
 
 // Mock test data for fallback
 const MOCK_QUESTIONS = [
@@ -88,15 +88,20 @@ export default function TestReviewScreen() {
       if (testErr) throw testErr;
       setTestDetails(testData);
 
-      // Fetch questions
-      const { data: qData, error: qErr } = await supabase
-        .from('test_questions')
-        .select('*')
-        .eq('test_id', id)
-        .order('created_at', { ascending: true });
+      // Fetch questions (check JSONB on test first, fallback to test_questions)
+      let finalQuestions: any[] = [];
+      if (testData.questions && Array.isArray(testData.questions) && testData.questions.length > 0) {
+        finalQuestions = testData.questions;
+      } else {
+        const { data: qData } = await supabase
+          .from('test_questions')
+          .select('*')
+          .eq('test_id', id)
+          .order('created_at', { ascending: true });
+        finalQuestions = qData || [];
+      }
         
-      if (qErr) throw qErr;
-      setQuestions(qData || []);
+      setQuestions(finalQuestions);
     } catch (err) {
       console.warn(err);
       setTestDetails({ title: 'Unknown Test' });
@@ -192,8 +197,19 @@ export default function TestReviewScreen() {
         return;
       }
 
+      let sourceUri = rawImageUri;
+      if (Platform.OS === 'android' && sourceUri.startsWith('content://')) {
+        try {
+          const tempPath = `${FileSystem.cacheDirectory}crop_rev_${Date.now()}.jpg`;
+          await FileSystem.copyAsync({ from: sourceUri, to: tempPath });
+          sourceUri = tempPath;
+        } catch (e) {
+          console.warn('Cache copy fallback:', e);
+        }
+      }
+
       const result = await ImageManipulator.manipulateAsync(
-        rawImageUri,
+        sourceUri,
         [
           {
             crop: {
@@ -342,48 +358,23 @@ export default function TestReviewScreen() {
 
             if (error) throw error;
 
-            // Fetch target students' user_ids to send push notifications
+            // Fetch target students' push tokens to send notifications
             try {
-              let studentUserIds: string[] = [];
               const targetBatch = testDetails?.batch_name;
               const targetBusinessId = testDetails?.business_id || businessId;
+              const { user } = useAuthStore.getState();
 
               if (targetBusinessId) {
-                let query = supabase
-                  .from('students')
-                  .select('user_id')
-                  .eq('business_id', targetBusinessId)
-                  .not('user_id', 'is', null);
-
-                if (targetBatch && targetBatch !== 'All') {
-                  query = query.eq('batch_name', targetBatch);
-                }
-
-                const { data: studentsList, error: studentsError } = await query;
-                if (!studentsError && studentsList) {
-                  studentUserIds = studentsList.map(s => s.user_id).filter(Boolean) as string[];
-                }
-              }
-
-              if (studentUserIds.length > 0) {
-                const { data: studentProfiles, error: profilesError } = await supabase
-                  .from('profiles')
-                  .select('push_token')
-                  .in('id', studentUserIds)
-                  .not('push_token', 'is', null);
-
-                if (!profilesError && studentProfiles && studentProfiles.length > 0) {
-                  const tokens = studentProfiles.map(p => p.push_token).filter(Boolean) as string[];
-                  if (tokens.length > 0) {
-                    await sendPushNotification(
-                      tokens,
-                      'New Test Published 📝',
-                      `A new test "${testDetails?.title || 'Mock Test'}" has been published. Duration: ${testDetails?.duration_minutes || 60} mins.`,
-                      { screen: 'test', testId: id },
-                      1,
-                      CHANNELS.tests
-                    );
-                  }
+                const tokens = await fetchStudentPushTokens(targetBusinessId, user?.id, targetBatch);
+                if (tokens.length > 0) {
+                  await sendPushNotification(
+                    tokens,
+                    'New Test Published 📝',
+                    `A new test "${testDetails?.title || 'Mock Test'}" has been published. Duration: ${testDetails?.duration_minutes || 60} mins.`,
+                    { screen: 'test', testId: id },
+                    1,
+                    CHANNELS.tests
+                  );
                 }
               }
             } catch (pushErr) {

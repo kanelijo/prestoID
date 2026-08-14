@@ -1,33 +1,55 @@
 import { create } from 'zustand';
 import { supabase } from '@/lib/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuthStore } from '@/stores/useAuthStore';
+
+export interface NotificationPayload {
+  title: string;
+  body: string;
+  peerId?: string;
+  avatarUrl?: string | null;
+}
 
 interface NotificationState {
+  isPopupVisible: boolean;
+  currentPopupNotification: NotificationPayload | null;
+  showNotificationPopup: (payload: NotificationPayload) => void;
+  hideNotificationPopup: () => void;
   adminUnreadCount: number;
   studentUnreadCount: number;
   studentCommunityUnreadCount: number;
   studentPendingTestCount: number;
+  peerUnreadCount: number;
   communityIsOpen: boolean;
   setAdminUnreadCount: (count: number) => void;
   setStudentUnreadCount: (count: number) => void;
   setStudentCommunityUnreadCount: (count: number) => void;
   setStudentPendingTestCount: (count: number) => void;
+  setPeerUnreadCount: (count: number) => void;
   setCommunityIsOpen: (open: boolean) => void;
   fetchAdminUnreadCount: (userId: string, businessId: string) => Promise<number>;
   fetchStudentUnreadCounts: (userId: string) => Promise<void>;
   fetchStudentPendingTestCount: (userId: string) => Promise<void>;
+  fetchPeerUnreadCount: (userId: string) => Promise<void>;
 }
 
 export const useNotificationStore = create<NotificationState>((set, get) => ({
+  isPopupVisible: false,
+  currentPopupNotification: null,
+  showNotificationPopup: (payload) => set({ isPopupVisible: true, currentPopupNotification: payload }),
+  hideNotificationPopup: () => set({ isPopupVisible: false }),
+
   adminUnreadCount: 0,
   studentUnreadCount: 0,
   studentCommunityUnreadCount: 0,
   studentPendingTestCount: 0,
+  peerUnreadCount: 0,
   communityIsOpen: false,
   setAdminUnreadCount: (adminUnreadCount) => set({ adminUnreadCount }),
   setStudentUnreadCount: (studentUnreadCount) => set({ studentUnreadCount }),
   setStudentCommunityUnreadCount: (studentCommunityUnreadCount) => set({ studentCommunityUnreadCount }),
   setStudentPendingTestCount: (studentPendingTestCount) => set({ studentPendingTestCount }),
+  setPeerUnreadCount: (peerUnreadCount) => set({ peerUnreadCount }),
   setCommunityIsOpen: (communityIsOpen) => set({ communityIsOpen }),
 
   fetchAdminUnreadCount: async (userId: string, businessId: string) => {
@@ -100,9 +122,10 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
         });
       }
 
-      // Load read IDs
-      const readIdsJSON = await AsyncStorage.getItem('@presto_admin_read_notifications');
-      const readIds: string[] = readIdsJSON ? JSON.parse(readIdsJSON) : [];
+      // Load read IDs scoped by userId
+      const readIdsJSON = await AsyncStorage.getItem(`@presto_admin_read_notifications_${userId}`);
+      const fallbackJSON = await AsyncStorage.getItem('@presto_admin_read_notifications');
+      const readIds: string[] = readIdsJSON ? JSON.parse(readIdsJSON) : (fallbackJSON ? JSON.parse(fallbackJSON) : []);
 
       // Count unread dynamic alerts
       const unreadAlertsCount = rawAlerts.filter(id => !readIds.includes(id)).length;
@@ -129,9 +152,10 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
 
       if (!student) return;
 
-      // Load read alerts from AsyncStorage
-      const readAlertsJSON = await AsyncStorage.getItem('@presto_student_read_notifications');
-      const readAlerts: string[] = readAlertsJSON ? JSON.parse(readAlertsJSON) : [];
+      // Load read alerts from AsyncStorage scoped by userId
+      const readAlertsJSON = await AsyncStorage.getItem(`@presto_student_read_notifications_${userId}`);
+      const fallbackAlertsJSON = await AsyncStorage.getItem('@presto_student_read_notifications');
+      const readAlerts: string[] = readAlertsJSON ? JSON.parse(readAlertsJSON) : (fallbackAlertsJSON ? JSON.parse(fallbackAlertsJSON) : []);
 
       const alertIds: string[] = [];
 
@@ -203,43 +227,80 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
   fetchStudentPendingTestCount: async (userId: string) => {
     if (!userId) return;
     try {
+      // Find the student record (or use store fallback)
+      let st: any = null;
       const { data: student } = await supabase
         .from('students')
         .select('id, batch_name, business_id')
         .eq('user_id', userId)
         .limit(1);
 
-      if (!student || student.length === 0) return;
-      const st = student[0];
+      if (student && student.length > 0) {
+        st = student[0];
+      } else {
+        st = useAuthStore.getState().studentData;
+      }
+
+      if (!st || !st.business_id) {
+        set({ studentPendingTestCount: 0 });
+        return;
+      }
 
       // Get all published tests for business
       const { data: allTests } = await supabase
         .from('tests')
         .select('id, batch_name')
         .eq('business_id', st.business_id)
-        .eq('status', 'published');
+        .eq('status', 'published')
+        .neq('is_deleted', true);
 
-      if (!allTests) return;
+      if (!allTests || allTests.length === 0) {
+        set({ studentPendingTestCount: 0 });
+        return;
+      }
 
       // Filter by batch
+      const studentBatch = String(st.batch_name || '').toLowerCase().trim();
       const applicableTests = allTests.filter((t: any) => {
         if (!t.batch_name || t.batch_name === 'All') return true;
         const testBatch = Array.isArray(t.batch_name) ? t.batch_name[0] : String(t.batch_name);
-        return testBatch.toLowerCase().trim() === String(st.batch_name || '').toLowerCase().trim();
+        return !studentBatch || testBatch.toLowerCase().trim() === studentBatch || testBatch.toLowerCase().trim() === 'all';
       });
 
-      // Get submissions to see what is already taken
-      const { data: submissions } = await supabase
+      // Get submissions using BOTH student.id AND userId to prevent missing submissions
+      const { data: subsByStudent } = await supabase
         .from('test_submissions')
         .select('test_id')
         .eq('student_id', st.id);
 
-      const takenTestIds = new Set((submissions || []).map((s: any) => s.test_id));
-      const pendingCount = applicableTests.filter((t: any) => !takenTestIds.has(t.id)).length;
+      const { data: subsByUser } = await supabase
+        .from('test_submissions')
+        .select('test_id')
+        .eq('student_id', userId);
 
+      const takenTestIds = new Set([
+        ...(subsByStudent || []).map((s: any) => s.test_id),
+        ...(subsByUser || []).map((s: any) => s.test_id)
+      ]);
+
+      const pendingCount = applicableTests.filter((t: any) => !takenTestIds.has(t.id)).length;
       set({ studentPendingTestCount: pendingCount });
     } catch (err) {
       console.warn('Failed to fetch pending test count:', err);
+    }
+  },
+
+  fetchPeerUnreadCount: async (userId: string) => {
+    if (!userId) return;
+    try {
+      const { getPeerMessagesUnreadCount } = require('@/lib/localDb');
+      const count = getPeerMessagesUnreadCount(userId);
+      set({ peerUnreadCount: count });
+      
+      const Notifications = require('expo-notifications');
+      await Notifications.setBadgeCountAsync(count).catch(() => {});
+    } catch (e) {
+      console.warn('Failed to fetch peer unread count:', e);
     }
   },
 }));

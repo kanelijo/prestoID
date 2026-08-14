@@ -119,17 +119,58 @@ function StudentTestAnalysis({ student, studentId, businessId, router }: { stude
         return;
       }
 
-      const { data: qData, error: qErr } = await supabase
-        .from('test_questions')
-        .select('*')
-        .eq('test_id', sub.test_id)
-        .order('created_at');
-      if (!qErr) setQuestions(qData || []);
+      let loadedQuestions: any[] = [];
+
+      // 1. Try questions JSONB from sub.tests object if loaded
+      if (sub.tests?.questions && Array.isArray(sub.tests.questions) && sub.tests.questions.length > 0) {
+        loadedQuestions = sub.tests.questions;
+      } else {
+        // 2. Fetch full test row to check questions JSONB column
+        const { data: testRow } = await supabase
+          .from('tests')
+          .select('questions')
+          .eq('id', sub.test_id)
+          .maybeSingle();
+
+        if (testRow?.questions && Array.isArray(testRow.questions) && testRow.questions.length > 0) {
+          loadedQuestions = testRow.questions;
+        } else {
+          // 3. Fallback to test_questions table
+          const { data: qData } = await supabase
+            .from('test_questions')
+            .select('*')
+            .eq('test_id', sub.test_id)
+            .order('created_at');
+          loadedQuestions = qData || [];
+        }
+      }
+
+      setQuestions(loadedQuestions);
     } catch (e) {
       console.warn('Failed to load test questions:', e);
     } finally {
       setIsLoadingQuestions(false);
     }
+  };
+
+  const getStudentAnswer = (q: any, index: number, answersMap: any) => {
+    if (!answersMap) return undefined;
+    if (q.id !== undefined && answersMap[q.id] !== undefined) return answersMap[q.id];
+    if (answersMap[index] !== undefined) return answersMap[index];
+    if (answersMap[String(index)] !== undefined) return answersMap[String(index)];
+    if (answersMap[`q${index + 1}`] !== undefined) return answersMap[`q${index + 1}`];
+    if (answersMap[`q_${index + 1}`] !== undefined) return answersMap[`q_${index + 1}`];
+    return undefined;
+  };
+
+  const getTimeTaken = (q: any, index: number, timeLogs: any) => {
+    if (!timeLogs) return undefined;
+    if (q.id !== undefined && timeLogs[q.id] !== undefined) return timeLogs[q.id];
+    if (timeLogs[index] !== undefined) return timeLogs[index];
+    if (timeLogs[String(index)] !== undefined) return timeLogs[String(index)];
+    if (timeLogs[`q${index + 1}`] !== undefined) return timeLogs[`q${index + 1}`];
+    if (timeLogs[`q_${index + 1}`] !== undefined) return timeLogs[`q_${index + 1}`];
+    return undefined;
   };
 
   if (isLoading) return (
@@ -318,8 +359,8 @@ function StudentTestAnalysis({ student, studentId, businessId, router }: { stude
                   let wrong = 0;
                   let skipped = 0;
                   
-                  questions.forEach(q => {
-                    const ans = selectedSub.answers?.[q.id];
+                  questions.forEach((q, idx) => {
+                    const ans = getStudentAnswer(q, idx, selectedSub.answers);
                     if (ans === undefined || ans === null) skipped++;
                     else if (ans === q.correct_option) correct++;
                     else wrong++;
@@ -350,7 +391,7 @@ function StudentTestAnalysis({ student, studentId, businessId, router }: { stude
                   contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
                   renderItem={({ item: q, index }) => {
                     const optLabels = ['A', 'B', 'C', 'D'];
-                    const studentAns = selectedSub.answers?.[q.id];
+                    const studentAns = getStudentAnswer(q, index, selectedSub.answers);
                     const isCorrect = studentAns === q.correct_option;
                     const isSkipped = studentAns === undefined || studentAns === null;
                     const borderColor = isSkipped ? Colors.card.border : isCorrect ? Colors.status.success : Colors.status.danger;
@@ -386,13 +427,13 @@ function StudentTestAnalysis({ student, studentId, businessId, router }: { stude
                         </View>
 
                         {/* Time taken (Visual Progress Bar) & Telemetry Details */}
-                        {selectedSub.time_logs?.[q.id] !== undefined && (() => {
+                        {getTimeTaken(q, index, selectedSub.time_logs) !== undefined && (() => {
                           const timeLogs = selectedSub.time_logs || {};
                           const times = Object.entries(timeLogs)
                             .filter(([k]) => k !== 'telemetry')
                             .map(([, v]: any) => Number(v) || 0);
                           const maxTime = Math.max(...times, 1);
-                          const timeTaken = timeLogs[q.id] || 0;
+                          const timeTaken = getTimeTaken(q, index, timeLogs) || 0;
                           const barWidthPercentage = Math.max(8, (timeTaken / maxTime) * 100);
                           const barColor = isSkipped ? '#D1D1D6' : isCorrect ? Colors.status.success : Colors.status.danger;
 
@@ -470,6 +511,7 @@ export default function StudentDetailScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const { verified } = useAuthStore();
   const [activeTab, setActiveTab] = useState<'profile' | 'fees' | 'attendance' | 'tests'>('profile');
+  const [imageViewUrl, setImageViewUrl] = useState<string | null>(null);
 
   // Credentials states
   const [inviteCode, setInviteCode] = useState('');
@@ -649,7 +691,7 @@ export default function StudentDetailScreen() {
       if (profile && profile.push_token) {
         await sendPushNotification(
           [profile.push_token],
-          'Fee Reminder - PrestoID',
+          'Fee Reminder - Zenza',
           `Hi ${student.name}, your monthly fee of ₹${student.fee_amount} is due. Please clear it at the earliest.`,
           { screen: 'fees' }
         );
@@ -758,7 +800,7 @@ export default function StudentDetailScreen() {
       return;
     }
 
-    const shareText = `Dear parent/student, *${student.name}* has been registered at *${instName}*.\n\nPlease download the PrestoID app and claim your digital card.\n\n🔑 *Organization ID*: ${finalInviteCode}\n🔐 *Secret Code*: ${finalSecretCode}\n\nUse these details to access your Virtual ID Card and tracking dashboard.`;
+    const shareText = `Dear parent/student, *${student.name}* has been registered at *${instName}*.\n\nPlease download the Zenza app and claim your digital card.\n\n🔑 *Organization ID*: ${finalInviteCode}\n🔐 *Secret Code*: ${finalSecretCode}\n\nUse these details to access your Virtual ID Card and tracking dashboard.`;
     const url = `https://wa.me/91${phone.replace(/\s/g, '')}?text=${encodeURIComponent(shareText)}`;
     Linking.openURL(url);
   };
@@ -768,39 +810,65 @@ export default function StudentDetailScreen() {
     Alert.alert('Copied!', `${label} copied to clipboard.`);
   };
 
-  const handleDelete = () => {
-    Alert.alert('Delete Student', `Are you sure you want to delete ${student?.name}? This action cannot be undone.`, [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          if (!verified || id.startsWith('demo-')) {
-            Alert.alert('Deleted (Test Mode)', 'Student record deleted successfully.');
-            router.back();
-            return;
-          }
-          setIsLoading(true);
-          try {
-            const { error } = await supabase
-              .from('students')
-              .delete()
-              .eq('id', id);
-
-            if (error) throw error;
-            
-            // Delete corresponding profile row if exists
-            await supabase.from('profiles').delete().eq('id', id);
-
-            Alert.alert('Deleted', 'Student record deleted successfully.');
-            router.back();
-          } catch (err: any) {
-            Alert.alert('Delete Failed', err.message || 'Something went wrong.');
-            setIsLoading(false);
-          }
-        }
+  const executeDelete = async () => {
+    if (!verified || id.startsWith('demo-')) {
+      if (Platform.OS === 'web') {
+        alert('Deleted (Test Mode) Student record deleted successfully.');
+      } else {
+        Alert.alert('Deleted (Test Mode)', 'Student record deleted successfully.');
       }
-    ]);
+      router.back();
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const { error } = await supabase
+        .from('students')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+      
+      // Delete corresponding profile row if exists
+      if (student?.user_id) {
+        await supabase.from('profiles').delete().eq('id', student.user_id);
+      }
+
+      if (Platform.OS === 'web') {
+        alert('Student record deleted successfully.');
+      } else {
+        Alert.alert('Deleted', 'Student record deleted successfully.');
+      }
+      router.back();
+    } catch (err: any) {
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Something went wrong.');
+      } else {
+        Alert.alert('Delete Failed', err.message || 'Something went wrong.');
+      }
+      setIsLoading(false);
+    }
+  };
+
+  const handleDelete = () => {
+    const message = `Are you sure you want to delete ${student?.name || 'this student'}? This action cannot be undone.`;
+    
+    if (Platform.OS === 'web') {
+      const confirmDelete = window.confirm(message);
+      if (confirmDelete) {
+        executeDelete();
+      }
+    } else {
+      Alert.alert('Delete Student', message, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: executeDelete
+        }
+      ]);
+    }
   };
 
   const handleResetDeviceLock = () => {
@@ -957,7 +1025,9 @@ export default function StudentDetailScreen() {
         {/* Profile Card */}
         <View style={styles.profileCard}>
           {student.photo_url ? (
-            <Image source={{ uri: student.photo_url }} style={styles.profileAvatar} />
+            <TouchableOpacity onPress={() => setImageViewUrl(student.photo_url)} activeOpacity={0.85}>
+              <Image source={{ uri: student.photo_url }} style={styles.profileAvatar} />
+            </TouchableOpacity>
           ) : (
             <View style={styles.profileAvatar}>
               <Text style={styles.profileAvatarText}>{getInitials(student.name)}</Text>
@@ -1443,6 +1513,32 @@ export default function StudentDetailScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Full-Screen Image Viewer */}
+      <Modal
+        visible={!!imageViewUrl}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setImageViewUrl(null)}
+      >
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            style={styles.imageViewerCloseBtn}
+            onPress={() => setImageViewUrl(null)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="close" size={26} color="#FFF" />
+          </TouchableOpacity>
+
+          <Image
+            source={{ uri: imageViewUrl! }}
+            style={styles.imageViewerImage}
+            resizeMode="contain"
+          />
+
+          <Text style={styles.imageViewerName}>{student?.name}</Text>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1895,5 +1991,34 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerCloseBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '75%',
+  },
+  imageViewerName: {
+    marginTop: 24,
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

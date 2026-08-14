@@ -8,7 +8,6 @@ import {
   Modal, 
   Image, 
   Animated, 
-  Alert, 
   ActivityIndicator, 
   TextInput, 
   KeyboardAvoidingView, 
@@ -26,19 +25,24 @@ import { Colors, Shadows, Gradients } from '@/constants/colors';
 import { APP_CONFIG } from '@/constants/config';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
+import { useFeatureFlags } from '@/stores/useFeatureFlags';
 import { supabase, signOutAll } from '@/lib/supabase';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { registerForPushNotificationsAsync } from '@/lib/notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CustomAlert } from '@/components/CustomAlert';
+import DobPickerBottomSheet from '@/components/DobPickerBottomSheet';
 
 const { width } = Dimensions.get('window');
 
 export default function StudentStudentIDCardScreen() {
   const router = useRouter();
+  const { isFeatureActive } = useFeatureFlags();
   const [showFullQR, setShowFullQR] = useState(false);
   const { user, session, businessName, studentData, setStudentData } = useAuthStore();
   const [isLoading, setIsLoading] = useState(!studentData);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
+  const [imageViewUrl, setImageViewUrl] = useState<string | null>(null);
   const { studentCommunityUnreadCount } = useNotificationStore();
   const pulseAnim = useRef(new Animated.Value(0.3)).current;
 
@@ -60,12 +64,12 @@ export default function StudentStudentIDCardScreen() {
   // Profile Edit Form States
   const [editName, setEditName] = useState('');
   const [editDob, setEditDob] = useState('');
+  const [isDobPickerVisible, setIsDobPickerVisible] = useState(false);
   const [editPhone, setEditPhone] = useState('');
   const [editWhatsapp, setEditWhatsapp] = useState('');
   const [editAddress, setEditAddress] = useState('');
   const [editFatherName, setEditFatherName] = useState('');
   const [editParentPhone, setEditParentPhone] = useState('');
-  const [editBloodGroup, setEditBloodGroup] = useState('');
   const [editAadhaar, setEditAadhaar] = useState('');
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
@@ -155,8 +159,9 @@ export default function StudentStudentIDCardScreen() {
     if (!user) return;
 
     // Realtime subscription for students table
+    const channelId = `student_updates_${Math.random().toString(36).substring(7)}`;
     const channel = supabase
-      .channel('student_updates')
+      .channel(channelId)
       .on(
         'postgres_changes',
         {
@@ -191,16 +196,16 @@ export default function StudentStudentIDCardScreen() {
       if (!isComplete) {
         if (!hasShownCongrats) {
           setHasShownCongrats(true);
-          Alert.alert(
+          CustomAlert.alert(
             'Congratulations! 🎉',
             'Your student profile has been claimed successfully!\n\nTo activate your Virtual ID Card, please complete your profile by providing your photo, date of birth, and home address.',
             [
+              { text: 'Later', style: 'cancel' },
               {
-                text: 'Complete Profile Now',
+                text: 'Complete',
                 onPress: () => setIsProfileModalVisible(true),
               },
-            ],
-            { cancelable: false }
+            ]
           );
         } else {
           setIsProfileModalVisible(true);
@@ -219,7 +224,6 @@ export default function StudentStudentIDCardScreen() {
       setEditAddress(studentData.address || '');
       setEditFatherName(studentData.father_name || '');
       setEditParentPhone(studentData.parent_phone || '');
-      setEditBloodGroup(studentData.blood_group || '');
       setEditAadhaar(studentData.aadhaar_number || '');
     }
   }, [isProfileModalVisible, studentData]);
@@ -243,10 +247,47 @@ export default function StudentStudentIDCardScreen() {
     dob: '',
     address: '',
     whatsapp: '',
-    blood_group: '',
     duration: '1 Year',
     batch_timing: '10:00 AM - 01:00 PM'
   };
+
+  const [notesBadgeCount, setNotesBadgeCount] = useState(0);
+
+  const fetchNotesBadgeCount = async (businessId: string, batchName: string) => {
+    try {
+      const lastViewed = await AsyncStorage.getItem(`@last_viewed_notes_timestamp_${user?.id}`);
+      const lastViewedTime = lastViewed ? new Date(lastViewed).getTime() : 0;
+
+      let { data, error } = await supabase
+        .from('study_materials')
+        .select('created_at')
+        .eq('business_id', businessId)
+        .ilike('batch_name', batchName);
+
+      if (error || !data || data.length === 0) {
+        const { data: fallbackData } = await supabase
+          .from('study_materials')
+          .select('created_at')
+          .eq('business_id', businessId);
+        data = fallbackData;
+      }
+
+      if (data) {
+        const newNotesCount = data.filter(item => new Date(item.created_at).getTime() > lastViewedTime).length;
+        setNotesBadgeCount(newNotesCount);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch notes badge count:', e);
+    }
+  };
+
+  useFocusEffect(
+    useCallback(() => {
+      if (studentData?.business_id) {
+        fetchNotesBadgeCount(studentData.business_id, studentData.batch_name || 'Other');
+      }
+    }, [studentData])
+  );
 
   const calculateCompletion = (student: any) => {
     if (!student) return 0;
@@ -255,10 +296,9 @@ export default function StudentStudentIDCardScreen() {
     if (student.dob && student.dob.trim() !== '') score += 10;
     if (student.phone && student.phone.trim() !== '') score += 10;
     if (student.whatsapp && student.whatsapp.trim() !== '') score += 10;
-    if (student.address && student.address.trim() !== '') score += 10;
+    if (student.address && student.address.trim() !== '') score += 20;
     if (student.father_name && student.father_name.trim() !== '') score += 10;
     if (student.parent_phone && student.parent_phone.trim() !== '') score += 10;
-    if (student.blood_group && student.blood_group.trim() !== '') score += 10;
     
     // Photo score (20%)
     if (student.photo_url && student.photo_url.trim() !== '' && !student.photo_url.includes('placeholder') && !student.photo_url.includes('unsplash.com')) {
@@ -285,7 +325,7 @@ export default function StudentStudentIDCardScreen() {
     course: activeStudent.course || 'General',
     enrollmentId: activeStudent.enrollment_id,
     phone: activeStudent.phone || 'Not Set',
-    coachingName: businessName || 'PrestoID Coaching',
+    coachingName: businessName || 'Zenza Coaching',
     qrValue: `KF-${activeStudent.id}-${activeStudent.enrollment_id}`,
     feeAmount: Number(activeStudent.fee_amount || 0),
     feeStatus: (activeStudent.fee_status || 'unpaid') as 'paid' | 'unpaid' | 'overdue',
@@ -312,7 +352,15 @@ export default function StudentStudentIDCardScreen() {
     if (!user) return;
     setIsUploadingPhoto(true);
     try {
-      const fileExt = uri.split('.').pop() || 'jpg';
+      let fileExt = 'jpg';
+      const cleanUri = uri.split('?')[0].split('#')[0];
+      const parts = cleanUri.split('.');
+      if (parts.length > 1) {
+        const ext = parts.pop()?.toLowerCase() || 'jpg';
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+          fileExt = ext;
+        }
+      }
       const fileName = `student-${user.id}-${Math.floor(Date.now() / 1000)}.${fileExt}`;
       const filePath = `${fileName}`;
 
@@ -340,7 +388,7 @@ export default function StudentStudentIDCardScreen() {
         .getPublicUrl(filePath);
 
       if (!studentData) {
-        Alert.alert('Error', 'No claimed student profile to update.');
+        CustomAlert.alert('Error', 'No claimed student profile to update.');
         setIsUploadingPhoto(false);
         return;
       }
@@ -353,16 +401,16 @@ export default function StudentStudentIDCardScreen() {
       if (updateError) throw updateError;
 
       await fetchStudent();
-      Alert.alert('Success', 'Profile picture uploaded successfully.');
+      CustomAlert.alert('Success', 'Profile picture uploaded successfully.');
     } catch (err: any) {
-      Alert.alert('Upload Failed', err.message || 'Failed to upload photo.');
+      CustomAlert.alert('Upload Failed', err.message || 'Failed to upload photo.');
     } finally {
       setIsUploadingPhoto(false);
     }
   };
 
   const handleChangePhoto = async () => {
-    Alert.alert('Change Profile Picture', 'Select source', [
+    CustomAlert.alert('Change Profile Picture', 'Select source', [
       {
         text: 'Camera',
         onPress: async () => {
@@ -388,7 +436,7 @@ export default function StudentStudentIDCardScreen() {
                 uploadPhoto(result.assets[0].uri);
               }
             } else {
-              Alert.alert('Permission Denied', 'Camera permissions are required.');
+              CustomAlert.alert('Permission Denied', 'Camera permissions are required.');
             }
           }
         }
@@ -418,7 +466,7 @@ export default function StudentStudentIDCardScreen() {
                 uploadPhoto(result.assets[0].uri);
               }
             } else {
-              Alert.alert('Permission Denied', 'Gallery permissions are required.');
+              CustomAlert.alert('Permission Denied', 'Gallery permissions are required.');
             }
           }
         }
@@ -429,19 +477,19 @@ export default function StudentStudentIDCardScreen() {
 
   const handleSaveProfile = async () => {
     if (!editName.trim() || !editPhone.trim() || !editParentPhone.trim() || !editAadhaar.trim() || !editDob.trim() || !editAddress.trim()) {
-      Alert.alert('Error', 'Name, Date of Birth, Phone, Parent Phone, Aadhaar, and Address are required.');
+      CustomAlert.alert('Error', 'Name, Date of Birth, Phone, Parent Phone, Aadhaar, and Address are required.');
       return;
     }
     if (!studentData?.photo_url || studentData.photo_url.includes('placeholder')) {
-      Alert.alert('Photo Required', 'Please upload or capture your profile photo before saving.');
+      CustomAlert.alert('Photo Required', 'Please upload or capture your profile photo before saving.');
       return;
     }
     if (editPhone.trim().length !== 10 || isNaN(Number(editPhone)) || editParentPhone.trim().length !== 10 || isNaN(Number(editParentPhone))) {
-      Alert.alert('Invalid Phone', 'Phone numbers must be exactly 10 digits.');
+      CustomAlert.alert('Invalid Phone', 'Phone numbers must be exactly 10 digits.');
       return;
     }
     if (editAadhaar.trim().length !== 12 || isNaN(Number(editAadhaar.trim()))) {
-      Alert.alert('Invalid Aadhaar', 'Aadhaar number must be exactly 12 digits.');
+      CustomAlert.alert('Invalid Aadhaar', 'Aadhaar number must be exactly 12 digits.');
       return;
     }
 
@@ -456,7 +504,7 @@ export default function StudentStudentIDCardScreen() {
       if (profileError) throw profileError;
 
       if (!studentData) {
-        Alert.alert('Error', 'No claimed student profile to update.');
+        CustomAlert.alert('Error', 'No claimed student profile to update.');
         setIsSavingProfile(false);
         return;
       }
@@ -472,7 +520,6 @@ export default function StudentStudentIDCardScreen() {
           address: editAddress.trim(),
           father_name: editFatherName.trim(),
           parent_phone: editParentPhone.trim(),
-          blood_group: editBloodGroup.trim().toUpperCase(),
           aadhaar_number: editAadhaar.trim() || null,
         })
         .eq('id', studentData.id);
@@ -480,10 +527,10 @@ export default function StudentStudentIDCardScreen() {
       if (studentError) throw studentError;
 
       await fetchStudent();
-      Alert.alert('Success', 'Profile details updated successfully.');
+      CustomAlert.alert('Success', 'Profile details updated successfully.');
       setIsProfileModalVisible(false);
     } catch (err: any) {
-      Alert.alert('Save Failed', err.message || 'Failed to save profile changes.');
+      CustomAlert.alert('Save Failed', err.message || 'Failed to save profile changes.');
     } finally {
       setIsSavingProfile(false);
     }
@@ -492,20 +539,20 @@ export default function StudentStudentIDCardScreen() {
   const handleClaimProfile = async () => {
     if (claimVerificationMode === 'secret_code') {
       if (!inviteCodeInput.trim()) {
-        Alert.alert('Required', 'Please enter the organization invite code.');
+        CustomAlert.alert('Required', 'Please enter the organization invite code.');
         return;
       }
       if (!claimVerificationInput.trim()) {
-        Alert.alert('Required', 'Please enter your secret passcode.');
+        CustomAlert.alert('Required', 'Please enter your secret passcode.');
         return;
       }
     } else {
       if (!claimVerificationInput.trim()) {
-        Alert.alert('Required', 'Please enter your Aadhaar number.');
+        CustomAlert.alert('Required', 'Please enter your Aadhaar number.');
         return;
       }
       if (claimVerificationInput.trim().length !== 12) {
-        Alert.alert('Required', 'Aadhaar number must be exactly 12 digits.');
+        CustomAlert.alert('Required', 'Aadhaar number must be exactly 12 digits.');
         return;
       }
     }
@@ -584,12 +631,12 @@ export default function StudentStudentIDCardScreen() {
         }
       }
 
-      Alert.alert('Profile Linked!', `Successfully linked to student profile: ${updatedRecord.name}`);
+      CustomAlert.alert('Profile Linked!', `Successfully linked to student profile: ${updatedRecord.name}`);
       setInviteCodeInput('');
       setClaimVerificationInput('');
       await fetchStudent(); // re-fetch to update state
     } catch (err: any) {
-      Alert.alert('Claim Failed', err.message || 'Failed to claim profile. Try again.');
+      CustomAlert.alert('Claim Failed', err.message || 'Failed to claim profile. Try again.');
     } finally {
       setIsClaiming(false);
     }
@@ -603,15 +650,13 @@ export default function StudentStudentIDCardScreen() {
       { key: 'whatsapp', label: 'WhatsApp', complete: !!editWhatsapp.trim() && editWhatsapp.trim().length === 10 },
       { key: 'father', label: 'Father', complete: !!editFatherName.trim() },
       { key: 'parentPhone', label: 'Parent Phone', complete: !!editParentPhone.trim() && editParentPhone.trim().length === 10 },
-      { key: 'blood', label: 'Blood Group', complete: !!editBloodGroup.trim() },
       { key: 'address', label: 'Address', complete: !!editAddress.trim() },
       { key: 'aadhaar', label: 'Aadhaar', complete: !!editAadhaar.trim() && editAadhaar.trim().length === 12 },
       { key: 'photo', label: 'Photo', complete: !!studentData?.photo_url && !studentData.photo_url.includes('placeholder') },
     ];
 
-    const pctPerItem = 10;
     const completedCount = items.filter(i => i.complete).length;
-    const pct = completedCount * pctPerItem;
+    const pct = Math.round((completedCount / items.length) * 100);
 
     return { pct, items };
   };
@@ -631,11 +676,15 @@ export default function StudentStudentIDCardScreen() {
   if (!studentData) {
     return (
       <SafeAreaView style={styles.container} edges={['top']}>
-        <View style={styles.responsiveContent}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={{ flex: 1 }}
+        >
+          <View style={styles.responsiveContent}>
           {/* Top Header Bar */}
           <View style={styles.header}>
             <View style={{ width: 42 }} />
-            <Text style={styles.headerTitle}>PrestoID</Text>
+            <Text style={styles.headerTitle}>Zenza</Text>
             <TouchableOpacity 
               style={styles.bellButton} 
               activeOpacity={0.7}
@@ -757,6 +806,7 @@ export default function StudentStudentIDCardScreen() {
             </View>
           </ScrollView>
         </View>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     );
   }
@@ -779,7 +829,7 @@ export default function StudentStudentIDCardScreen() {
               </View>
             )}
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>PrestoID</Text>
+          <Text style={styles.headerTitle}>Zenza</Text>
           <View style={{ width: 42 }} />
         </View>
 
@@ -831,6 +881,29 @@ export default function StudentStudentIDCardScreen() {
             </Text>
           </View>
 
+          {isFeatureActive('student_to_student_chat') && (
+            <TouchableOpacity 
+              style={styles.chatPromoBanner}
+              activeOpacity={0.85}
+              onPress={() => router.push('/(student)/peers')}
+            >
+              <LinearGradient
+                colors={['#8B5CF6', '#6D28D9']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.chatPromoGradient}
+              >
+                <View style={styles.chatPromoHeader}>
+                  <Ionicons name="chatbubbles" size={20} color="#FFF" />
+                  <Text style={styles.chatPromoTitle}>Peer Connect is Live! 💬</Text>
+                </View>
+                <Text style={styles.chatPromoSubtitle}>
+                  Search and chat with batchmates from your institute. Touch here to connect instantly!
+                </Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
+
           {/* Live Activity Widget */}
           <View style={styles.liveActivityWrapper}>
             <LinearGradient
@@ -866,7 +939,14 @@ export default function StudentStudentIDCardScreen() {
                   activeOpacity={0.85}
                   onPress={() => router.push('/(student)/notes')}
                 >
-                  <Text style={styles.liveActionText}>Get Notes</Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={styles.liveActionText}>Get Notes</Text>
+                    {notesBadgeCount > 0 && (
+                      <View style={styles.badgeBubble}>
+                        <Text style={styles.badgeBubbleText}>{notesBadgeCount}</Text>
+                      </View>
+                    )}
+                  </View>
                   <Ionicons name="arrow-forward" size={12} color={Colors.accent.primary} />
                 </TouchableOpacity>
               </View>
@@ -933,13 +1013,9 @@ export default function StudentStudentIDCardScreen() {
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           >
             <View style={styles.modalHeader}>
-              {isProfileComplete ? (
-                <TouchableOpacity onPress={() => setIsProfileModalVisible(false)} style={styles.modalCloseButton}>
-                  <Ionicons name="close-outline" size={28} color={Colors.text.primary} />
-                </TouchableOpacity>
-              ) : (
-                <View style={{ width: 40 }} />
-              )}
+              <TouchableOpacity onPress={() => setIsProfileModalVisible(false)} style={styles.modalCloseButton}>
+                <Ionicons name="close-outline" size={28} color={Colors.text.primary} />
+              </TouchableOpacity>
               <Text style={styles.modalHeaderTitle}>My Profile</Text>
               <TouchableOpacity onPress={handleSaveProfile} style={styles.modalSaveButton} disabled={isSavingProfile}>
                 {isSavingProfile ? (
@@ -993,22 +1069,35 @@ export default function StudentStudentIDCardScreen() {
 
               {/* Edit Photo */}
               <View style={styles.photoContainer}>
-                <TouchableOpacity onPress={handleChangePhoto} activeOpacity={0.8} disabled={isUploadingPhoto}>
-                  {isUploadingPhoto ? (
-                    <View style={[styles.photoAvatar, { justifyContent: 'center', alignItems: 'center' }]}>
-                      <ActivityIndicator color="#FFF" />
+                <View style={{ position: 'relative' }}>
+                  <TouchableOpacity onPress={handleChangePhoto} activeOpacity={0.8} disabled={isUploadingPhoto}>
+                    {isUploadingPhoto ? (
+                      <View style={[styles.photoAvatar, { justifyContent: 'center', alignItems: 'center' }]}>
+                        <ActivityIndicator color="#FFF" />
+                      </View>
+                    ) : cardData.photoUrl ? (
+                      <Image source={{ uri: cardData.photoUrl }} style={styles.photoAvatar} />
+                    ) : (
+                      <View style={[styles.photoAvatar, styles.photoAvatarPlaceholder]}>
+                        <Text style={styles.photoAvatarInitials}>{getInitials(cardData.studentName)}</Text>
+                      </View>
+                    )}
+                    <View style={styles.cameraBadge}>
+                      <Ionicons name="camera" size={16} color="#FFF" />
                     </View>
-                  ) : cardData.photoUrl ? (
-                    <Image source={{ uri: cardData.photoUrl }} style={styles.photoAvatar} />
-                  ) : (
-                    <View style={[styles.photoAvatar, styles.photoAvatarPlaceholder]}>
-                      <Text style={styles.photoAvatarInitials}>{getInitials(cardData.studentName)}</Text>
-                    </View>
+                  </TouchableOpacity>
+
+                  {/* View full-screen button */}
+                  {cardData.photoUrl && !isUploadingPhoto && (
+                    <TouchableOpacity
+                      onPress={() => setImageViewUrl(cardData.photoUrl)}
+                      style={styles.viewFullBtn}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="expand-outline" size={14} color="#FFF" />
+                    </TouchableOpacity>
                   )}
-                  <View style={styles.cameraBadge}>
-                    <Ionicons name="camera" size={16} color="#FFF" />
-                  </View>
-                </TouchableOpacity>
+                </View>
                 <Text style={styles.photoLabel}>{isUploadingPhoto ? 'Uploading photo...' : 'Tap to change photo'}</Text>
               </View>
 
@@ -1027,14 +1116,15 @@ export default function StudentStudentIDCardScreen() {
                 </View>
 
                 <View style={styles.inputBox}>
-                  <Text style={styles.inputLabel}>Date of Birth (e.g. 15 Mar 2001)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editDob}
-                    onChangeText={setEditDob}
-                    placeholder="15 Mar 2001"
-                    placeholderTextColor={Colors.text.tertiary}
-                  />
+                  <Text style={styles.inputLabel}>Date of Birth *</Text>
+                  <TouchableOpacity
+                    style={[styles.textInput, { justifyContent: 'center' }]}
+                    onPress={() => setIsDobPickerVisible(true)}
+                  >
+                    <Text style={{ color: editDob ? Colors.text.primary : Colors.text.tertiary, fontSize: 16 }}>
+                      {editDob || 'Select Date of Birth'}
+                    </Text>
+                  </TouchableOpacity>
                 </View>
 
                 <View style={styles.inputBox}>
@@ -1076,17 +1166,6 @@ export default function StudentStudentIDCardScreen() {
                   />
                 </View>
 
-                <View style={styles.inputBox}>
-                  <Text style={styles.inputLabel}>Blood Group (e.g. O+, A-)</Text>
-                  <TextInput
-                    style={styles.textInput}
-                    value={editBloodGroup}
-                    onChangeText={setEditBloodGroup}
-                    placeholder="O+"
-                    placeholderTextColor={Colors.text.tertiary}
-                    autoCapitalize="characters"
-                  />
-                </View>
 
                 <View style={styles.inputBox}>
                   <Text style={styles.inputLabel}>Father's Name</Text>
@@ -1168,6 +1247,39 @@ export default function StudentStudentIDCardScreen() {
           </KeyboardAvoidingView>
         </SafeAreaView>
       </Modal>
+
+      {/* Full-Screen Photo Viewer */}
+      <Modal
+        visible={!!imageViewUrl}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setImageViewUrl(null)}
+      >
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            style={styles.imageViewerCloseBtn}
+            onPress={() => setImageViewUrl(null)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="close" size={26} color="#FFF" />
+          </TouchableOpacity>
+
+          <Image
+            source={{ uri: imageViewUrl! }}
+            style={styles.imageViewerImage}
+            resizeMode="contain"
+          />
+
+          <Text style={styles.imageViewerName}>{cardData.studentName}</Text>
+        </View>
+      </Modal>
+
+      <DobPickerBottomSheet
+        visible={isDobPickerVisible}
+        onClose={() => setIsDobPickerVisible(false)}
+        currentDob={editDob}
+        onSave={setEditDob}
+      />
     </SafeAreaView>
   );
 }
@@ -1176,6 +1288,31 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Colors.bg.primary,
+  },
+  chatPromoBanner: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 16,
+    ...Shadows.sm,
+  },
+  chatPromoGradient: {
+    padding: 16,
+    gap: 8,
+  },
+  chatPromoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  chatPromoTitle: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    color: '#FFF',
+  },
+  chatPromoSubtitle: {
+    fontSize: 12,
+    color: 'rgba(255, 255, 255, 0.9)',
+    lineHeight: 17,
   },
   responsiveContent: {
     flex: 1,
@@ -1434,6 +1571,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: Colors.accent.primary,
+  },
+  badgeBubble: {
+    backgroundColor: '#FF3B30',
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 6,
+    paddingHorizontal: 4,
+  },
+  badgeBubbleText: {
+    color: '#FFF',
+    fontSize: 9,
+    fontWeight: '800',
   },
   cardSection: {
     paddingHorizontal: 20,
@@ -1972,5 +2124,45 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '800',
     color: '#FFF',
+  },
+  viewFullBtn: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imageViewerCloseBtn: {
+    position: 'absolute',
+    top: 50,
+    right: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '75%',
+  },
+  imageViewerName: {
+    marginTop: 24,
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
 });

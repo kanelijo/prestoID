@@ -85,9 +85,7 @@ export default function SignupScreen() {
 
     let userRole = profile?.role;
 
-    // If they used Google Sign-In, the trigger might have defaulted them to 'student'.
-    // If they selected 'admin' in the UI and haven't claimed/linked anything yet, override it.
-    if (!userRole || (userRole !== role && !profile?.business_id && !profile?.claimed)) {
+    if (!userRole) {
       const { error: roleUpdateError } = await supabase
         .from('profiles')
         .upsert({
@@ -101,6 +99,8 @@ export default function SignupScreen() {
 
       if (roleUpdateError) throw roleUpdateError;
       userRole = role;
+    } else if (userRole !== role) {
+      throw new Error(`This account is already registered as a ${userRole}. You cannot sign in as an ${role}.`);
     }
 
     store.setRole(userRole);
@@ -195,9 +195,9 @@ export default function SignupScreen() {
         {/* Branding */}
         <View style={styles.brandingSection}>
           <View style={styles.logoIcon}>
-            <Text style={styles.logoLetter}>P</Text>
+            <Text style={styles.logoLetter}>Z</Text>
           </View>
-          <Text style={styles.brandName}>PrestoID</Text>
+          <Text style={styles.brandName}>Zenza</Text>
           <Text style={styles.brandTagline}>Smart Learning Companion</Text>
         </View>
 

@@ -22,6 +22,7 @@ import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { APP_CONFIG } from '@/constants/config';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 type ServiceType = 'Coaching' | 'Library' | 'School' | 'College' | 'Hostel';
 
@@ -149,7 +150,15 @@ export default function CreateInstituteScreen() {
     setIsUploadingLogo(true);
     setLogoUri(uri);
     try {
-      const fileExt = uri.split('.').pop() || 'jpg';
+      let fileExt = 'jpg';
+      const cleanUri = uri.split('?')[0].split('#')[0];
+      const parts = cleanUri.split('.');
+      if (parts.length > 1) {
+        const ext = parts.pop()?.toLowerCase() || 'jpg';
+        if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) {
+          fileExt = ext;
+        }
+      }
       const fileName = `logo-${user.id}-${Math.floor(Date.now() / 1000)}.${fileExt}`;
       const filePath = `${fileName}`;
 
@@ -266,6 +275,7 @@ export default function CreateInstituteScreen() {
           role: 'admin',
           business_id: business.id,
           claimed: true,
+          avatar_url: logoUrl || user.user_metadata?.avatar_url || null,
         }, { onConflict: 'id' });
 
       if (profileError && profileError.code !== '23505') { // Ignore if profile already exists somehow
@@ -275,6 +285,10 @@ export default function CreateInstituteScreen() {
       // Update store
       const store = useAuthStore.getState();
       store.setBusiness(business.id, inviteCode.trim().toUpperCase(), name.trim(), serviceType);
+      store.setAvatarUrl(logoUrl || user.user_metadata?.avatar_url || null);
+      
+      // Reset stale prefetch cache
+      usePrefetchStore.getState().reset();
 
       Alert.alert('Success', 'Organization profile created successfully.', [
         { text: 'OK', onPress: () => router.replace('/(admin)/students') }

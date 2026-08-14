@@ -1,8 +1,9 @@
-import React from 'react';
-import { View, StyleSheet, TouchableOpacity, Text } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, TouchableOpacity, Text, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Pdf from 'react-native-pdf';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Colors } from '@/constants/colors';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -10,19 +11,69 @@ export default function PDFViewerScreen() {
   const params = useLocalSearchParams();
   const router = useRouter();
   
-  // localUri must be a string starting with file:// or content://
-  const localUri = Array.isArray(params.uri) ? params.uri[0] : params.uri;
+  const rawUri = Array.isArray(params.uri) ? params.uri[0] : params.uri;
   const title = Array.isArray(params.title) ? params.title[0] : (params.title || 'PDF Document');
 
-  if (!localUri) {
+  const [pdfUri, setPdfUri] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+
+  useEffect(() => {
+    if (!rawUri) return;
+
+    // Check if it's a remote URL
+    const isRemote = rawUri.startsWith('http://') || rawUri.startsWith('https://');
+
+    if (isRemote) {
+      const downloadPdf = async () => {
+        setIsDownloading(true);
+        setErrorMsg(null);
+        try {
+          // Use stable filename based on URL hash/name instead of Date.now() to prevent duplicate files
+          const rawFileName = rawUri.split('/').pop()?.split('?')[0] || title;
+          const sanitized = rawFileName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+          const localFilename = `pdf_${sanitized.endsWith('.pdf') ? sanitized : sanitized + '.pdf'}`;
+          const localTargetUri = `${FileSystem.documentDirectory}${localFilename}`;
+
+          // Check if PDF already exists locally
+          const fileInfo = await FileSystem.getInfoAsync(localTargetUri);
+          if (fileInfo.exists && fileInfo.size && fileInfo.size > 0) {
+            setPdfUri(localTargetUri);
+            setIsDownloading(false);
+            return;
+          }
+
+          // Ensure URL is properly encoded (escapes spaces and special characters to prevent HTTP 400 errors)
+          const encodedUrl = encodeURI(rawUri);
+          const downloadRes = await FileSystem.downloadAsync(encodedUrl, localTargetUri);
+          
+          if (downloadRes.status >= 200 && downloadRes.status < 300) {
+            setPdfUri(downloadRes.uri);
+          } else {
+            throw new Error(`Download failed with status code ${downloadRes.status}`);
+          }
+        } catch (err: any) {
+          console.warn('Failed to pre-download PDF:', err);
+          setErrorMsg(err.message || 'Failed to download PDF document.');
+        } finally {
+          setIsDownloading(false);
+        }
+      };
+
+      downloadPdf();
+    } else {
+      setPdfUri(rawUri);
+    }
+  }, [rawUri, title]);
+
+  if (!rawUri) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={{ textAlign: 'center', marginTop: 20 }}>No PDF file specified.</Text>
+        <Text style={styles.centerText}>No PDF file specified.</Text>
       </SafeAreaView>
     );
   }
-
-  const source = { uri: localUri, cache: true };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -35,25 +86,38 @@ export default function PDFViewerScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      {/* PDF Viewer */}
+      {/* PDF Viewer / Downloader State */}
       <View style={styles.pdfContainer}>
-        <Pdf
-          trustAllCerts={false}
-          source={source}
-          onLoadComplete={(numberOfPages, filePath) => {
-             console.log(`[PDF] Loaded ${numberOfPages} pages from ${filePath}`);
-          }}
-          onPageChanged={(page, numberOfPages) => {
-             console.log(`[PDF] Current page: ${page}`);
-          }}
-          onError={(error) => {
-             console.error("[PDF] Error rendering PDF:", error);
-          }}
-          onPressLink={(uri) => {
-             console.log(`[PDF] Link pressed: ${uri}`);
-          }}
-          style={styles.pdf}
-        />
+        {isDownloading ? (
+          <View style={styles.centerContainer}>
+            <ActivityIndicator size="large" color={Colors.accent.primary} />
+            <Text style={styles.loadingText}>Downloading PDF for viewing...</Text>
+          </View>
+        ) : errorMsg ? (
+          <View style={styles.centerContainer}>
+            <Ionicons name="alert-circle-outline" size={48} color={Colors.status.danger} />
+            <Text style={styles.errorText}>{errorMsg}</Text>
+            <TouchableOpacity style={styles.retryBtn} onPress={() => router.back()}>
+              <Text style={styles.retryBtnText}>Go Back</Text>
+            </TouchableOpacity>
+          </View>
+        ) : pdfUri ? (
+          <Pdf
+            trustAllCerts={false}
+            source={{ uri: pdfUri, cache: true }}
+            onLoadComplete={(numberOfPages, filePath) => {
+              console.log(`[PDF] Loaded ${numberOfPages} pages from ${filePath}`);
+            }}
+            onPageChanged={(page, numberOfPages) => {
+              console.log(`[PDF] Current page: ${page}`);
+            }}
+            onError={(error) => {
+              console.error("[PDF] Error rendering PDF:", error);
+              setErrorMsg("Cannot display PDF. The file may be corrupted or not in PDF format.");
+            }}
+            style={styles.pdf}
+          />
+        ) : null}
       </View>
     </SafeAreaView>
   );
@@ -94,5 +158,41 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
     backgroundColor: '#F5F5F5',
+  },
+  centerText: {
+    textAlign: 'center',
+    marginTop: 20,
+    color: '#666',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  errorText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#E53E3E',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  retryBtn: {
+    marginTop: 20,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: Colors.accent.primary,
+    borderRadius: 8,
+  },
+  retryBtnText: {
+    color: '#FFF',
+    fontSize: 14,
+    fontWeight: '600',
   }
 });

@@ -87,9 +87,9 @@ android {
     buildToolsVersion rootProject.ext.buildToolsVersion
     compileSdk rootProject.ext.compileSdkVersion
 
-    namespace 'com.kanelijo.prestoid'
+    namespace 'com.kanelijo.zenza'
     defaultConfig {
-        applicationId 'com.kanelijo.prestoid'
+        applicationId 'com.kanelijo.zenza'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1

@@ -17,6 +17,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 // Configure Google Sign-In statically so signOut and signIn work across the app
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 
 try {
   GoogleSignin.configure({
@@ -42,4 +43,5 @@ export const signOutAll = async () => {
     console.warn('Failed to clear cached profile:', err);
   }
   useAuthStore.getState().reset();
+  usePrefetchStore.getState().reset();
 };

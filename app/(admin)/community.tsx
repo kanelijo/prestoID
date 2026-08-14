@@ -27,7 +27,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Network from 'expo-network';
+import { DIRS, saveImageToPublicGallery } from '@/lib/storage';
+import { updateMediaLocalPointer } from '@/lib/localDb';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { downloadAndOpenSaf } from '@/lib/saf';
 import PrestostorageModule from '@/modules/prestostorage/src/PrestostorageModule';
@@ -40,8 +44,9 @@ import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-g
 import Reanimated, { useSharedValue, useAnimatedStyle, withSpring, runOnJS } from 'react-native-reanimated';
 import { decode } from 'base64-arraybuffer';
 import { uploadToTelegramViaEdge, getTelegramFastLink, deleteTelegramMessage } from '@/lib/telegram';
-import { sendPushNotification, CHANNELS } from '@/lib/notifications';
+import { sendPushNotification, fetchStudentPushTokens, CHANNELS } from '@/lib/notifications';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -96,6 +101,33 @@ const renderTextWithLinks = (text: string, linkColor: string = '#0066CC') => {
   });
 };
 
+const FILE_EXT_REGEX = /\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar|apk)(\?|#|$)/i;
+
+const getImagesFromMessage = (msg: any): string[] => {
+  if (!msg) return [];
+  if (msg.local_uri) return [msg.local_uri];
+  if (msg.media_url) {
+    if (msg.media_url.startsWith('[')) {
+      try {
+        const arr: string[] = JSON.parse(msg.media_url);
+        return arr.filter(u => !FILE_EXT_REGEX.test(u));
+      } catch (e) {
+        return FILE_EXT_REGEX.test(msg.media_url) ? [] : [msg.media_url];
+      }
+    }
+    if (FILE_EXT_REGEX.test(msg.media_url)) return [];
+    return [msg.media_url];
+  }
+  // Don't parse image URLs out of Document messages
+  if (msg.text && msg.text.startsWith('[Document:')) return [];
+  const parsed = extractUrlAndName(msg.text);
+  if (parsed?.url && !FILE_EXT_REGEX.test(parsed.url)) {
+    return [parsed.url];
+  }
+  return [];
+};
+
+
 interface LinkPreviewData {
   title: string;
   image?: string;
@@ -105,7 +137,13 @@ interface LinkPreviewData {
 
 const previewCache: Record<string, LinkPreviewData | null> = {};
 
-const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) => {
+const getYoutubeVideoId = (url: string): string | null => {
+  const regExp = /^.*(?:youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[1].length === 11) ? match[1] : null;
+};
+
+const LinkPreviewCard = ({ text, isSelf, onLongPress }: { text: string; isSelf: boolean; onLongPress?: () => void }) => {
   const [preview, setPreview] = useState<LinkPreviewData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -124,59 +162,66 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
       cleanUrl = `https://${cleanUrl}`;
     }
 
+    // Skip preview for direct file links (PDF, docs, etc.)
+    if (/\.(pdf|docx?|xlsx?|pptx?|txt|zip|rar|apk)$/i.test(cleanUrl)) {
+      setPreview(null);
+      return;
+    }
+
     if (previewCache[cleanUrl] !== undefined) {
       setPreview(previewCache[cleanUrl]);
       return;
     }
 
+    // Set high-quality YouTube preview placeholder immediately if YouTube link detected
+    const ytId = getYoutubeVideoId(cleanUrl);
+    if (ytId) {
+      const initialYTData = {
+        title: "YouTube Video",
+        image: `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`,
+        description: "Watch this video on YouTube.",
+        url: cleanUrl
+      };
+      setPreview(initialYTData);
+    }
+
     setLoading(true);
-    fetch(cleanUrl)
-      .then(res => res.text())
-      .then(html => {
-        const getMetaTag = (property: string) => {
-          const regex = new RegExp(`<meta[^>]+(?:property|name)=["']${property}["'][^>]+content=["']([^"']+)["']`, 'i');
-          const m = html.match(regex);
-          if (m) return m[1];
-          const revRegex = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${property}["']`, 'i');
-          const revMatch = html.match(revRegex);
-          return revMatch ? revMatch[1] : null;
-        };
-
-        let title = getMetaTag('og:title') || getMetaTag('twitter:title');
-        if (!title) {
-          const titleMatch = html.match(/<title>([^<]+)<\/title>/i);
-          title = titleMatch ? titleMatch[1] : '';
-        }
-
-        let image = getMetaTag('og:image') || getMetaTag('twitter:image');
-        let description = getMetaTag('og:description') || getMetaTag('twitter:description') || '';
-
-        if (image && !/^https?:\/\//i.test(image)) {
-          try {
-            const urlObj = new URL(cleanUrl);
-            image = `${urlObj.origin}${image.startsWith('/') ? '' : '/'}${image}`;
-          } catch (e) {}
+    // Use jsonlink.io — avoids CORS/SSL issues on Android with direct fetch
+    fetch(`https://jsonlink.io/api/extract?url=${encodeURIComponent(cleanUrl)}`)
+      .then(res => res.json())
+      .then(json => {
+        const title = json.title || (ytId ? 'YouTube Video' : '');
+        const description = json.description || (ytId ? 'Watch this video on YouTube.' : '');
+        let image = Array.isArray(json.images) && json.images.length > 0 ? json.images[0] : json.image;
+        
+        if (!image && ytId) {
+          image = `https://img.youtube.com/vi/${ytId}/hqdefault.jpg`;
         }
 
         if (title) {
-          const data = { title, image: image || undefined, description, url: cleanUrl };
+          const data = { title, image, description, url: cleanUrl };
           previewCache[cleanUrl] = data;
           setPreview(data);
+        } else if (ytId) {
+          // Keep the local youtube placeholder if api fetch returned empty
+          previewCache[cleanUrl] = preview;
         } else {
           previewCache[cleanUrl] = null;
           setPreview(null);
         }
       })
       .catch(() => {
-        previewCache[cleanUrl] = null;
-        setPreview(null);
+        if (!ytId) {
+          previewCache[cleanUrl] = null;
+          setPreview(null);
+        }
       })
       .finally(() => {
         setLoading(false);
       });
   }, [rawUrl]);
 
-  if (loading) {
+  if (loading && !preview) {
     return (
       <View style={{ padding: 8, flexDirection: 'row', alignItems: 'center', backgroundColor: isSelf ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', borderRadius: 8, marginTop: 6 }}>
         <ActivityIndicator size="small" color={isSelf ? '#FFF' : '#AF2800'} />
@@ -189,8 +234,10 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
 
   return (
     <TouchableOpacity
-      activeOpacity={0.8}
+      activeOpacity={0.85}
       onPress={() => Linking.openURL(preview.url).catch(e => console.warn(e))}
+      onLongPress={() => onLongPress && onLongPress()}
+      delayLongPress={200}
       style={{
         marginTop: 8,
         borderRadius: 12,
@@ -202,25 +249,26 @@ const LinkPreviewCard = ({ text, isSelf }: { text: string; isSelf: boolean }) =>
         shadowColor: '#000',
         shadowOpacity: 0.05,
         shadowRadius: 4,
-        shadowOffset: { width: 0, height: 2 }
+        shadowOffset: { width: 0, height: 2 },
+        width: 260,
       }}
     >
       {preview.image ? (
         <Image
           source={{ uri: preview.image }}
-          style={{ width: '100%', height: 140, resizeMode: 'cover' }}
+          style={{ width: '100%', height: 150, resizeMode: 'cover' }}
         />
       ) : null}
-      <View style={{ padding: 10 }}>
-        <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: 'bold', color: '#111' }}>
+      <View style={{ padding: 12 }}>
+        <Text numberOfLines={2} style={{ fontSize: 13, fontWeight: 'bold', color: '#111', lineHeight: 17 }}>
           {preview.title}
         </Text>
         {preview.description ? (
-          <Text numberOfLines={2} style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+          <Text numberOfLines={2} style={{ fontSize: 11, color: '#555', marginTop: 6, lineHeight: 15 }}>
             {preview.description}
           </Text>
         ) : null}
-        <Text numberOfLines={1} style={{ fontSize: 10, color: '#999', marginTop: 4 }}>
+        <Text numberOfLines={1} style={{ fontSize: 10, color: '#0066CC', marginTop: 6, fontWeight: '500' }}>
           {preview.url.replace(/^https?:\/\/(?:www\.)?/i, '')}
         </Text>
       </View>
@@ -415,16 +463,20 @@ const ZoomableImage = ({ uri, onZoomStateChange }: { uri: string, onZoomStateCha
 
 export default function AdminCommunityScreen() {
   const router = useRouter();
-  const { user, businessId } = useAuthStore();
-  const [messages, setMessages] = useState<any[]>([]);
+  const { user, businessId, businessName, avatarUrl } = useAuthStore();
+  const prefetch = usePrefetchStore.getState();
+  const hasValidCache = prefetch.communityReady && 
+    prefetch.communityMessages.length > 0 && 
+    prefetch.communityMessages[0].business_id === businessId;
+  const [messages, setMessages] = useState<any[]>(hasValidCache ? prefetch.communityMessages : []);
   const [inputText, setInputText] = useState('');
   const [adminProfile, setAdminProfile] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(!hasValidCache);
   const [isSending, setIsSending] = useState(false);
   const [isPickingImage, setIsPickingImage] = useState(false);
   const [isPickingDocument, setIsPickingDocument] = useState(false);
-  const [coachingName, setCoachingName] = useState('Community Chat');
-  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(null);
+  const [coachingName, setCoachingName] = useState(businessName || 'Community Chat');
+  const [coachingLogoUrl, setCoachingLogoUrl] = useState<string | null>(avatarUrl || null);
   const [studentCount, setStudentCount] = useState<number>(0);
   const [orgId, setOrgId] = useState('');
 
@@ -443,19 +495,29 @@ export default function AdminCommunityScreen() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [currentViewerIndex, setCurrentViewerIndex] = useState<number>(0);
   const [lightboxScrollEnabled, setLightboxScrollEnabled] = useState(true);
+  const [lightboxImages, setLightboxImages] = useState<string[]>([]);
+  const [lightboxMessage, setLightboxMessage] = useState<any | null>(null);
   const [selectedActionMessage, setSelectedActionMessage] = useState<any | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [selectedImageForCaption, setSelectedImageForCaption] = useState<{ uri: string; fileName: string; asset: any } | null>(null);
+  const [selectedImageForCaption, setSelectedImageForCaption] = useState<{ uri: string; fileName: string; asset?: any; size?: number } | null>(null);
+  // Multi-image support
+  const [selectedMultiImages, setSelectedMultiImages] = useState<{ uri: string; fileName: string; asset?: any; size?: number }[]>([]);
   const [imageCaptionText, setImageCaptionText] = useState('');
   const failedDownloadsRef = useRef<Record<string, boolean>>({});
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
-  const uploadResultRef = useRef<{ fileId: string; messageId: number | null; publicUrl: string } | null>(null);
+  const uploadResultRef = useRef<{ fileId: string; messageId: number | null; publicUrl: string; urls?: string[] } | null>(null);
   const uploadPromiseRef = useRef<Promise<any> | null>(null);
   const activeSessionIdRef = useRef<string>('');
   const [isMultiSelect, setIsMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [uploadProgress, setUploadProgress] = useState(0);
   const [imageDimsCache, setImageDimsCache] = useState<Record<string, { w: number; h: number }>>({});
+  const [deleteModalConfig, setDeleteModalConfig] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
 
   // Load persisted cache mappings on mount
   useEffect(() => {
@@ -487,18 +549,42 @@ export default function AdminCommunityScreen() {
     loadCache();
   }, []);
 
-  // Automatically download images in the background when messages load
-  const autoDownloadImages = useCallback(async (msgs: any[]) => {
+  // Smart-Sync Media Downloader:
+  // - Images & Thumbnails: Always auto-download (<200KB)
+  // - Documents/PDFs: Auto-download ONLY when on Wi-Fi, tap-to-download on Cellular/Mobile Data
+  const autoDownloadMedia = useCallback(async (msgs: any[]) => {
+    let isWifi = false;
+    try {
+      const netState = await Network.getNetworkStateAsync();
+      isWifi = netState.type === Network.NetworkStateType.WIFI;
+    } catch (_) {
+      isWifi = false;
+    }
+
     for (const msg of msgs) {
-      const isImage = msg.image_url || (msg.text && msg.text.startsWith('[Image:'));
+      const isImage = msg.image_url || msg.media_url?.startsWith('[') || (msg.text && msg.text.startsWith('[Image:'));
       if (isImage) {
         const isSelf = msg.author_id === user?.id;
-        // Don't auto-download if already cached locally, if self, if downloading, or if it already failed
-        if (!localMediaMap[msg.id] && !isSelf && !downloadingIds[msg.id] && !failedDownloadsRef.current[msg.id]) {
-          const parsed = extractUrlAndName(msg.text);
-          const imgUri = msg.image_url || parsed?.url;
-          if (imgUri) {
-            downloadImageLocal(msg.id, imgUri);
+        if (isSelf) continue;
+
+        const urls = getImagesFromMessage(msg);
+        urls.forEach((imgUri, indexInMsg) => {
+          // Skip local file:// paths — they're already on device, no download needed
+          if (imgUri.startsWith('file://') || imgUri.startsWith('content://')) return;
+          const cacheKey = msg.id + '_' + indexInMsg;
+          if (!localMediaMap[cacheKey] && !downloadingIds[cacheKey] && !failedDownloadsRef.current[cacheKey]) {
+            downloadImageLocal(msg.id, imgUri, indexInMsg);
+          }
+        });
+      }
+
+      // Auto-download documents on Wi-Fi
+      if (isWifi && msg.text && msg.text.startsWith('[Document:')) {
+        const parsed = extractUrlAndName(msg.text);
+        if (parsed?.url && parsed?.name) {
+          const docKey = String(msg.id);
+          if (!localMediaMap[docKey] && !downloadingIds[docKey] && !failedDownloadsRef.current[docKey]) {
+            downloadDocumentLocal(msg.id, parsed.url, parsed.name);
           }
         }
       }
@@ -512,7 +598,7 @@ export default function AdminCommunityScreen() {
       if (Platform.OS === 'android') {
         const result = await PrestostorageModule.saveDocument(localUri, fileName);
         if (result && result.success) {
-          Alert.alert('Success', 'Image saved successfully to Downloads/PrestoID folder!');
+          Alert.alert('Success', 'Image saved successfully to Downloads/Zenza folder!');
         } else {
           throw new Error('Failed to save via PrestostorageModule');
         }
@@ -546,50 +632,115 @@ export default function AdminCommunityScreen() {
   };
 
   // Download image silently to document directory (caches for 0 second loads) and saves to gallery on Android
-  const downloadImageLocal = async (msgId: string, url: string) => {
-    if (downloadingIds[msgId]) return;
-    setDownloadingIds(prev => ({ ...prev, [msgId]: true }));
+  const downloadImageLocal = async (msgId: string, url: string, indexInMsg: number = 0) => {
+    const cacheKey = msgId + '_' + indexInMsg;
+    if (downloadingIds[cacheKey]) return;
+
+    // Guard: file:// and content:// URIs are already local — just register them, never download
+    if (url.startsWith('file://') || url.startsWith('content://')) {
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: url };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      return;
+    }
+
+    setDownloadingIds(prev => ({ ...prev, [cacheKey]: true }));
     
     try {
       const ext = url.split('.').pop()?.split('?')[0] || 'jpg';
-      const safeName = `community_img_${msgId}.${ext}`;
-      const localUri = `${FileSystem.documentDirectory}${safeName}`;
+      const safeName = `community_img_${msgId}_${indexInMsg}.${ext}`;
+      const localUri = `${DIRS.images}${safeName}`;
 
-      // 1. Download to local persistent app storage
+      // 1. Download to local persistent app storage in Zenza Images directory
       const downloadResult = await FileSystem.downloadAsync(url, localUri);
       if (downloadResult.status < 200 || downloadResult.status >= 300) {
         await FileSystem.deleteAsync(localUri, { idempotent: true });
         throw new Error(`Server returned status code ${downloadResult.status}`);
       }
 
-      // 2. Android: save to public Gallery/MediaStore
-      if (Platform.OS === 'android') {
-        try {
-          await PrestostorageModule.saveDocument(localUri, safeName);
-        } catch (e) {
-          console.warn('Silent Android MediaStore gallery save failed:', e);
-        }
-      }
-
-      // 3. Update paths
+      // 2. Update paths in state, AsyncStorage, and SQLite pointer (cached in app sandbox)
+      updateMediaLocalPointer(msgId, localUri);
       setLocalMediaMap(prev => {
-        const updated = { ...prev, [msgId]: localUri };
+        const updated = { ...prev, [cacheKey]: localUri };
         AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(e => console.warn(e));
         return updated;
       });
 
       setDownloadedMap(prev => {
-        const updated = { ...prev, [msgId]: true };
+        const updated = { ...prev, [cacheKey]: true };
         AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(e => console.warn(e));
         return updated;
       });
     } catch (err) {
       console.warn('Silent image cache failed:', err);
-      failedDownloadsRef.current[msgId] = true;
+      failedDownloadsRef.current[cacheKey] = true;
     } finally {
       setDownloadingIds(prev => {
         const copy = { ...prev };
-        delete copy[msgId];
+        delete copy[cacheKey];
+        return copy;
+      });
+    }
+  };
+
+  // Download document silently to app storage in Zenza Documents directory (caches for offline viewing)
+  const downloadDocumentLocal = async (msgId: string, url: string, name: string) => {
+    const cacheKey = msgId;
+    if (downloadingIds[cacheKey]) return;
+
+    // Guard: file:// and content:// URIs are already local — just register them, never download
+    if (url.startsWith('file://') || url.startsWith('content://')) {
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: url };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+      return;
+    }
+
+    setDownloadingIds(prev => ({ ...prev, [cacheKey]: true }));
+
+    try {
+      const safeName = name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+      const localUri = `${DIRS.docs}${safeName}`;
+
+      const downloadResult = await FileSystem.downloadAsync(url, localUri);
+      if (downloadResult.status < 200 || downloadResult.status >= 300) {
+        await FileSystem.deleteAsync(localUri, { idempotent: true });
+        throw new Error(`Server returned status code ${downloadResult.status}`);
+      }
+
+      updateMediaLocalPointer(msgId, localUri);
+      setLocalMediaMap(prev => {
+        const updated = { ...prev, [cacheKey]: localUri };
+        AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+
+      setDownloadedMap(prev => {
+        const updated = { ...prev, [cacheKey]: true };
+        AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+        return updated;
+      });
+    } catch (err) {
+      console.warn('Silent document cache failed:', err);
+      failedDownloadsRef.current[cacheKey] = true;
+    } finally {
+      setDownloadingIds(prev => {
+        const copy = { ...prev };
+        delete copy[cacheKey];
         return copy;
       });
     }
@@ -667,8 +818,11 @@ export default function AdminCommunityScreen() {
   };
 
   // Load admin profile and business details
-  const loadProfile = async () => {
+  const loadProfile = async (silent = false) => {
     if (!user || !businessId) return;
+    if (!silent && messages.length === 0 && !prefetch.communityReady) {
+      setIsLoading(true);
+    }
     try {
       const { data: profile, error } = await supabase
         .from('profiles')
@@ -723,6 +877,9 @@ export default function AdminCommunityScreen() {
     }
   };
 
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+
   const fetchMessages = async (bizId: string) => {
     try {
       const { data, error } = await supabase
@@ -730,10 +887,14 @@ export default function AdminCommunityScreen() {
         .select('*')
         .eq('business_id', bizId)
         .neq('is_deleted', true)
-        .order('created_at', { ascending: true }); // chronological order
+        .order('created_at', { ascending: false })
+        .limit(20);
 
       if (error) throw error;
-      setMessages(data || []);
+      const fetched = data || [];
+      const chronological = [...fetched].reverse();
+      setMessages(chronological);
+      setHasMore(fetched.length === 20);
       
       // Scroll to bottom after loading
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: false }), 150);
@@ -742,18 +903,65 @@ export default function AdminCommunityScreen() {
     }
   };
 
+  const fetchMoreMessages = async () => {
+    if (!businessId || isLoadingMore || !hasMore || messages.length === 0) return;
+    try {
+      setIsLoadingMore(true);
+      const oldestTimestamp = messages[0].created_at;
+      const { data, error } = await supabase
+        .from('community_posts')
+        .select('*')
+        .eq('business_id', businessId)
+        .neq('is_deleted', true)
+        .lt('created_at', oldestTimestamp)
+        .order('created_at', { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      const fetched = data || [];
+      if (fetched.length < 20) {
+        setHasMore(false);
+      }
+      if (fetched.length > 0) {
+        const olderChronological = [...fetched].reverse();
+        setMessages(prev => [...olderChronological, ...prev]);
+      }
+    } catch (err) {
+      console.warn('Failed to fetch more messages:', err);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  };
+
   useEffect(() => {
     if (messages.length > 0) {
-      autoDownloadImages(messages);
+      autoDownloadMedia(messages);
     }
-  }, [messages, autoDownloadImages]);
+  }, [messages, autoDownloadMedia]);
+
+  // Synchronize store updates to local header state
+  useEffect(() => {
+    if (businessName) setCoachingName(businessName);
+  }, [businessName]);
+
+  useEffect(() => {
+    if (avatarUrl) setCoachingLogoUrl(avatarUrl);
+  }, [avatarUrl]);
+
+  // Fetch profiles and community data once businessId is loaded
+  useEffect(() => {
+    if (businessId) {
+      loadProfile(true);
+    }
+  }, [businessId]);
 
   // Real-time subscription setup
   useEffect(() => {
     if (!businessId) return;
 
+    const channelId = `admin_community_changes_${businessId}_${Math.random().toString(36).substring(7)}`;
     const channel = supabase
-      .channel('admin_community_changes')
+      .channel(channelId)
       .on('postgres_changes', {
         event: '*',
         schema: 'public',
@@ -762,8 +970,34 @@ export default function AdminCommunityScreen() {
         if (payload.eventType === 'INSERT') {
           const newMsg = payload.new;
           if (newMsg.business_id !== businessId) return;
+
+          const cleanMsgText = (txt: string) => {
+            if (!txt) return '';
+            // Remove parenthesized URLs (like local file path or public http url) to compare labels/captions
+            return txt.replace(/\([^)]+\)/g, '()').trim();
+          };
+
           setMessages(prev => {
             if (prev.some(m => m.id === newMsg.id)) return prev;
+
+            // Try to match and replace the sender's optimistic message
+            if (newMsg.author_id === user?.id) {
+              const optIndex = prev.findIndex(m => 
+                String(m.id).startsWith('optimistic_') && 
+                cleanMsgText(m.text) === cleanMsgText(newMsg.text)
+              );
+
+              if (optIndex !== -1) {
+                const copy = [...prev];
+                // Retain local cached URI so image displays instantly without a black box
+                copy[optIndex] = {
+                  ...newMsg,
+                  local_uri: prev[optIndex].local_uri
+                };
+                return copy;
+              }
+            }
+
             return [...prev, newMsg];
           });
           setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
@@ -787,13 +1021,8 @@ export default function AdminCommunityScreen() {
     };
   }, [businessId]);
 
-  useEffect(() => {
-    if (messages.length > 0) {
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 250);
-    }
-  }, [messages.length]);
+  // NOTE: scrollToEnd is handled per-insert inside sendMessage / realtime handler.
+  // Do NOT add a global messages.length effect — it causes layout jumps on optimistic inserts.
 
   const handlePickImage = async () => {
     setIsPickingImage(true);
@@ -811,59 +1040,106 @@ export default function AdminCommunityScreen() {
         mediaTypes: ['images'],
         allowsEditing: false,
         quality: 0.8,
+        allowsMultipleSelection: true,
+        selectionLimit: 5,
       });
 
       setIsPickingImage(false);
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
-        const selectedAsset = result.assets[0];
-        const fileInfo = {
-          uri: selectedAsset.uri,
-          fileName: selectedAsset.fileName || 'image.jpg',
-          asset: selectedAsset
+        const asset = result.assets[0];
+        const captionText = inputText.trim();
+        setInputText(''); // Clear input text box
+
+        const tempMsgId = `optimistic_${Date.now()}`;
+        let sourceUri = asset.uri;
+
+        if (Platform.OS === 'android' && sourceUri.startsWith('content://')) {
+          try {
+            const tempPath = `${FileSystem.cacheDirectory}pick_${Date.now()}.jpg`;
+            await FileSystem.copyAsync({ from: sourceUri, to: tempPath });
+            sourceUri = tempPath;
+          } catch (copyErr) {
+            console.warn('Cache copy fallback:', copyErr);
+          }
+        }
+
+        const fileName = asset.fileName || 'image.jpg';
+
+        // Perform fast local manipulation first to get final compressed size
+        let selectedImageUri = sourceUri;
+        let finalMB = '2.0';
+        try {
+          const manipResult = await ImageManipulator.manipulateAsync(
+            sourceUri,
+            [{ resize: { width: 1024 } }],
+            { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+          );
+          selectedImageUri = manipResult.uri;
+          const info = await FileSystem.getInfoAsync(selectedImageUri);
+          if (info.exists && info.size) {
+            finalMB = (info.size / (1024 * 1024)).toFixed(1);
+          }
+        } catch (manipErr) {
+          console.warn('Manipulation failed:', manipErr);
+        }
+
+        const messageText = captionText 
+          ? `[Image: ${fileName}](${selectedImageUri}) \n\n${captionText}`
+          : `[Image: ${fileName}](${selectedImageUri})`;
+
+        // Instantly place optimistic image message into chat list (WhatsApp style - NO extra modal page!)
+        const optimisticMsg = {
+          id: tempMsgId,
+          is_optimistic: true,
+          upload_status: 'uploading',
+          upload_progress: 5,
+          upload_size_text: `0.1 MB / ${finalMB} MB`,
+          author_id: user?.id,
+          author_name: adminProfile?.full_name || 'Admin',
+          author_role: 'admin',
+          category: 'announcement',
+          text: messageText,
+          local_uri: selectedImageUri,
+          created_at: new Date().toISOString(),
+          likes: 0,
+          comments: '[]',
+          liked: false,
         };
 
-        const sessionId = Date.now().toString() + '_' + Math.random().toString(36).substring(7);
-        activeSessionIdRef.current = sessionId;
+        setMessages((prev) => [...prev, optimisticMsg]);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
-        setSelectedImageForCaption(fileInfo);
-        setImageCaptionText('');
-        setUploadState('uploading');
-        uploadResultRef.current = null;
-
-        // Start background upload immediately
-        const startBackgroundUpload = async (session: string) => {
+        // Perform background upload with WhatsApp-style progress updates
+        (async () => {
           try {
-            // Compress and resize image to speed up uploads (from megabytes down to ~150KB)
-            const manipResult = await ImageManipulator.manipulateAsync(
-              fileInfo.uri,
-              [{ resize: { width: 1024 } }],
-              { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
-            );
-
-            if (session !== activeSessionIdRef.current) return;
-
-            const selectedImageUri = manipResult.uri;
-            const fileName = fileInfo.fileName;
             let publicUrl = '';
             let tgFileIdVal = '';
 
             try {
-              // 1. Try Telegram Storage Upload
               const uploadRes = await uploadToTelegramViaEdge(
                 selectedImageUri,
                 fileName,
-                (pct) => {
-                  if (session === activeSessionIdRef.current) setUploadProgress(pct);
+                (loaded, total) => {
+                  const pct = Math.round((loaded / total) * 100);
+                  const uploadedMB = ((loaded / total) * Number(finalMB)).toFixed(1);
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === tempMsgId
+                        ? {
+                            ...m,
+                            upload_progress: Math.min(99, pct),
+                            upload_size_text: `${uploadedMB} MB / ${finalMB} MB`,
+                          }
+                        : m
+                    )
+                  );
                 }
               );
-              if (session !== activeSessionIdRef.current) return;
               publicUrl = await getTelegramFastLink(uploadRes.fileId);
               tgFileIdVal = uploadRes.messageId ? `${uploadRes.messageId}:${uploadRes.fileId}` : uploadRes.fileId;
             } catch (tgErr) {
               console.warn('Telegram upload failed, trying avatars bucket:', tgErr);
-              if (session !== activeSessionIdRef.current) return;
-              // 2. Try default 'avatars' storage bucket
               const base64 = await FileSystem.readAsStringAsync(selectedImageUri, { encoding: FileSystem.EncodingType.Base64 });
               const fileExt = fileName.split('.').pop() || 'jpg';
               const filePath = `community/${Date.now()}_${Math.random().toString(36).substring(7)}.${fileExt}`;
@@ -873,29 +1149,67 @@ export default function AdminCommunityScreen() {
                 .upload(filePath, decode(base64), { contentType: `image/${fileExt}` });
 
               if (uploadError) throw uploadError;
-              if (session !== activeSessionIdRef.current) return;
-
               const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
               publicUrl = urlData.publicUrl;
             }
 
-            if (session !== activeSessionIdRef.current) return;
+            const finalMessageText = captionText 
+              ? `[Image: ${fileName}](${publicUrl}) \n\n${captionText}`
+              : `[Image: ${fileName}](${publicUrl})`;
 
-            uploadResultRef.current = {
-              fileId: tgFileIdVal,
-              messageId: tgFileIdVal.includes(':') ? parseInt(tgFileIdVal.split(':')[0], 10) : null,
-              publicUrl
-            };
-            setUploadState('success');
-          } catch (err: any) {
-            console.error('Background upload failed:', err);
-            if (session === activeSessionIdRef.current) {
-              setUploadState('error');
+            const { data: insertedRows, error: insertError } = await supabase
+              .from('community_posts')
+              .insert({
+                business_id: businessId,
+                author_id: user?.id,
+                author_name: adminProfile?.full_name || 'Admin',
+                author_role: 'admin',
+                category: 'announcement',
+                text: finalMessageText,
+                media_url: publicUrl,
+                tg_file_id: tgFileIdVal || null,
+              })
+              .select();
+
+            if (insertError) throw insertError;
+
+            if (insertedRows && insertedRows.length > 0) {
+              const finalMsg = insertedRows[0];
+              // Register local paths in mapping so it is never downloaded on user's own device
+              const cacheKey = finalMsg.id + '_0';
+              setLocalMediaMap(prev => {
+                const updated = { ...prev, [cacheKey]: sourceUri };
+                AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+                return updated;
+              });
+              setDownloadedMap(prev => {
+                const updated = { ...prev, [cacheKey]: true };
+                AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+                return updated;
+              });
+
+              // Keep local_uri on the final message so Image shows instantly without a black box
+              setMessages((prev) => prev.map((m) => (m.id === tempMsgId ? { ...finalMsg, local_uri: sourceUri } : m)));
+              notifyCommunityStudents(
+                `${adminProfile?.full_name || 'Teacher'} posted an image`,
+                captionText || 'New photo in Community'
+              );
             }
+          } catch (err: any) {
+            console.error('Optimistic image upload failed:', err);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempMsgId
+                  ? {
+                      ...m,
+                      upload_status: 'error',
+                      upload_size_text: 'Upload failed',
+                    }
+                  : m
+              )
+            );
           }
-        };
-
-        uploadPromiseRef.current = startBackgroundUpload(sessionId);
+        })();
       }
     } catch (err: any) {
       setIsPickingImage(false);
@@ -904,32 +1218,48 @@ export default function AdminCommunityScreen() {
     }
   };
 
-  const handleSharePost = async () => {
-    if (!selectedImageForCaption || isSending) return;
-    setIsSending(true);
-    const sessionAtClick = activeSessionIdRef.current;
+  const handleSharePost = async () => {};
+
+  const sendMessage = async () => {
+    if (!inputText.trim() || !businessId) return;
+    const textToSend = inputText.trim();
+    setInputText(''); // Clear input instantly — NO button spinner!
+
+    if (editingMessageId) {
+      try {
+        const { error } = await supabase
+          .from('community_posts')
+          .update({ text: textToSend })
+          .eq('id', editingMessageId);
+        if (error) throw error;
+        setMessages((prev) => prev.map((m) => (m.id === editingMessageId ? { ...m, text: textToSend } : m)));
+        setEditingMessageId(null);
+      } catch (err) {
+        console.warn('Failed to edit message:', err);
+      }
+      return;
+    }
+
+    const tempMsgId = `optimistic_txt_${Date.now()}`;
+    const optimisticMsg = {
+      id: tempMsgId,
+      is_optimistic: true,
+      upload_status: 'sending',
+      author_id: user?.id,
+      author_name: adminProfile?.full_name || 'Admin',
+      author_role: 'admin',
+      category: 'announcement',
+      text: textToSend,
+      created_at: new Date().toISOString(),
+      likes: 0,
+      comments: '[]',
+      liked: false,
+    };
+
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
     try {
-      // 1. Wait for background upload promise to finish if still uploading
-      if (uploadState === 'uploading' && uploadPromiseRef.current) {
-        await uploadPromiseRef.current;
-      }
-
-      if (sessionAtClick !== activeSessionIdRef.current) return;
-
-      // Check upload result
-      if (!uploadResultRef.current) {
-        throw new Error('Image upload failed. Please try selecting the image again.');
-      }
-
-      const { fileId, publicUrl } = uploadResultRef.current;
-
-      // 2. Format text with caption if present
-      const captionText = imageCaptionText.trim();
-      const messageText = captionText 
-        ? `[Image: ${selectedImageForCaption.fileName}](${publicUrl}) \n\n${captionText}`
-        : `[Image: ${selectedImageForCaption.fileName}](${publicUrl})`;
-
-      // 3. Send community message (select returns the inserted row for instant display)
       const { data: insertedRows, error: insertError } = await supabase
         .from('community_posts')
         .insert({
@@ -938,40 +1268,25 @@ export default function AdminCommunityScreen() {
           author_name: adminProfile?.full_name || 'Admin',
           author_role: 'admin',
           category: 'announcement',
-          text: messageText,
-          media_url: publicUrl,
-          tg_file_id: fileId || null
+          text: textToSend,
         })
         .select();
 
       if (insertError) throw insertError;
-      if (sessionAtClick === activeSessionIdRef.current) {
-        // Optimistically add the new message to state so teacher sees it immediately
-        if (insertedRows && insertedRows.length > 0) {
-          const newMsg = insertedRows[0];
-          setMessages(prev => {
-            if (prev.some(m => m.id === newMsg.id)) return prev;
-            return [...prev, newMsg];
-          });
-          setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
-        }
-        // Notify students about new image post
-        const captionText = imageCaptionText.trim();
+
+      if (insertedRows && insertedRows.length > 0) {
+        const finalMsg = insertedRows[0];
+        setMessages((prev) => prev.map((m) => (m.id === tempMsgId ? finalMsg : m)));
         notifyCommunityStudents(
-          `${adminProfile?.full_name || 'Teacher'} shared a photo`,
-          captionText || 'New photo in Community'
+          `${adminProfile?.full_name || 'Teacher'} posted in Community`,
+          textToSend.length > 80 ? textToSend.substring(0, 80) + '…' : textToSend
         );
-        setSelectedImageForCaption(null);
-        setImageCaptionText('');
-        activeSessionIdRef.current = '';
-        uploadResultRef.current = null;
-        setUploadState('idle');
       }
-    } catch (err: any) {
-      console.warn('Failed to share post:', err);
-      Alert.alert('Error', 'Failed to share post: ' + err.message);
-    } finally {
-      setIsSending(false);
+    } catch (err) {
+      console.warn('Failed to send text message:', err);
+      setMessages((prev) => prev.filter((m) => m.id !== tempMsgId));
+      setInputText(textToSend); // Restore input text on error
+      Alert.alert('Error', 'Failed to send message. Please try again.');
     }
   };
 
@@ -987,56 +1302,129 @@ export default function AdminCommunityScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const doc = result.assets[0];
-        setIsSending(true);
+        const tempMsgId = `optimistic_doc_${Date.now()}`;
         
-        let publicUrl = '';
-        let tgFileIdVal = '';
+        let finalMB = '2.0';
         try {
-          // 1. Try Telegram Storage Upload
-          const uploadRes = await uploadToTelegramViaEdge(doc.uri, doc.name);
-          publicUrl = await getTelegramFastLink(uploadRes.fileId);
-          tgFileIdVal = uploadRes.messageId ? `${uploadRes.messageId}:${uploadRes.fileId}` : uploadRes.fileId;
-        } catch (tgErr) {
-          console.warn('Telegram upload failed, trying avatars bucket:', tgErr);
-          try {
-            // 2. Try default 'avatars' storage bucket
-            const base64 = await FileSystem.readAsStringAsync(doc.uri, { encoding: FileSystem.EncodingType.Base64 });
-            const filePath = `community/${Date.now()}_${doc.name}`;
-            
-            const { error: uploadError } = await supabase.storage
-              .from('avatars')
-              .upload(filePath, decode(base64), { contentType: doc.mimeType || 'application/octet-stream' });
-
-            if (uploadError) throw uploadError;
-
-            const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
-            publicUrl = urlData.publicUrl;
-          } catch (storageErr) {
-            console.warn('Supabase storage upload failed, falling back to local document URI:', storageErr);
-            // 3. Fallback to local file path for local developer testing
-            publicUrl = doc.uri;
+          const docInfo = await FileSystem.getInfoAsync(doc.uri);
+          if (docInfo.exists && docInfo.size) {
+            finalMB = (docInfo.size / (1024 * 1024)).toFixed(1);
+          } else if (doc.size) {
+            finalMB = (doc.size / (1024 * 1024)).toFixed(1);
           }
-        }
+        } catch (_) {}
 
-        // Send community message with document link formatted
-        const { error: insertError } = await supabase
-          .from('community_posts')
-          .insert({
-            business_id: businessId,
-            author_id: user?.id,
-            author_name: adminProfile?.full_name || 'Admin',
-            author_role: 'admin',
-            category: 'announcement',
-            text: `[Document: ${doc.name}](${publicUrl})`,
-            tg_file_id: tgFileIdVal || null
-          });
+        const optimisticMsg = {
+          id: tempMsgId,
+          is_optimistic: true,
+          upload_status: 'uploading',
+          upload_progress: 5,
+          upload_size_text: `0.1 MB / ${finalMB} MB`,
+          author_id: user?.id,
+          author_name: adminProfile?.full_name || 'Admin',
+          author_role: 'admin',
+          category: 'announcement',
+          text: `[Document: ${doc.name}](${doc.uri})`,
+          created_at: new Date().toISOString(),
+          likes: 0,
+          comments: '[]',
+          liked: false,
+        };
 
-        if (insertError) throw insertError;
-        // Notify students about new file
-        notifyCommunityStudents(
-          `${adminProfile?.full_name || 'Teacher'} shared a file`,
-          doc.name || 'New file in Community'
-        );
+        setMessages((prev) => [...prev, optimisticMsg]);
+        setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
+
+        (async () => {
+          try {
+            let publicUrl = '';
+            let tgFileIdVal = '';
+            try {
+              const uploadRes = await uploadToTelegramViaEdge(
+                doc.uri,
+                doc.name,
+                (loaded, total) => {
+                  const pct = Math.round((loaded / total) * 100);
+                  const uploadedMB = ((loaded / total) * Number(finalMB)).toFixed(1);
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === tempMsgId
+                        ? {
+                            ...m,
+                            upload_progress: Math.min(99, pct),
+                            upload_size_text: `${uploadedMB} MB / ${finalMB} MB`,
+                          }
+                        : m
+                    )
+                  );
+                }
+              );
+              publicUrl = await getTelegramFastLink(uploadRes.fileId);
+              tgFileIdVal = uploadRes.messageId ? `${uploadRes.messageId}:${uploadRes.fileId}` : uploadRes.fileId;
+            } catch (tgErr) {
+              console.warn('Telegram upload failed, trying avatars bucket:', tgErr);
+              const base64 = await FileSystem.readAsStringAsync(doc.uri, { encoding: FileSystem.EncodingType.Base64 });
+              const safeName = doc.name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+              const filePath = `community/${Date.now()}_${safeName}`;
+              
+              const { error: uploadError } = await supabase.storage
+                .from('avatars')
+                .upload(filePath, decode(base64), { contentType: doc.mimeType || 'application/octet-stream' });
+
+              if (uploadError) throw uploadError;
+              const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+              publicUrl = urlData.publicUrl;
+            }
+
+            const { data: insertedRows, error: insertError } = await supabase
+              .from('community_posts')
+              .insert({
+                business_id: businessId,
+                author_id: user?.id,
+                author_name: adminProfile?.full_name || 'Admin',
+                author_role: 'admin',
+                category: 'announcement',
+                text: `[Document: ${doc.name}](${publicUrl})`,
+                tg_file_id: tgFileIdVal || null,
+              })
+              .select();
+
+            if (insertError) throw insertError;
+
+            if (insertedRows && insertedRows.length > 0) {
+              const finalMsg = insertedRows[0];
+              const docKey = String(finalMsg.id);
+              setLocalMediaMap(prev => {
+                const updated = { ...prev, [docKey]: doc.uri };
+                AsyncStorage.setItem('community_local_media_paths', JSON.stringify(updated)).catch(() => {});
+                return updated;
+              });
+              setDownloadedMap(prev => {
+                const updated = { ...prev, [docKey]: true };
+                AsyncStorage.setItem('community_downloaded_media', JSON.stringify(updated)).catch(() => {});
+                return updated;
+              });
+
+              setMessages((prev) => prev.map((m) => (m.id === tempMsgId ? finalMsg : m)));
+              notifyCommunityStudents(
+                `${adminProfile?.full_name || 'Teacher'} shared a document`,
+                doc.name || 'New document in Community'
+              );
+            }
+          } catch (err: any) {
+            console.error('Optimistic document upload failed:', err);
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempMsgId
+                  ? {
+                      ...m,
+                      upload_status: 'error',
+                      upload_size_text: 'Upload failed',
+                    }
+                  : m
+              )
+            );
+          }
+        })();
       }
     } catch (err: any) {
       setIsPickingDocument(false);
@@ -1044,51 +1432,51 @@ export default function AdminCommunityScreen() {
       Alert.alert('Error', 'Failed to select document. Please try again.');
     } finally {
       setIsPickingDocument(false);
-      setIsSending(false);
     }
   };
 
   useFocusEffect(
     useCallback(() => {
-      loadProfile();
+      loadProfile(true);
     }, [user, businessId])
   );
 
-  const deleteMessage = async (msgId: string) => {
-    Alert.alert(
-      'Delete Message',
-      'Are you sure you want to delete this message? This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              // 1. Fetch message from state to get tg_file_id
-              const msgToDelete = messages.find(m => String(m.id) === String(msgId));
-              if (msgToDelete?.tg_file_id && msgToDelete.tg_file_id.includes(':')) {
-                const tgMsgIdStr = msgToDelete.tg_file_id.split(':')[0];
-                const tgMsgId = parseInt(tgMsgIdStr, 10);
-                if (!isNaN(tgMsgId)) {
-                  deleteTelegramMessage(tgMsgId).catch(err => console.warn('Failed to delete from Telegram:', err));
-                }
-              }
-
-              // 2. Delete from Supabase community_posts
-              const { error } = await supabase
-                .from('community_posts')
-                .delete()
-                .eq('id', msgId);
-              if (error) throw error;
-              setMessages(prev => prev.filter(m => String(m.id) !== String(msgId)));
-            } catch (err: any) {
-              Alert.alert('Error', 'Failed to delete message: ' + err.message);
+  const deleteMessage = (msgId: string) => {
+    setDeleteModalConfig({
+      visible: true,
+      title: 'Delete Message?',
+      message: 'Are you sure you want to delete this message? This action cannot be undone.',
+      onConfirm: async () => {
+        setDeleteModalConfig(null);
+        try {
+          const msgToDelete = messages.find(m => String(m.id) === String(msgId));
+          if (msgToDelete?.tg_file_id && msgToDelete.tg_file_id.includes(':')) {
+            const tgMsgIdStr = msgToDelete.tg_file_id.split(':')[0];
+            const tgMsgId = parseInt(tgMsgIdStr, 10);
+            if (!isNaN(tgMsgId)) {
+              deleteTelegramMessage(tgMsgId).catch(err => console.warn('Failed to delete from Telegram:', err));
             }
           }
+
+          // Soft delete to avoid foreign key errors on YouTube links or posts
+          const { error: softErr } = await supabase
+            .from('community_posts')
+            .update({ is_deleted: true, text: 'This message was deleted' })
+            .eq('id', msgId);
+
+          if (softErr) {
+            try { await supabase.from('community_comments').delete().eq('post_id', msgId); } catch (_) {}
+            try { await supabase.from('community_likes').delete().eq('post_id', msgId); } catch (_) {}
+            const { error: hardErr } = await supabase.from('community_posts').delete().eq('id', msgId);
+            if (hardErr) throw hardErr;
+          }
+
+          setMessages(prev => prev.filter(m => String(m.id) !== String(msgId)));
+        } catch (err: any) {
+          console.warn('Failed to delete message:', err);
         }
-      ]
-    );
+      }
+    });
   };
 
   const enterMultiSelect = (msgId: string) => {
@@ -1113,89 +1501,46 @@ export default function AdminCommunityScreen() {
 
   const deleteSelectedMessages = () => {
     if (selectedIds.size === 0) return;
-    Alert.alert(
-      `Delete ${selectedIds.size} message${selectedIds.size > 1 ? 's' : ''}?`,
-      'This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete', style: 'destructive',
-          onPress: async () => {
-            try {
-              const ids = Array.from(selectedIds);
-              const { error } = await supabase
-                .from('community_posts')
-                .delete()
-                .in('id', ids);
-              if (error) throw error;
-              setMessages(prev => prev.filter(m => !selectedIds.has(String(m.id))));
-              cancelMultiSelect();
-            } catch (err: any) {
-              Alert.alert('Error', 'Failed to delete: ' + err.message);
-            }
+    const count = selectedIds.size;
+    setDeleteModalConfig({
+      visible: true,
+      title: `Delete ${count} message${count > 1 ? 's' : ''}?`,
+      message: 'These messages will be permanently deleted from the community.',
+      onConfirm: async () => {
+        setDeleteModalConfig(null);
+        try {
+          const ids = Array.from(selectedIds);
+          const { error: softErr } = await supabase
+            .from('community_posts')
+            .update({ is_deleted: true, text: 'This message was deleted' })
+            .in('id', ids);
+
+          if (softErr) {
+            try { await supabase.from('community_comments').delete().in('post_id', ids); } catch (_) {}
+            try { await supabase.from('community_likes').delete().in('post_id', ids); } catch (_) {}
+            const { error: hardErr } = await supabase.from('community_posts').delete().in('id', ids);
+            if (hardErr) throw hardErr;
           }
+
+          setMessages(prev => prev.filter(m => !selectedIds.has(String(m.id))));
+          cancelMultiSelect();
+        } catch (err: any) {
+          console.warn('Failed to delete selected messages:', err);
         }
-      ]
-    );
+      }
+    });
   };
 
   // Send push notification to all students in this business when teacher posts
   const notifyCommunityStudents = async (title: string, body: string) => {
     try {
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('push_token')
-        .eq('business_id', businessId)
-        .eq('role', 'student')
-        .not('push_token', 'is', null);
-      const tokens = (profiles || []).map((p: any) => p.push_token).filter(Boolean);
+      if (!businessId || !user?.id) return;
+      const tokens = await fetchStudentPushTokens(businessId, user.id);
       if (tokens.length > 0) {
-        sendPushNotification(tokens, title, body, { screen: 'community' }, 1, CHANNELS.community);
+        await sendPushNotification(tokens, title, body, { screen: 'community' }, 1, CHANNELS.community);
       }
     } catch (e) {
       console.warn('Failed to send community push notifications:', e);
-    }
-  };
-
-  const sendMessage = async () => {
-    if (!inputText.trim() || !businessId || isSending) return;
-    setIsSending(true);
-    const textToSend = inputText.trim();
-    setInputText('');
-
-    try {
-      if (editingMessageId) {
-        const { error } = await supabase
-          .from('community_posts')
-          .update({ text: textToSend })
-          .eq('id', editingMessageId);
-        if (error) throw error;
-        setMessages(prev => prev.map(m => m.id === editingMessageId ? { ...m, text: textToSend } : m));
-        setEditingMessageId(null);
-      } else {
-        const { error } = await supabase
-          .from('community_posts')
-          .insert({
-            business_id: businessId,
-            author_id: user?.id,
-            author_name: adminProfile?.full_name || 'Admin',
-            author_role: 'admin',
-            category: 'announcement', // default category
-            text: textToSend
-          });
-        if (error) throw error;
-        // Notify all students
-        notifyCommunityStudents(
-          `${adminProfile?.full_name || 'Teacher'} posted in Community`,
-          textToSend.length > 80 ? textToSend.substring(0, 80) + '…' : textToSend
-        );
-      }
-    } catch (err) {
-      console.warn('Failed to send/edit message:', err);
-      Alert.alert('Error', 'Failed to send message. Please try again.');
-      setInputText(textToSend); // restore input text on error
-    } finally {
-      setIsSending(false);
     }
   };
 
@@ -1204,20 +1549,61 @@ export default function AdminCommunityScreen() {
     return (msg.text || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
            (msg.author_name || '').toLowerCase().includes(searchQuery.toLowerCase());
   });
-
   const parsedMedia = extractMediaDocsLinks(messages);
   const imageMessages = messages.filter(msg => msg.image_url || (msg.text && msg.text.startsWith('[Image:')));
+
+  const [onlineCount, setOnlineCount] = useState<number>(0);
+
+  // Real-time Supabase Presence tracking (CRDT in-memory online status)
+  useEffect(() => {
+    if (!businessId || !user?.id) return;
+
+    const presenceChannel = supabase.channel(`presence_admin_community_${businessId}`, {
+      config: {
+        presence: {
+          key: user.id,
+        },
+      },
+    });
+
+    presenceChannel
+      .on('presence', { event: 'sync' }, () => {
+        const state = presenceChannel.presenceState();
+        const keys = Object.keys(state);
+        setOnlineCount(keys.length);
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await presenceChannel.track({
+            user_id: user.id,
+            role: 'admin',
+            name: adminProfile?.full_name || 'Teacher',
+            online_at: new Date().toISOString(),
+          });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(presenceChannel);
+    };
+  }, [businessId, user?.id, adminProfile?.full_name]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header Banner Card */}
       <View style={styles.header}>
-        <TouchableOpacity activeOpacity={0.8} onPress={() => setShowAvatarPreview(true)}>
-          <Image 
-            source={{ uri: coachingLogoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(coachingName)}&background=0D8ABC&color=fff&rounded=true` }} 
-            style={styles.headerAvatar}
-          />
+        <TouchableOpacity
+          activeOpacity={0.8}
+          onPress={() => router.push('/(admin)/coaching-profile')}
+          style={styles.headerAvatar3DContainer}
+        >
+          <View style={styles.headerAvatarInner}>
+            <Image 
+              source={{ uri: coachingLogoUrl || `https://ui-avatars.com/api/?name=${encodeURIComponent(coachingName)}&background=0D8ABC&color=fff&rounded=true` }} 
+              style={styles.headerAvatarImage}
+            />
+          </View>
         </TouchableOpacity>
         
         <TouchableOpacity 
@@ -1229,7 +1615,9 @@ export default function AdminCommunityScreen() {
           }}
         >
           <Text style={styles.headerTitle} numberOfLines={1}>{coachingName}</Text>
-          <Text style={styles.headerSubtitle}>{studentCount} members</Text>
+          <Text style={styles.headerSubtitle}>
+            {onlineCount > 0 ? `🟢 ${onlineCount} Online • ${studentCount} members` : `${studentCount} members`}
+          </Text>
         </TouchableOpacity>
 
         {/* 3-Dots Menu Icon */}
@@ -1324,14 +1712,10 @@ export default function AdminCommunityScreen() {
       {/* Chat Background & Message List */}
       <KeyboardAvoidingView 
         style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        <ImageBackground
-          source={require('../../assets/images/community chat wallpaper.jpeg')}
-          style={{ flex: 1 }}
-          resizeMode="cover"
-        >
+        <View style={{ flex: 1, backgroundColor: Colors.bg.primary }}>
           <FlatList
           ref={flatListRef}
           data={filteredMessages}
@@ -1339,6 +1723,20 @@ export default function AdminCommunityScreen() {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           onLayout={() => flatListRef.current?.scrollToEnd({ animated: false })}
+          maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+          onScroll={({ nativeEvent }) => {
+            if (nativeEvent.contentOffset.y <= 50 && hasMore && !isLoadingMore && !isLoading) {
+              fetchMoreMessages();
+            }
+          }}
+          scrollEventThrottle={16}
+          ListHeaderComponent={
+            isLoadingMore ? (
+              <View style={{ paddingVertical: 12, alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#AF2800" />
+              </View>
+            ) : null
+          }
           renderItem={({ item, index }) => {
             const isSelf = item.author_id === user?.id;
             
@@ -1347,8 +1745,19 @@ export default function AdminCommunityScreen() {
             const showDateSeparator = !prevMsg || 
               new Date(prevMsg.created_at).toDateString() !== new Date(item.created_at).toDateString();
 
+            const urls = getImagesFromMessage(item);
+            const isImageAttachment = urls.length > 0 || !!item.local_uri || !!item.is_optimistic;
+            const captionText = isImageAttachment && item.text && item.text.includes(')')
+              ? item.text.substring(item.text.indexOf(')') + 1).trim()
+              : (!isImageAttachment ? item.text : '');
+
+            // Link-only message detection (suppress bubble styling)
+            const urlRegex = /(https?:\/\/[^\s]+|www\.[^\s]+|[a-zA-Z0-9.-]+\.(?:com|org|net|co|in|edu|gov|io|info)(?:\/[^\s]*)?)/gi;
+            const matchedUrls = item.text ? item.text.match(urlRegex) : null;
+            const isLinkOnly = !!(matchedUrls && matchedUrls.length === 1 && item.text.trim() === matchedUrls[0].trim());
+
+            const shouldShowBubble = (!isImageAttachment || captionText.length > 0) && !isLinkOnly;
             const isTeacher = item.author_role === 'admin' || item.author_role === 'teacher';
-            const isImageAttachment = !!(item.image_url || (item.text && item.text.startsWith('[Image:')));
 
             return (
               <View style={{ width: '100%' }}>
@@ -1377,9 +1786,9 @@ export default function AdminCommunityScreen() {
                     onLongPress={() => isMultiSelect ? null : enterMultiSelect(String(item.id))}
                     onPress={() => isMultiSelect ? toggleSelectId(String(item.id)) : null}
                     style={[
-                      styles.bubble,
-                      isSelf ? styles.bubbleSelf : styles.bubbleOther,
-                      isImageAttachment && { padding: 0, paddingHorizontal: 0, paddingVertical: 0 },
+                      shouldShowBubble ? styles.bubble : { backgroundColor: 'transparent', borderWidth: 0, shadowOpacity: 0, elevation: 0, padding: 0 },
+                      shouldShowBubble ? (isSelf ? styles.bubbleSelf : styles.bubbleOther) : null,
+                      (isImageAttachment && shouldShowBubble) && { padding: 0, paddingHorizontal: 0, paddingVertical: 0 },
                       isMultiSelect && selectedIds.has(String(item.id)) && { opacity: 0.7, borderWidth: 2, borderColor: '#AF2800' }
                     ]}
                   >
@@ -1388,7 +1797,7 @@ export default function AdminCommunityScreen() {
                       <Text style={[
                         styles.authorText,
                         isTeacher ? styles.authorTeacher : styles.authorStudent,
-                        isImageAttachment && { marginLeft: 12, marginTop: 8, marginBottom: 4 }
+                        (isImageAttachment || isLinkOnly) && { marginLeft: shouldShowBubble ? 12 : 0, marginTop: shouldShowBubble ? 8 : 2, marginBottom: 4 }
                       ]}>
                         {item.author_name} {isTeacher ? '(Teacher)' : ''}
                       </Text>
@@ -1396,29 +1805,178 @@ export default function AdminCommunityScreen() {
 
                     {/* Image Attachment Rendering */}
                     {isImageAttachment && (() => {
-                      const isDownloaded = downloadedMap[item.id] || isSelf;
-                      const isDownloading = downloadingIds[item.id];
-                      const parsed = extractUrlAndName(item.text);
-                      const imgUri = item.media_url || item.image_url || parsed?.url;
-                      const displayUri = localMediaMap[item.id] || imgUri;
-                      // Blur preview URI: always use public URL (media_url) so blur shows before download
-                      const previewUri = item.media_url || item.image_url || imgUri;
+                      const urls = getImagesFromMessage(item);
+                      // For optimistic messages, local_uri is source of truth — don't bail out on empty urls[]
+                      if (urls.length === 0 && !item.local_uri) return null;
+
+                      // [].every() returns true — must guard against empty urls[] for optimistic local_uri messages
+                      const isDownloaded = urls.length > 0
+                        ? urls.every((_, idx) => downloadedMap[item.id + '_' + idx] || isSelf)
+                        : !!item.local_uri; // optimistic with local_uri only: treat as "downloaded"
+                      const isDownloading = urls.some((_, idx) => downloadingIds[item.id + '_' + idx]);
                       const captionText = item.text ? item.text.substring(item.text.indexOf(')') + 1).trim() : '';
 
-                      // Compute dynamic height from cached image dimensions
                       const BOX_W = 260;
                       const cachedDims = imageDimsCache[item.id];
                       const dynHeight = cachedDims
                         ? Math.max(160, Math.min(320, Math.round((cachedDims.h / cachedDims.w) * BOX_W)))
                         : 190;
 
-                      // Lazy-load image dimensions for aspect ratio
-                      if (!cachedDims && previewUri) {
-                        Image.getSize(previewUri, (w, h) => {
+                      // Lazy-load image dimensions for aspect ratio (guard: never call getSize on local file:// uris — can crash on Android)
+                      if (!cachedDims && urls[0] && urls[0].startsWith('http')) {
+                        Image.getSize(urls[0], (w, h) => {
                           setImageDimsCache(prev => ({ ...prev, [item.id]: { w, h } }));
                         }, () => {});
                       }
 
+                      // Tapping opens the lightbox with all images from this message
+                      const handlePressImage = (tappedIndex: number) => {
+                        if (isMultiSelect) {
+                          toggleSelectId(String(item.id));
+                          return;
+                        }
+                        if (isDownloaded) {
+                          const resolvedUris = urls.map((url, idx) => localMediaMap[item.id + '_' + idx] || url);
+                          setLightboxImages(resolvedUris);
+                          setLightboxMessage(item);
+                          setLightboxIndex(tappedIndex);
+                          setCurrentViewerIndex(tappedIndex);
+                        }
+                      };
+
+                      const handleDownloadBunch = () => {
+                        urls.forEach((url, idx) => {
+                          downloadImageLocal(item.id, url, idx);
+                        });
+                      };
+
+                      if (urls.length > 1) {
+                        // Multi-image Card Spread (Overlap Fan Layout)
+                        return (
+                          <View style={{ width: BOX_W, overflow: 'visible', marginVertical: 8 }}>
+                            <View style={{ position: 'relative', width: BOX_W, height: dynHeight + 15, overflow: 'visible' }}>
+                              {/* Third card (bottom layer) */}
+                              {urls.length > 2 && (
+                                <View style={{
+                                  position: 'absolute',
+                                  width: BOX_W - 20,
+                                  height: dynHeight - 10,
+                                  borderRadius: 16,
+                                  backgroundColor: '#E0E0E0',
+                                  left: 10,
+                                  top: 20,
+                                  transform: [{ rotate: '4deg' }],
+                                  opacity: 0.7,
+                                  elevation: 2,
+                                  overflow: 'hidden'
+                                }}>
+                                  <Image source={{ uri: urls[2] }} style={{ width: '100%', height: '100%', opacity: 0.8 }} />
+                                </View>
+                              )}
+
+                              {/* Second card (middle layer) */}
+                              <View style={{
+                                  position: 'absolute',
+                                  width: BOX_W - 20,
+                                  height: dynHeight - 10,
+                                  borderRadius: 16,
+                                  backgroundColor: '#E0E0E0',
+                                  left: 10,
+                                  top: 12,
+                                  transform: [{ rotate: '-4deg' }],
+                                  opacity: 0.9,
+                                  elevation: 3,
+                                  overflow: 'hidden'
+                                }}>
+                                  <Image source={{ uri: urls[1] }} style={{ width: '100%', height: '100%', opacity: 0.9 }} />
+                                </View>
+
+                              {/* Top card */}
+                              <View style={{
+                                position: 'absolute',
+                                width: BOX_W - 20,
+                                height: dynHeight - 10,
+                                borderRadius: 16,
+                                backgroundColor: '#E0E0E0',
+                                left: 10,
+                                top: 0,
+                                shadowColor: '#000',
+                                shadowOffset: { width: 0, height: 4 },
+                                shadowOpacity: 0.15,
+                                shadowRadius: 6,
+                                elevation: 5,
+                                overflow: 'hidden'
+                              }}>
+                                <TouchableOpacity
+                                  activeOpacity={0.9}
+                                  delayLongPress={200}
+                                  onLongPress={() => isMultiSelect ? null : enterMultiSelect(String(item.id))}
+                                  onPress={() => handlePressImage(0)}
+                                  disabled={!isDownloaded && !isMultiSelect}
+                                  style={{ width: '100%', height: '100%' }}
+                                >
+                                  {isDownloaded ? (
+                                    <Image 
+                                      source={{ uri: localMediaMap[item.id + '_0'] || urls[0] }} 
+                                      style={{ width: '100%', height: '100%' }}
+                                    />
+                                  ) : (
+                                    <View style={{ width: '100%', height: '100%', backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center' }}>
+                                      <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.3)" />
+                                    </View>
+                                  )}
+                                  
+                                  {/* Glassmorphic Count Badge */}
+                                  <View style={{
+                                    position: 'absolute',
+                                    bottom: 12,
+                                    right: 12,
+                                    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+                                    paddingHorizontal: 10,
+                                    paddingVertical: 5,
+                                    borderRadius: 20,
+                                    flexDirection: 'row',
+                                    alignItems: 'center',
+                                    gap: 4
+                                  }}>
+                                    <Ionicons name="images" size={14} color="#FFF" />
+                                    <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>
+                                      {urls.length} Images
+                                    </Text>
+                                  </View>
+                                </TouchableOpacity>
+
+                                {!isDownloaded && (
+                                  <View style={styles.downloadOverlay}>
+                                    <TouchableOpacity 
+                                      style={styles.downloadCircle} 
+                                      activeOpacity={0.8}
+                                      onPress={handleDownloadBunch}
+                                      disabled={isDownloading}
+                                    >
+                                      {isDownloading ? (
+                                        <ActivityIndicator size="small" color="#FFF" />
+                                      ) : (
+                                        <Ionicons name="download-outline" size={24} color="#FFF" />
+                                      )}
+                                    </TouchableOpacity>
+                                  </View>
+                                )}
+                              </View>
+                            </View>
+                            {captionText ? (
+                              <View style={{ paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10 }}>
+                                <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther, { paddingRight: 0 }]}>
+                                  {renderTextWithLinks(captionText, '#0066CC')}
+                                </Text>
+                              </View>
+                            ) : null}
+                          </View>
+                        );
+                      }
+
+                      // Single Image Layout
+                      const displayUri = item.local_uri || localMediaMap[item.id + '_0'] || localMediaMap[item.id] || (urls.length > 0 ? urls[0] : null);
                       return (
                         <View style={{ overflow: 'hidden', borderRadius: 16, width: BOX_W }}>
                           <View style={{ position: 'relative', width: BOX_W, height: dynHeight, overflow: 'hidden' }}>
@@ -1426,31 +1984,39 @@ export default function AdminCommunityScreen() {
                               activeOpacity={0.9} 
                               delayLongPress={200}
                               onLongPress={() => isMultiSelect ? null : enterMultiSelect(String(item.id))}
-                              onPress={() => {
-                                if (isMultiSelect) { toggleSelectId(String(item.id)); return; }
-                                if (isDownloaded && displayUri) {
-                                  const idx = imageMessages.findIndex(m => m.id === item.id);
-                                  if (idx !== -1) {
-                                    setLightboxIndex(idx);
-                                    setCurrentViewerIndex(idx);
-                                  }
-                                }
-                              }}
+                              onPress={() => handlePressImage(0)}
                               disabled={!isDownloaded && !isMultiSelect}
                             >
-                              {/* Blur preview always from public URL, full quality from local/downloaded */}
-                              <Image 
-                                source={{ uri: isDownloaded ? displayUri : previewUri }} 
-                                style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
-                                blurRadius={isDownloaded ? 0 : 18}
-                              />
+                              {item.is_optimistic || isDownloaded || item.local_uri ? (
+                                <Image 
+                                  source={{ uri: item.local_uri || displayUri }}
+                                  defaultSource={item.local_uri ? { uri: item.local_uri } : undefined}
+                                  style={[styles.bubbleImageAttachment, { width: BOX_W, height: dynHeight }]} 
+                                />
+                              ) : (
+                                <View style={{ width: BOX_W, height: dynHeight, backgroundColor: '#2a2a2a', alignItems: 'center', justifyContent: 'center' }}>
+                                  <Ionicons name="image-outline" size={40} color="rgba(255,255,255,0.3)" />
+                                </View>
+                              )}
                             </TouchableOpacity>
-                            {!isDownloaded && (
+
+                            {/* WhatsApp-Style Circular Realtime Upload Progress Overlay */}
+                            {item.is_optimistic && item.upload_status === 'uploading' && (
+                              <View style={styles.uploadingOverlay}>
+                                <View style={styles.whatsappProgressCircle}>
+                                  <ActivityIndicator size="small" color="#FFFFFF" />
+                                  <Text style={styles.uploadingPctText}>{item.upload_progress || 0}%</Text>
+                                </View>
+                                <Text style={styles.uploadingSizeText}>{item.upload_size_text || 'Uploading...'}</Text>
+                              </View>
+                            )}
+
+                            {!isDownloaded && !item.is_optimistic && (
                               <View style={styles.downloadOverlay}>
                                 <TouchableOpacity 
                                   style={styles.downloadCircle} 
                                   activeOpacity={0.8}
-                                  onPress={() => imgUri && downloadImageLocal(item.id, imgUri)}
+                                  onPress={() => downloadImageLocal(item.id, urls[0], 0)}
                                   disabled={isDownloading}
                                 >
                                   {isDownloading ? (
@@ -1485,7 +2051,7 @@ export default function AdminCommunityScreen() {
                         <TouchableOpacity 
                           style={styles.bubbleFileAttachment}
                           activeOpacity={0.7}
-                          disabled={isDownloading && !isMultiSelect}
+                          disabled={(isDownloading || (item.is_optimistic && item.upload_status === 'uploading')) && !isMultiSelect}
                           delayLongPress={200}
                           onLongPress={() => isMultiSelect ? null : enterMultiSelect(String(item.id))}
                           onPress={() => {
@@ -1507,58 +2073,97 @@ export default function AdminCommunityScreen() {
                             }
                           }}
                         >
-                          {isDownloading ? (
-                            <ActivityIndicator size="small" color="#AF2800" style={{ marginRight: 8 }} />
+                          {item.is_optimistic && item.upload_status === 'uploading' ? (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                              <ActivityIndicator size="small" color="#AF2800" style={{ marginRight: 8 }} />
+                              <View style={{ flex: 1 }}>
+                                <Text style={[styles.bubbleFileAttachmentText, { color: Colors.text.primary }]} numberOfLines={1}>
+                                  {docName}
+                                </Text>
+                                <Text style={{ fontSize: 11, color: Colors.accent.primary, fontWeight: '700', marginTop: 2 }}>
+                                  Uploading... {item.upload_progress || 0}% ({item.upload_size_text || ''})
+                                </Text>
+                              </View>
+                            </View>
                           ) : (
-                            <Ionicons 
-                              name={isDownloaded ? "document-text" : "download-outline"} 
-                              size={24} 
-                              color="#AF2800" 
-                              style={{ marginRight: 8 }} 
-                            />
+                            <>
+                              {isDownloading ? (
+                                <ActivityIndicator size="small" color="#AF2800" style={{ marginRight: 8 }} />
+                              ) : (
+                                <Ionicons 
+                                  name={isDownloaded ? "document-text" : "download-outline"} 
+                                  size={24} 
+                                  color="#AF2800" 
+                                  style={{ marginRight: 8 }} 
+                                />
+                              )}
+                              <Text style={[styles.bubbleFileAttachmentText, { color: Colors.text.primary }]} numberOfLines={1}>
+                                {docName}
+                              </Text>
+                              {isDownloaded && !isDownloading && !item.is_optimistic && (
+                                <Ionicons name="checkmark-circle" size={16} color="#2E7D32" style={{ marginLeft: 8 }} />
+                              )}
+                            </>
                           )}
-                           <Text style={[styles.bubbleFileAttachmentText, { color: Colors.text.primary }]} numberOfLines={1}>
-                             {docName}
-                           </Text>
-                           {isDownloaded && !isDownloading && (
-                             <Ionicons name="checkmark-circle" size={16} color="#2E7D32" style={{ marginLeft: 8 }} />
-                           )}
                         </TouchableOpacity>
                       );
                     })() : (
                       item.text !== '[Attached Image]' && !item.text?.startsWith('[Image:') && (
                         <View style={{ minWidth: 160 }}>
-                          <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
-                            {renderTextWithLinks(item.text, '#0066CC')}
-                          </Text>
-                          <LinkPreviewCard text={item.text} isSelf={isSelf} />
+                          {!isLinkOnly && (
+                            <Text style={[styles.messageText, isSelf ? styles.textSelf : styles.textOther]}>
+                              {renderTextWithLinks(item.text, '#0066CC')}
+                            </Text>
+                          )}
+                          <TouchableOpacity
+                            activeOpacity={1}
+                            delayLongPress={200}
+                            onLongPress={() => isMultiSelect ? toggleSelectId(String(item.id)) : deleteMessage(String(item.id))}
+                            onPress={() => isMultiSelect ? toggleSelectId(String(item.id)) : null}
+                          >
+                            <LinkPreviewCard 
+                              text={item.text} 
+                              isSelf={isSelf} 
+                              onLongPress={() => isMultiSelect ? toggleSelectId(String(item.id)) : deleteMessage(String(item.id))}
+                            />
+                          </TouchableOpacity>
                         </View>
                       )
                     )}
 
-                    <Text style={[
-                      styles.timeText, 
-                      isSelf ? styles.timeSelf : styles.timeOther,
-                      isImageAttachment && { 
-                        position: 'absolute', 
-                        bottom: 8, 
-                        right: 8, 
-                        color: '#FFF', 
-                        backgroundColor: 'rgba(0,0,0,0.5)', 
-                        paddingHorizontal: 6, 
-                        paddingVertical: 2, 
-                        borderRadius: 8 
-                      }
-                    ]}>
-                      {formatBubbleTime(item.created_at)}{item.is_edited ? ' • Edited' : ''}
-                    </Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-end', marginTop: 2 }}>
+                      <Text style={[
+                        styles.timeText, 
+                        isSelf ? styles.timeSelf : styles.timeOther,
+                        (isImageAttachment || isLinkOnly) && { 
+                          position: 'absolute', 
+                          bottom: 8, 
+                          right: 8, 
+                          color: '#FFF', 
+                          backgroundColor: 'rgba(0,0,0,0.5)', 
+                          paddingHorizontal: 6, 
+                          paddingVertical: 2, 
+                          borderRadius: 8 
+                        }
+                      ]}>
+                        {formatBubbleTime(item.created_at)}{item.is_edited ? ' • Edited' : ''}
+                      </Text>
+                      {item.is_optimistic && item.upload_status === 'sending' && (
+                        <Ionicons name="time-outline" size={13} color={isSelf ? "rgba(255,255,255,0.7)" : Colors.text.secondary} style={{ marginLeft: 4 }} />
+                      )}
+                    </View>
                   </TouchableOpacity>
                 </View>
               </View>
             );
           }}
         />
-      </ImageBackground>
+            <LinearGradient
+              colors={['rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0.05)']}
+              style={styles.bottomVignette}
+              pointerEvents="none"
+            />
+          </View>
 
         {/* Editing message indicator header */}
         {editingMessageId !== null && (
@@ -1678,18 +2283,42 @@ export default function AdminCommunityScreen() {
           >
             <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 16 }}>
               {/* Row for Preview and Caption Input */}
-              <View style={{ flexDirection: 'row', paddingHorizontal: 16, gap: 16, alignItems: 'flex-start', marginBottom: 20 }}>
-                {selectedImageForCaption && (
-                  <Image 
-                    source={{ uri: selectedImageForCaption.uri }} 
-                    style={{ width: 85, height: 85, borderRadius: 8, backgroundColor: '#F0F0F0', resizeMode: 'cover' }}
-                  />
-                )}
+              <View style={{ flexDirection: 'column', paddingHorizontal: 16, gap: 12, marginBottom: 20 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {selectedMultiImages.length > 0 ? (
+                    selectedMultiImages.map((img, idx) => (
+                      <View key={idx} style={{ position: 'relative' }}>
+                        <Image 
+                          source={{ uri: img.uri }} 
+                          style={{ width: 85, height: 85, borderRadius: 8, backgroundColor: '#F0F0F0', marginRight: 8, resizeMode: 'cover' }}
+                        />
+                        <View style={{
+                          position: 'absolute',
+                          top: 4,
+                          right: 12,
+                          backgroundColor: 'rgba(0,0,0,0.6)',
+                          width: 18,
+                          height: 18,
+                          borderRadius: 9,
+                          justifyContent: 'center',
+                          alignItems: 'center'
+                        }}>
+                          <Text style={{ color: '#FFF', fontSize: 10, fontWeight: '700' }}>{idx + 1}</Text>
+                        </View>
+                      </View>
+                    ))
+                  ) : selectedImageForCaption ? (
+                    <Image 
+                      source={{ uri: selectedImageForCaption.uri }} 
+                      style={{ width: 85, height: 85, borderRadius: 8, backgroundColor: '#F0F0F0', resizeMode: 'cover' }}
+                    />
+                  ) : null}
+                </ScrollView>
                 
                 <TextInput
                   placeholder="Write a caption..."
                   placeholderTextColor={Colors.text.tertiary}
-                  style={{ flex: 1, fontSize: 15, color: Colors.text.primary, minHeight: 85, textAlignVertical: 'top', paddingTop: 4 }}
+                  style={{ width: '100%', fontSize: 15, color: Colors.text.primary, minHeight: 85, textAlignVertical: 'top', paddingTop: 4 }}
                   value={imageCaptionText}
                   onChangeText={setImageCaptionText}
                   multiline
@@ -2120,14 +2749,11 @@ export default function AdminCommunityScreen() {
           <View style={styles.lightboxContainer}>
             {/* Top Header Bar Overlay */}
             {(() => {
-              const currentMsg = imageMessages[currentViewerIndex];
-              if (!currentMsg) return null;
-              const isSelf = currentMsg.author_id === user?.id;
-              const senderName = isSelf ? 'You' : currentMsg.author_name;
-              const formattedTime = formatBubbleTime(currentMsg.created_at);
-              const parsed = extractUrlAndName(currentMsg.text);
-              const imgUri = currentMsg.image_url || parsed?.url;
-              const displayUri = localMediaMap[currentMsg.id] || imgUri;
+              if (!lightboxMessage) return null;
+              const isSelf = lightboxMessage.author_id === user?.id;
+              const senderName = isSelf ? 'You' : lightboxMessage.author_name;
+              const formattedTime = formatBubbleTime(lightboxMessage.created_at);
+              const displayUri = lightboxImages[currentViewerIndex];
 
               return (
                 <View style={styles.lightboxHeader}>
@@ -2160,7 +2786,7 @@ export default function AdminCommunityScreen() {
 
             {/* Swipeable FlatList for Images */}
             <FlatList
-              data={imageMessages}
+              data={lightboxImages}
               horizontal
               pagingEnabled
               scrollEnabled={lightboxScrollEnabled}
@@ -2171,15 +2797,12 @@ export default function AdminCommunityScreen() {
                 offset: screenWidth * index,
                 index,
               })}
-              keyExtractor={(item) => String(item.id)}
+              keyExtractor={(item, index) => String(index)}
               onMomentumScrollEnd={(e) => {
                 const idx = Math.round(e.nativeEvent.contentOffset.x / screenWidth);
                 setCurrentViewerIndex(idx);
               }}
-              renderItem={({ item }) => {
-                const parsed = extractUrlAndName(item.text);
-                const imgUri = item.image_url || parsed?.url;
-                const displayUri = localMediaMap[item.id] || imgUri;
+              renderItem={({ item: displayUri }) => {
                 return (
                   <View style={{ width: screenWidth, height: '100%' }}>
                     {displayUri ? (
@@ -2195,12 +2818,61 @@ export default function AdminCommunityScreen() {
           </View>
         </Modal>
       )}
+
+      {/* Sleek Pure Milk White Compact Delete Confirmation Modal */}
+      {deleteModalConfig && (
+        <Modal visible={deleteModalConfig.visible} transparent animationType="fade" onRequestClose={() => setDeleteModalConfig(null)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 20 }}>
+            <View style={{ width: '100%', maxWidth: 290, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 }}>
+              <View style={{ width: 48, height: 48, borderRadius: 24, backgroundColor: '#FEF2F2', justifyContent: 'center', alignItems: 'center', marginBottom: 12 }}>
+                <Ionicons name="trash-outline" size={24} color="#EF4444" />
+              </View>
+              <Text style={{ fontSize: 16, fontWeight: '800', color: '#111827', textAlign: 'center', marginBottom: 6 }}>{deleteModalConfig.title}</Text>
+              <Text style={{ fontSize: 12, color: '#6B7280', textAlign: 'center', lineHeight: 16, marginBottom: 20 }}>{deleteModalConfig.message}</Text>
+              <View style={{ flexDirection: 'row', gap: 10, width: '100%' }}>
+                <TouchableOpacity 
+                  style={{ flex: 1, height: 40, borderRadius: 12, backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' }}
+                  onPress={() => setDeleteModalConfig(null)}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#374151' }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={{ flex: 1, height: 40, borderRadius: 12, backgroundColor: '#EF4444', justifyContent: 'center', alignItems: 'center' }}
+                  onPress={deleteModalConfig.onConfirm}
+                  activeOpacity={0.7}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: '700', color: '#FFFFFF' }}>Delete</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+      )}
     </SafeAreaView>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  topVignette: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 40,
+    zIndex: 2,
+  },
+  bottomVignette: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 10,
+    zIndex: 2,
+  },
   container: { flex: 1, backgroundColor: Colors.bg.primary },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: Colors.bg.primary },
   header: { 
@@ -2221,7 +2893,32 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     zIndex: 10
   },
-  headerAvatar: { width: 40, height: 40, borderRadius: 20 },
+  headerAvatar3DContainer: {
+    padding: 2,
+    borderRadius: 22,
+    backgroundColor: '#FFF',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    shadowColor: Colors.text.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.12,
+    shadowRadius: 5,
+    elevation: 4,
+  },
+  headerAvatarInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 19,
+    backgroundColor: Colors.bg.secondary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  headerAvatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 18,
+  },
   headerInfo: { marginLeft: 12, flex: 1 },
   headerTitle: { fontSize: 16, fontWeight: '700', color: Colors.text.primary },
   headerSubtitle: { fontSize: 12, color: Colors.text.secondary, fontWeight: '500' },
@@ -2234,9 +2931,9 @@ const styles = StyleSheet.create({
   rowOther: { alignSelf: 'flex-start' },
   bubbleAvatar: { width: 32, height: 32, borderRadius: 16, marginRight: 8 },
   bubble: { 
-    borderRadius: 20, 
-    paddingHorizontal: 16, 
-    paddingVertical: 10, 
+    borderRadius: 16, 
+    paddingHorizontal: 12, 
+    paddingVertical: 8, 
     elevation: 1,
     shadowColor: '#000',
     shadowOpacity: 0.03,
@@ -2256,10 +2953,10 @@ const styles = StyleSheet.create({
     borderColor: Colors.card.border,
     borderWidth: 1
   },
-  authorText: { fontSize: 11, fontWeight: '700', marginBottom: 2 },
+  authorText: { fontSize: 10.5, fontWeight: '700', marginBottom: 2 },
   authorTeacher: { color: '#AF2800' },
   authorStudent: { color: '#7E57C2' },
-  messageText: { fontSize: 14, color: Colors.text.primary, lineHeight: 18, paddingRight: 32 },
+  messageText: { fontSize: 13, color: Colors.text.primary, lineHeight: 17, paddingRight: 32 },
   bubbleImageAttachment: {
     width: 260,
     height: 190,
@@ -2721,6 +3418,39 @@ const styles = StyleSheet.create({
   lightboxImage: {
     width: screenWidth,
     height: '100%',
+  },
+  uploadingOverlay: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  whatsappProgressCircle: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    borderWidth: 2,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 4,
+  },
+  uploadingPctText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 2,
+  },
+  uploadingSizeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+    marginTop: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.65)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
   },
   editingHeader: {
     flexDirection: 'row',

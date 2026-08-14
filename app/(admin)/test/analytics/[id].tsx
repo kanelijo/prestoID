@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, ScrollView, Image, Modal,
+  ActivityIndicator, ScrollView, Image, Modal, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system/legacy';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 
@@ -22,6 +26,8 @@ export default function TestAnalyticsScreen() {
   const [totalStudents, setTotalStudents] = useState(0);
   const [submissions, setSubmissions] = useState<any[]>([]);
   const [questions, setQuestions] = useState<any[]>([]);
+  const [totalMarks, setTotalMarks] = useState<number | null>(null);
+  const [isDownloadingLeaderboard, setIsDownloadingLeaderboard] = useState(false);
 
   useEffect(() => {
     loadAnalytics();
@@ -33,10 +39,11 @@ export default function TestAnalyticsScreen() {
       // 1. Test details
       const { data: test } = await supabase
         .from('tests')
-        .select('title, batch_name, business_id')
+        .select('title, batch_name, business_id, total_marks, questions')
         .eq('id', id)
         .single();
       setTestTitle(test?.title || 'Test Analytics');
+      setTotalMarks(test?.total_marks || null);
 
       // 2. Total enrolled students in this batch/business
       let countQuery = supabase
@@ -149,17 +156,256 @@ export default function TestAnalyticsScreen() {
       setSubmissions(finalSubs);
 
       // 4. Questions for analysis
-      const { data: qs } = await supabase
-        .from('test_questions')
-        .select('id, question_text, question_image_url, correct_option, options')
-        .eq('test_id', id)
-        .order('created_at', { ascending: true });
+      let qs: any[] = [];
+      if (test?.questions && Array.isArray(test.questions) && test.questions.length > 0) {
+        qs = test.questions;
+      } else {
+        const { data: legacyQs } = await supabase
+          .from('test_questions')
+          .select('id, question_text, question_image_url, correct_option, options')
+          .eq('test_id', id)
+          .order('created_at', { ascending: true });
+        qs = legacyQs || [];
+      }
 
-      setQuestions(qs || []);
+      setQuestions(qs);
     } catch (err) {
       console.warn('Analytics load error:', err);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const downloadLeaderboardPDF = async () => {
+    try {
+      setIsDownloadingLeaderboard(true);
+      const isSharingAvail = await Sharing.isAvailableAsync();
+      if (!isSharingAvail) {
+        Alert.alert('Error', 'Sharing is not available on this device');
+        return;
+      }
+
+      if (!submissions || submissions.length === 0) {
+        Alert.alert('Error', 'No student submissions found to export.');
+        return;
+      }
+
+      const optLabels = ['A', 'B', 'C', 'D'];
+      const dateStr = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      
+      const { user, businessName, avatarUrl: logoUrl } = useAuthStore.getState();
+      const contactInfo = user?.phone || user?.email || 'N/A';
+
+      // 1. Generate Leaderboard Table Rows (Top 20)
+      const top20Submissions = submissions.slice(0, 20);
+      const leaderboardRowsHTML = top20Submissions.map((sub, idx) => {
+        const studentName = sub.students?.name || 'Unknown Student';
+        const batchName = sub.students?.batch_name || 'General';
+        const photoUrl = sub.students?.avatar_url || sub.students?.photo_url || '';
+        const initial = studentName.charAt(0).toUpperCase();
+        const avatarHTML = photoUrl 
+          ? `<img src="${photoUrl}" class="student-avatar" onerror="this.style.display='none'; this.nextElementSibling.style.display='inline-flex';" /><div class="student-avatar-initial" style="display: none;">${initial}</div>`
+          : `<div class="student-avatar-initial">${initial}</div>`;
+        
+        let correctCount = 0;
+        let wrongCount = 0;
+        if (sub.answers) {
+          questions.forEach(q => {
+            const ans = sub.answers[q.id];
+            if (ans !== undefined && ans !== null && ans !== -1) {
+              if (ans === q.correct_option) correctCount++;
+              else wrongCount++;
+            }
+          });
+        }
+
+        const maxScore = totalMarks || (questions.length * 5) || 100;
+
+        return `
+          <tr>
+            <td><strong>#${idx + 1}</strong></td>
+            <td>
+              <div class="student-cell">
+                ${avatarHTML}
+                <strong>${studentName}</strong>
+              </div>
+            </td>
+            <td>${batchName}</td>
+            <td>${correctCount}</td>
+            <td>${wrongCount}</td>
+            <td><strong>${sub.score ?? 0} / ${maxScore}</strong></td>
+          </tr>
+        `;
+      }).join('');
+
+      // 2. Generate Highlighted Questions HTML (2-column format)
+      const questionsHTML = questions.map((q, idx) => {
+        const hasLongOption = q.options?.some((opt: string) => opt.length > 25) || false;
+        const optionWidth = hasLongOption ? '100%' : '48%';
+
+        const optionsHTML = (q.options || ['A', 'B', 'C', 'D']).map((opt: string, oIdx: number) => {
+          const isCorrectOpt = q.correct_option === oIdx;
+          return `
+            <span class="option-item ${isCorrectOpt ? 'option-correct' : ''}" style="width: ${optionWidth};">
+              <strong>${optLabels[oIdx]})</strong> ${opt}
+            </span>
+          `;
+        }).join('');
+
+        return `
+          <div class="q-card">
+            <div class="q-num">Question ${idx + 1}</div>
+            <div class="q-text">${q.question_text}</div>
+            ${q.question_image_url ? `<img src="${q.question_image_url}" style="max-width:100%; height:auto; margin-bottom:8px; display:block; border-radius:4px;" />` : ''}
+            <div class="options-row">
+              ${optionsHTML}
+            </div>
+            ${q.explanation ? `<div class="explanation"><strong>Explanation:</strong> ${q.explanation}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+
+      const htmlContent = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            @page {
+              size: A4;
+              margin: 20mm 15mm 20mm 15mm;
+            }
+            body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; padding: 0; color: #333; margin: 0; position: relative; min-height: 100%; }
+            .header-container { display: flex; align-items: center; justify-content: space-between; border-bottom: 2px solid #AF2800; padding-bottom: 12px; margin-bottom: 16px; }
+            .logo-placeholder { width: 45px; height: 45px; border-radius: 22px; object-fit: cover; }
+            .logo-text-placeholder { width: 45px; height: 45px; border-radius: 22px; background-color: #AF2800; color: white; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; }
+            .header-center { flex: 1; text-align: center; margin: 0 16px; }
+            .coaching-title { font-size: 20px; font-weight: bold; color: #AF2800; margin: 0; text-transform: uppercase; }
+            .header-right { text-align: right; font-size: 10px; color: #666; line-height: 1.4; max-width: 200px; }
+            
+            .test-banner-wrapper { text-align: center; margin-bottom: 20px; }
+            .test-banner { display: inline-block; background-color: #111; color: #fff; font-size: 11px; font-weight: bold; padding: 4px 14px; border-radius: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+            
+            .leaderboard-title { font-size: 16px; font-weight: bold; text-align: center; margin-bottom: 16px; color: #AF2800; text-transform: uppercase; }
+            table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 12px; }
+            th { background-color: #F3F4F6; color: #374151; font-weight: bold; padding: 10px; border-bottom: 2px solid #E5E7EB; text-align: left; }
+            td { padding: 10px; border-bottom: 1px solid #E5E7EB; color: #4B5563; }
+            tr:nth-child(even) td { background-color: #F9FAFB; }
+
+            .student-cell { display: inline-flex; align-items: center; gap: 8px; }
+            .student-avatar { width: 24px; height: 24px; border-radius: 12px; object-fit: cover; border: 1px solid #ddd; }
+            .student-avatar-initial { width: 24px; height: 24px; border-radius: 12px; background-color: #AF2800; color: white; display: inline-flex; align-items: center; justify-content: center; font-weight: bold; font-size: 10px; }
+            
+            .questions-wrapper {
+              column-count: 2;
+              column-gap: 24px;
+            }
+            .q-card {
+              break-inside: avoid;
+              page-break-inside: avoid;
+              margin-bottom: 16px;
+              border-bottom: 1px solid #f0f0f0;
+              padding-bottom: 10px;
+            }
+            .q-text { font-size: 12px; font-weight: bold; margin-bottom: 6px; line-height: 1.4; }
+            .q-num { font-weight: bold; color: #AF2800; font-size: 10px; margin-bottom: 4px; }
+            .options-row { display: flex; flex-direction: row; flex-wrap: wrap; margin-top: 4px; justify-content: space-between; row-gap: 6px; }
+            .option-item { font-size: 11px; color: #333; box-sizing: border-box; }
+            .option-correct { color: #EF4444; font-weight: bold; }
+            .explanation { font-size: 10px; color: #666; font-style: italic; margin-top: 6px; padding-top: 4px; border-top: 1px dashed #eee; }
+            
+            .page-break {
+              page-break-before: always;
+              break-before: page;
+            }
+            
+            .footer-watermark { position: fixed; bottom: -12mm; left: 0; right: 0; text-align: center; font-size: 9px; color: #9CA3AF; font-weight: bold; border-top: 1px solid #E5E7EB; padding-top: 6px; }
+          </style>
+        </head>
+        <body>
+          <div class="header-container">
+            ${logoUrl 
+              ? `<img src="${logoUrl}" class="logo-placeholder" />` 
+              : `<div class="logo-text-placeholder">${(businessName || 'Z').charAt(0).toUpperCase()}</div>`
+            }
+            <div class="header-center">
+              <div class="coaching-title">${businessName || 'Zenza Academy'}</div>
+            </div>
+            <div class="header-right">
+              <strong>Mob:</strong> ${contactInfo}<br/>
+              <strong>Date:</strong> ${dateStr}
+            </div>
+          </div>
+          
+          <div class="test-banner-wrapper">
+            <div class="test-banner">LEADERBOARD REPORT - ${testTitle}</div>
+          </div>
+          
+          <div class="leaderboard-title">Top Performers (Top 20)</div>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Student Name</th>
+                <th>Batch</th>
+                <th>Correct</th>
+                <th>Wrong</th>
+                <th>Score</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${leaderboardRowsHTML}
+            </tbody>
+          </table>
+          
+          <div class="page-break">
+            <div class="header-container">
+              ${logoUrl 
+                ? `<img src="${logoUrl}" class="logo-placeholder" />` 
+                : `<div class="logo-text-placeholder">${(businessName || 'Z').charAt(0).toUpperCase()}</div>`
+              }
+              <div class="header-center">
+                <div class="coaching-title">${businessName || 'Zenza Academy'}</div>
+              </div>
+              <div class="header-right">
+                <strong>Mob:</strong> ${contactInfo}<br/>
+                <strong>Date:</strong> ${dateStr}
+              </div>
+            </div>
+            
+            <div class="test-banner-wrapper">
+              <div class="test-banner">TEST QUESTIONS & ANALYSIS</div>
+            </div>
+            
+            <div class="questions-wrapper">
+              ${questionsHTML}
+            </div>
+          </div>
+
+          <div class="footer-watermark">Zenza Learning Platform</div>
+        </body>
+        </html>
+      `;
+
+      // Render to PDF
+      const { uri } = await Print.printToFileAsync({ html: htmlContent });
+      
+      // Share/Save PDF
+      const pdfName = `${(testTitle || 'Test_Leaderboard').replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '')}_Leaderboard.pdf`;
+      const targetUri = `${FileSystem.documentDirectory}${pdfName}`;
+      await FileSystem.moveAsync({ from: uri, to: targetUri });
+      
+      await Sharing.shareAsync(targetUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Download Leaderboard PDF',
+        UTI: 'com.adobe.pdf'
+      });
+    } catch (err: any) {
+      console.warn('Failed to download leaderboard PDF:', err);
+      Alert.alert('Error', err.message || 'Failed to download leaderboard PDF.');
+    } finally {
+      setIsDownloadingLeaderboard(false);
     }
   };
 
@@ -355,6 +601,41 @@ export default function TestAnalyticsScreen() {
           renderItem={(props) => props.index < 20 ? renderLeaderRow(props) : renderParticipantRow(props)}
           keyExtractor={item => item.id}
           contentContainerStyle={styles.listContent}
+          ListHeaderComponent={
+            submissions && submissions.length > 0 ? (
+              <TouchableOpacity 
+                onPress={downloadLeaderboardPDF}
+                disabled={isDownloadingLeaderboard}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: '#FFF5F2',
+                  borderWidth: 1,
+                  borderColor: '#FFDDDF',
+                  borderRadius: 10,
+                  paddingVertical: 12,
+                  paddingHorizontal: 16,
+                  marginHorizontal: 16,
+                  marginVertical: 12,
+                  shadowColor: '#AF2800',
+                  shadowOffset: { width: 0, height: 2 },
+                  shadowOpacity: 0.05,
+                  shadowRadius: 4,
+                  elevation: 2,
+                }}
+              >
+                {isDownloadingLeaderboard ? (
+                  <ActivityIndicator size="small" color="#AF2800" style={{ marginRight: 8 }} />
+                ) : (
+                  <Ionicons name="trophy-outline" size={20} color="#AF2800" style={{ marginRight: 8 }} />
+                )}
+                <Text style={{ color: '#AF2800', fontWeight: 'bold', fontSize: 14 }}>
+                  {isDownloadingLeaderboard ? 'Generating PDF...' : '🏆 Download Top 20 Leaderboard PDF'}
+                </Text>
+              </TouchableOpacity>
+            ) : null
+          }
           ListEmptyComponent={<Text style={styles.emptyText}>No submissions yet</Text>}
         />
       )}
