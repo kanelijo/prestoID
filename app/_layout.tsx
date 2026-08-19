@@ -69,27 +69,10 @@ if (TaskManager) {
 
 import { initializeZenzaStorage } from '@/lib/storage';
 import { Platform } from 'react-native';
-import * as NavigationBar from 'expo-navigation-bar';
 
 export default function RootLayout() {
   const router = useRouter();
   const { user, businessId, studentData, role } = useAuthStore();
-
-  // Hide Android system navigation bar (immersive mode)
-  useEffect(() => {
-    if (Platform.OS === 'android') {
-      const timer = setTimeout(async () => {
-        try {
-          await NavigationBar.setPositionAsync('absolute');
-          await NavigationBar.setVisibilityAsync('hidden');
-          await NavigationBar.setBehaviorAsync('overlay-swipe');
-        } catch (e) {
-          console.warn('[NavigationBar] Failed to set immersive mode:', e);
-        }
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, []);
 
   // Global Presence: Track online status whenever user is in the app
   useEffect(() => {

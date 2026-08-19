@@ -805,11 +805,12 @@ export default function PeerConversationsScreen() {
         </View>
       ) : (
         <View style={styles.header}>
-          {activeSegment === 'directory' && (
-            <TouchableOpacity onPress={() => setActiveSegment('chats')} style={styles.headerBackBtn}>
-              <Ionicons name="arrow-back" size={24} color={Colors.text.primary} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity 
+            onPress={() => activeSegment === 'directory' ? setActiveSegment('chats') : router.replace('/(student)/id-card')} 
+            style={styles.headerBackBtn}
+          >
+            <Ionicons name="arrow-back" size={24} color={Colors.text.primary} />
+          </TouchableOpacity>
           <Text style={styles.headerTitle}>
             {activeSegment === 'directory' ? 'Peer Directory' : 'Coaching Peers'}
           </Text>
@@ -931,6 +932,7 @@ export default function PeerConversationsScreen() {
               renderItem={renderChatPeerRow}
               keyExtractor={item => item.id}
               scrollEnabled={false}
+              extraData={messagesByPeer}
               contentContainerStyle={{ gap: 10 }}
             />
           )}

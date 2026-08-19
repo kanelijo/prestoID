@@ -172,8 +172,8 @@ export default function StudentLayout() {
         tabBarStyle: [
           styles.tabBar,
           {
-            height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
-            paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
+            height: Platform.OS === 'android' ? 64 + Math.max(insets.bottom, 24) : 64 + insets.bottom,
+            paddingBottom: Platform.OS === 'android' ? Math.max(insets.bottom, 24) : (insets.bottom > 0 ? insets.bottom - 4 : 8),
           },
         ],
         tabBarShowLabel: false,

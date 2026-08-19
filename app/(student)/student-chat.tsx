@@ -904,9 +904,9 @@ export default function PeerChatScreen() {
         return { name: 'checkmark-done' as const, color: '#FFDAD2' }; // Brand coral/peach read ticks
       }
       if (item.is_delivered) {
-        return { name: 'checkmark-done' as const, color: '#E5E7EB' }; // Gray delivered ticks
+        return { name: 'checkmark-done' as const, color: '#9CA3AF' }; // Gray delivered ticks
       }
-      return { name: 'checkmark' as const, color: '#E5E7EB' }; // Gray sent tick
+      return { name: 'checkmark' as const, color: '#9CA3AF' }; // Gray sent tick
     };
 
     const ticks = getTickDetails();
