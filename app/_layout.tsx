@@ -1,3 +1,4 @@
+import 'react-native-gesture-handler';
 import { useEffect, useRef } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -12,6 +13,20 @@ import { usePrefetchStore } from '@/stores/usePrefetchStore';
 import { supabase } from '@/lib/supabase';
 import CustomAlertContainer from '@/components/CustomAlert';
 import { savePeerMessageToLocal, runBackgroundCacheCleanup } from '@/lib/localDb';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+
+try {
+  GoogleSignin.configure({
+    webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
+    offlineAccess: true,
+    scopes: ['https://www.googleapis.com/auth/drive.appdata'],
+  });
+} catch (e) {
+  console.warn('GoogleSignin config error in _layout.tsx:', e);
+}
+
+
 
 // Safely import native modules
 let TaskManager: any;
@@ -53,10 +68,28 @@ if (TaskManager) {
 }
 
 import { initializeZenzaStorage } from '@/lib/storage';
+import { Platform } from 'react-native';
+import * as NavigationBar from 'expo-navigation-bar';
 
 export default function RootLayout() {
   const router = useRouter();
   const { user, businessId, studentData, role } = useAuthStore();
+
+  // Hide Android system navigation bar (immersive mode)
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      const timer = setTimeout(async () => {
+        try {
+          await NavigationBar.setPositionAsync('absolute');
+          await NavigationBar.setVisibilityAsync('hidden');
+          await NavigationBar.setBehaviorAsync('overlay-swipe');
+        } catch (e) {
+          console.warn('[NavigationBar] Failed to set immersive mode:', e);
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   // Global Presence: Track online status whenever user is in the app
   useEffect(() => {
@@ -80,6 +113,14 @@ export default function RootLayout() {
     });
 
     presenceChannel
+      .on('presence', { event: 'join' }, ({ key }: any) => {
+        const current = useAuthStore.getState().onlineUserIds;
+        if (!current.includes(key)) {
+          useAuthStore.getState().setOnlineUserIds([...current, key]);
+        }
+        const existing = useAuthStore.getState().onlinePresence;
+        useAuthStore.getState().setOnlinePresence({ ...existing, [key]: new Date().toISOString() });
+      })
       .on('presence', { event: 'sync' }, () => {
         const state = presenceChannel.presenceState();
         const activeIds: string[] = [];
@@ -296,22 +337,24 @@ export default function RootLayout() {
   }, [router]);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: Colors.bg.primary },
-          animation: 'slide_from_right',
-        }}
-      >
-        <Stack.Screen name="index" />
-        <Stack.Screen name="onboarding" />
-        <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-        <Stack.Screen name="(student)" options={{ headerShown: false }} />
-        <Stack.Screen name="(admin)" options={{ headerShown: false }} />
-      </Stack>
-      <CustomAlertContainer />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <StatusBar style="dark" />
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: Colors.bg.primary },
+            animation: 'slide_from_right',
+          }}
+        >
+          <Stack.Screen name="index" />
+          <Stack.Screen name="onboarding" />
+          <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+          <Stack.Screen name="(student)" options={{ headerShown: false }} />
+          <Stack.Screen name="(admin)" options={{ headerShown: false }} />
+        </Stack>
+        <CustomAlertContainer />
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }

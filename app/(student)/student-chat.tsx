@@ -12,15 +12,12 @@ import {
   Animated,
   Modal,
   Alert,
+  BackHandler
 } from 'react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-let Audio: any = null;
-try {
-  Audio = require('expo-av').Audio;
-} catch (e) {
-  console.log('expo-av native module missing, sounds will be disabled');
-}
+import { useAudioPlayer } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,6 +35,7 @@ import {
   updatePeerMessageReadStatusInLocal,
   deletePeerMessageFromLocal,
   markPeerMessagesAsReadInLocal,
+  markPeerMessageDelivered,
 } from '@/lib/localDb';
 
 interface Message {
@@ -64,15 +62,23 @@ interface PeerProfile {
   last_seen_at?: string;
 }
 
+const EMPTY_ARRAY: any[] = [];
+
 export default function PeerChatScreen() {
+  const chatNotiPlayer = useAudioPlayer(require('@/assets/audio/chat_noti.mp3'));
+  const tickPlayer = useAudioPlayer(require('@/assets/audio/tick.mp3'));
+  const params = useLocalSearchParams();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { peerId } = useLocalSearchParams<{ peerId: string }>();
   const { user, onlineUserIds, studentData } = useAuthStore();
   const flatListRef = useRef<FlatList>(null);
   const channelRef = useRef<any>(null);
+  const swipeableRefs = useRef<Map<string, any>>(new Map());
+  const pendingReadReceipts = useRef<Set<string>>(new Set());
+  const pendingDeliveryReceipts = useRef<Set<string>>(new Set());
 
-  const storeMessages = useChatStore((state) => state.messagesByPeer[peerId as string] || []);
+  const storeMessages = useChatStore((state) => state.messagesByPeer[peerId as string] || EMPTY_ARRAY);
   const setStoreMessages = useChatStore((state) => state.setMessages);
   const messages = storeMessages;
   
@@ -101,40 +107,20 @@ export default function PeerChatScreen() {
   const [isBlocked, setIsBlocked] = useState(false);
   const [hasBlockedMe, setHasBlockedMe] = useState(false);
 
-  const playChatSound = async () => {
-    if (!Audio) return;
-    try {
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false, shouldRouteThroughEarpiece: false });
-      const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/audio/ChatNoti.mp3')
-      );
-      await sound.playAsync();
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
-      });
-    } catch (e) {
-      console.log('Failed to play chat sound', e);
-    }
+  const playChatSound = () => {
+    if (chatNotiPlayer) chatNotiPlayer.play();
   };
 
-  const playTickSound = async () => {
-    if (!Audio) return;
-    try {
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: false, shouldRouteThroughEarpiece: false });
-      const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/audio/tick.mp3')
-      );
-      await sound.playAsync();
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) sound.unloadAsync();
-      });
-    } catch (e) {
-      console.log('Failed to play tick sound', e);
-    }
+  const playTickSound = () => {
+    if (tickPlayer) tickPlayer.play();
   };
 
-  // Selected message for action sheet/deletion
-  const [selectedMsgId, setSelectedMsgId] = useState<number | string | null>(null);
+  // Message Selection & Menu State
+  const [selectedMsgIds, setSelectedMsgIds] = useState<(number | string)[]>([]);
+  const isSelectionMode = selectedMsgIds.length > 0;
+
+  // Header Menu State
+  const [isHeaderMenuVisible, setIsHeaderMenuVisible] = useState(false);
 
   // Presence status
   const [isPeerInChatRoom, setIsPeerInChatRoom] = useState(false);
@@ -188,7 +174,42 @@ export default function PeerChatScreen() {
       });
     channelRef.current = channel;
 
+    const handleBackPress = () => {
+      router.replace('/(student)/peers');
+      return true;
+    };
+    const backSub = BackHandler.addEventListener('hardwareBackPress', handleBackPress);
+
     channel
+      .on(
+        'broadcast',
+        { event: 'new_message' },
+        (payload) => {
+          const newMsg = payload.payload;
+          
+          if (newMsg.sender_id === peerId) {
+            const readMsg = { ...newMsg, is_read: true, delivered: true };
+            savePeerMessageToLocal(readMsg);
+            playChatSound();
+            
+            channel.send({ type: 'broadcast', event: 'read_receipt', payload: { messageId: newMsg.id } });
+            channel.send({ type: 'broadcast', event: 'delivery_receipt', payload: { messageId: newMsg.id } });
+            
+            supabase.from('student_messages').insert([
+              { sender_id: user.id, receiver_id: peerId, text: `__DELIVERED__:${newMsg.id}` },
+              { sender_id: user.id, receiver_id: peerId, text: `__READ_RECEIPT__:${newMsg.id}` }
+            ]).then();
+            
+            supabase.from('student_messages').delete().eq('id', newMsg.id).then();
+          }
+
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [...prev, { ...newMsg, is_read: newMsg.sender_id === peerId ? true : newMsg.is_read }];
+          });
+          setTimeout(() => { flatListRef.current?.scrollToEnd({ animated: true }); }, 100);
+        }
+      )
       .on(
         'postgres_changes',
         {
@@ -215,7 +236,7 @@ export default function PeerChatScreen() {
 
             if (newMsg.text && newMsg.text.startsWith('__DELIVERED__:') && newMsg.receiver_id === user.id) {
               const delMsgId = newMsg.text.split(':')[1];
-              const { markPeerMessageDelivered } = require('@/lib/localDb');
+
               markPeerMessageDelivered(delMsgId);
               setMessages((prev) =>
                 prev.map((msg) => (String(msg.id) === String(delMsgId) ? { ...msg, is_delivered: true } : msg))
@@ -226,7 +247,7 @@ export default function PeerChatScreen() {
 
             if (newMsg.text && newMsg.text.startsWith('__DELETED_EVERYONE__:') && newMsg.receiver_id === user.id) {
               const delMsgId = newMsg.text.split(':')[1];
-              const { deletePeerMessageFromLocal } = require('@/lib/localDb');
+
               deletePeerMessageFromLocal(delMsgId, true);
               setMessages((prev) =>
                 prev.map((msg) => (String(msg.id) === String(delMsgId) ? { ...msg, is_deleted_for_everyone: true } : msg))
@@ -298,24 +319,25 @@ export default function PeerChatScreen() {
       )
       .on('broadcast', { event: 'read_receipt' }, (payload) => {
         const { messageId } = payload.payload;
+        pendingReadReceipts.current.add(String(messageId));
         // Update local SQLite
         updatePeerMessageReadStatusInLocal(messageId, true);
         // Update UI
         setMessages((prev) =>
-          prev.map((msg) => (msg.id === messageId ? { ...msg, is_read: true } : msg))
+          prev.map((msg) => (String(msg.id) === String(messageId) ? { ...msg, is_read: true } : msg))
         );
       })
       .on('broadcast', { event: 'delivery_receipt' }, (payload) => {
         const { messageId } = payload.payload;
-        const { markPeerMessageDelivered } = require('@/lib/localDb');
+        pendingDeliveryReceipts.current.add(String(messageId));
         markPeerMessageDelivered(messageId);
         setMessages((prev) =>
-          prev.map((msg) => (msg.id === messageId ? { ...msg, is_delivered: true } : msg))
+          prev.map((msg) => (String(msg.id) === String(messageId) ? { ...msg, is_delivered: true } : msg))
         );
       })
       .on('broadcast', { event: 'message_deleted_everyone' }, (payload) => {
         const { messageId } = payload.payload;
-        const { deletePeerMessageFromLocal } = require('@/lib/localDb');
+
         deletePeerMessageFromLocal(messageId, true);
         setMessages((prev) =>
           prev.map((msg) => (msg.id === messageId ? { ...msg, is_deleted_for_everyone: true } : msg))
@@ -329,10 +351,26 @@ export default function PeerChatScreen() {
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           await channel.track({ status: 'active_chat', user_id: user.id });
+
+          // Catch up and broadcast read receipts for anything that was unread on mount
+          const localMsgs = useChatStore.getState().messagesByPeer[peerId] || [];
+          const unreadLocalMsgs = localMsgs.filter((m) => m.sender_id === peerId && !m.is_read);
+          unreadLocalMsgs.forEach((m) => {
+            channel.send({
+              type: 'broadcast',
+              event: 'read_receipt',
+              payload: { messageId: m.id }
+            });
+          });
         }
       });
 
     return () => {
+      backSub.remove();
+      markPeerMessagesAsReadInLocal(peerId, user.id);
+      setMessages((prev) => prev.map((m) => (m.sender_id === peerId ? { ...m, is_read: true } : m)));
+      useNotificationStore.getState().fetchPeerUnreadCount(user.id);
+      
       setCurrentActiveScreen('');
       setCurrentActivePeerId('');
       supabase.removeChannel(channel);
@@ -442,7 +480,8 @@ export default function PeerChatScreen() {
 
       if (error) throw error;
 
-      const { data: profData } = await supabase
+      // Fetch the REAL Expo push token from the profiles table
+      const { data: profileData } = await supabase
         .from('profiles')
         .select('push_token')
         .eq('id', peerId)
@@ -451,7 +490,7 @@ export default function PeerChatScreen() {
       if (data) {
         setPeerProfile({
           ...data,
-          push_token: profData?.push_token || undefined
+          push_token: profileData?.push_token || undefined
         } as PeerProfile);
       }
       
@@ -487,7 +526,7 @@ export default function PeerChatScreen() {
       setIsLoading(false);
 
       // Trigger Canva animation overlay on first open only
-      const welcomeShownKey = `@welcome_shown_${peerId}`;
+      const welcomeShownKey = `@welcome_shown_global`;
       AsyncStorage.getItem(welcomeShownKey).then((val) => {
         if (!val) {
           setShowWelcome(true);
@@ -503,8 +542,8 @@ export default function PeerChatScreen() {
     }
 
     try {
-      // 1. Fetch cached messages from Global RAM Store (No SQLite queries needed on mount!)
-      const localMsgs = useChatStore.getState().messagesByPeer[peerId] || [];
+      // 1. Fetch cached messages from SQLite
+      const localMsgs = getPeerMessagesFromLocal(user.id, peerId);
       
       // Send read receipts to Supabase for any unread messages we had from this peer in SQLite
       const unreadLocalMsgs = localMsgs.filter((m) => m.sender_id === peerId && !m.is_read);
@@ -546,7 +585,7 @@ export default function PeerChatScreen() {
 
           if (msg.text && msg.text.startsWith('__DELIVERED__:') && msg.receiver_id === user.id) {
             const delMsgId = msg.text.split(':')[1];
-            const { markPeerMessageDelivered } = require('@/lib/localDb');
+
             markPeerMessageDelivered(delMsgId);
             msgIdsToDelete.push(msg.id);
             continue;
@@ -612,7 +651,7 @@ export default function PeerChatScreen() {
       }
 
       // If opening chat for the first time (0 history messages) trigger Canva animation overlay only once
-      const welcomeShownKey = `@welcome_shown_${peerId}`;
+      const welcomeShownKey = `@welcome_shown_global`;
       const welcomeShown = await AsyncStorage.getItem(welcomeShownKey);
       if (!welcomeShown && localMsgs.length === 0 && (!data || data.length === 0)) {
         setShowWelcome(true);
@@ -648,6 +687,9 @@ export default function PeerChatScreen() {
       reply_to_id: replyingToId ? String(replyingToId) : undefined,
     };
     
+    // Capture reply ID before clearing state
+    const capturedReplyToId = replyingToId ? String(replyingToId) : null;
+
     // Clear reply state immediately
     setReplyingToId(null);
 
@@ -702,11 +744,24 @@ export default function PeerChatScreen() {
       if (confirmedMsg) {
         // First delete optimistic temp message from SQLite, then save database-confirmed one
         deletePeerMessageFromLocal(tempId);
-        savePeerMessageToLocal({ ...confirmedMsg, is_read: isPeerInChatRoom, delivered: isPeerInChatRoom });
+        
+        const isReadByReceipt = pendingReadReceipts.current.has(String(confirmedMsg.id));
+        const isDeliveredByReceipt = pendingDeliveryReceipts.current.has(String(confirmedMsg.id));
+        const finalIsRead = isPeerInChatRoom || isReadByReceipt;
+        const finalIsDelivered = isPeerInChatRoom || isDeliveredByReceipt || isReadByReceipt;
+
+        savePeerMessageToLocal({ ...confirmedMsg, is_read: finalIsRead, delivered: finalIsDelivered });
 
         setMessages((prev) =>
-          prev.map((m) => (m.id === tempId ? { ...m, id: confirmedMsg.id, created_at: confirmedMsg.created_at, is_read: isPeerInChatRoom, is_delivered: isPeerInChatRoom } : m))
+          prev.map((m) => (m.id === tempId ? { ...m, id: confirmedMsg.id, created_at: confirmedMsg.created_at, is_read: finalIsRead, is_delivered: finalIsDelivered } : m))
         );
+        
+        // Broadcast the real message to the peer for instant display
+        channelRef.current?.send({
+          type: 'broadcast',
+          event: 'new_message',
+          payload: confirmedMsg
+        });
       } else {
         // Keep the optimistic message in SQLite and UI if select RLS blocks reading it back
         savePeerMessageToLocal({ ...optimisticMsg, id: tempId, is_read: isPeerInChatRoom, delivered: isPeerInChatRoom });
@@ -745,12 +800,28 @@ export default function PeerChatScreen() {
     try {
       const d = new Date(dateString);
       let hours = d.getHours();
-      const minutes = d.getMinutes();
+      let minutes = d.getMinutes();
       const ampm = hours >= 12 ? 'PM' : 'AM';
       hours = hours % 12;
       hours = hours ? hours : 12;
-      const minStr = minutes < 10 ? '0' + minutes : minutes;
-      return `${hours}:${minStr} ${ampm}`;
+      const mins = minutes < 10 ? '0' + minutes : minutes;
+      return `${hours}:${mins} ${ampm}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const formatDateHeader = (dateString: string) => {
+    if (!dateString) return '';
+    try {
+      const d = new Date(dateString);
+      const today = new Date();
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      
+      if (d.toDateString() === today.toDateString()) return 'Today';
+      if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     } catch {
       return '';
     }
@@ -790,42 +861,41 @@ export default function PeerChatScreen() {
     }
   };
 
-  const handleDeleteMessage = async (forEveryone: boolean = false) => {
-    if (selectedMsgId === null) return;
-    try {
-      const { deletePeerMessageFromLocal } = require('@/lib/localDb');
-      deletePeerMessageFromLocal(selectedMsgId, forEveryone);
-      
-      if (forEveryone) {
-        setMessages((prev) => prev.map((m) => m.id === selectedMsgId ? { ...m, is_deleted_for_everyone: true } : m));
-        channelRef.current?.send({
-          type: 'broadcast',
-          event: 'message_deleted_everyone',
-          payload: { messageId: selectedMsgId }
-        });
-        // Also send a DB receipt in case they are offline
-        supabase.from('student_messages').insert({
-          sender_id: user?.id,
-          receiver_id: peerId,
-          text: `__DELETED_EVERYONE__:${selectedMsgId}`
-        }).then();
-      } else {
-        setMessages((prev) => prev.map((m) => m.id === selectedMsgId ? { ...m, is_deleted_for_me: true } : m));
-      }
-      
-      await supabase.from('student_messages').delete().eq('id', selectedMsgId);
-    } catch (e) {
-      console.warn('Failed to delete message:', e);
-    } finally {
-      setSelectedMsgId(null);
-    }
+  const handleDeleteMessages = async (forEveryone: boolean) => {
+    if (selectedMsgIds.length === 0) return;
+    
+    Alert.alert(
+      forEveryone ? "Delete for everyone?" : "Delete for me?",
+      "Are you sure you want to delete selected messages?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: async () => {
+            const idsToDelete = [...selectedMsgIds];
+            setSelectedMsgIds([]);
+            
+            for (const msgId of idsToDelete) {
+              if (!forEveryone) {
+                deletePeerMessageFromLocal(msgId, false);
+                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, is_deleted_for_me: true } : m));
+              } else {
+                deletePeerMessageFromLocal(msgId, true);
+                setMessages((prev) => prev.map((m) => m.id === msgId ? { ...m, is_deleted_for_everyone: true } : m));
+                if (peerProfile?.push_token) {
+                  // Using top-level imported sendPushNotification
+                  sendPushNotification([peerProfile.push_token], '', `__DELETED_EVERYONE__:${msgId}`, { screen: 'chat' }, 0, CHANNELS.chat).catch(() => {});
+                }
+                await supabase.from('student_messages').delete().eq('id', msgId);
+              }
+            }
+        }}
+      ]
+    );
   };
 
-  const renderMessageBubble = ({ item }: { item: Message }) => {
+  const renderMessageBubble = ({ item, index }: { item: Message, index: number }) => {
     if (item.is_deleted_for_me) return null;
 
     const isMe = item.sender_id === user?.id;
-    const isSelected = selectedMsgId === item.id;
     const isDeletedEverywhere = item.is_deleted_for_everyone;
 
     const getTickDetails = () => {
@@ -840,52 +910,127 @@ export default function PeerChatScreen() {
     };
 
     const ticks = getTickDetails();
+    const isSelected = selectedMsgIds.includes(item.id);
 
-    const handleLongPress = () => {
-      if (isDeletedEverywhere) return; // Cannot select deleted messages
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      setSelectedMsgId(item.id);
+    const handlePress = () => {
+      if (isSelectionMode) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        if (isSelected) {
+          setSelectedMsgIds(prev => prev.filter(id => id !== item.id));
+        } else {
+          setSelectedMsgIds(prev => [...prev, item.id]);
+        }
+      }
     };
 
+    const handleLongPress = () => {
+      if (isDeletedEverywhere) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      if (!isSelected) {
+        setSelectedMsgIds(prev => [...prev, item.id]);
+      }
+    };
+
+    const renderRightActions = () => {
+      if (isDeletedEverywhere) return null;
+      return (
+        <View style={{ width: 60, justifyContent: 'center', alignItems: 'center' }}>
+          <Ionicons name="arrow-undo-circle" size={32} color="#1F2937" opacity={0.6} />
+        </View>
+      );
+    };
+
+    const previousMessage = displayedMessages[index - 1];
+    let showDateHeader = false;
+    if (!previousMessage) {
+      showDateHeader = true;
+    } else {
+      const currentDate = new Date(item.created_at).toDateString();
+      const previousDate = new Date(previousMessage.created_at).toDateString();
+      if (currentDate !== previousDate) {
+        showDateHeader = true;
+      }
+    }
+
     return (
-      <View style={[styles.messageRow, isMe ? styles.messageRowRight : styles.messageRowLeft]}>
-        <TouchableOpacity
-          activeOpacity={0.85}
-          onLongPress={handleLongPress}
-          delayLongPress={400}
-          style={[
-            styles.bubble,
-            isMe ? styles.bubbleRight : styles.bubbleLeft,
-            isSelected && { backgroundColor: isMe ? '#9E2400' : '#E5E7EB', opacity: 0.8 },
-            isDeletedEverywhere && { backgroundColor: isMe ? '#A03010' : '#E5E7EB', opacity: 0.6 }
-          ]}
-        >
-          {item.reply_to_id && !isDeletedEverywhere && (
-            <View style={{ backgroundColor: isMe ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', padding: 8, borderRadius: 8, marginBottom: 6, borderLeftWidth: 3, borderLeftColor: isMe ? '#FFF' : Colors.accent.primary }}>
-              <Text style={{ fontSize: 12, color: isMe ? '#FFF' : Colors.text.primary, opacity: 0.8 }} numberOfLines={2}>
-                {messages.find(m => String(m.id) === String(item.reply_to_id))?.text || 'Message not found'}
+      <View>
+        {showDateHeader && (
+          <View style={{ alignItems: 'center', marginVertical: 12 }}>
+            <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12 }}>
+              <Text style={{ fontSize: 12, color: '#1E3A8A', fontWeight: '500' }}>
+                {formatDateHeader(item.created_at)}
               </Text>
-            </View>
-          )}
-          <View style={{ flexDirection: 'row', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'space-between' }}>
-            <Text style={[
-              styles.messageText, 
-              isMe ? styles.messageTextRight : styles.messageTextLeft, 
-              { flexShrink: 1, marginRight: 12 },
-              isDeletedEverywhere && { fontStyle: 'italic', opacity: 0.8 }
-            ]}>
-              {isDeletedEverywhere ? '🚫 This message was deleted' : item.text}
-            </Text>
-            <View style={styles.bubbleMetaContainer}>
-              <Text style={[styles.bubbleTimeText, isMe ? styles.bubbleTimeTextRight : styles.bubbleTimeTextLeft]}>
-                {formatTime(item.created_at)}
-              </Text>
-              {isMe && item.id !== 9999 && (
-                <Ionicons name={ticks.name} size={13} color={ticks.color} style={styles.tickIcon} />
-              )}
             </View>
           </View>
-        </TouchableOpacity>
+        )}
+        <Swipeable
+        ref={(ref) => {
+          if (ref) swipeableRefs.current.set(String(item.id), ref);
+        }}
+        renderRightActions={renderRightActions}
+        friction={2}
+        leftThreshold={40}
+        rightThreshold={40}
+        onSwipeableOpen={(direction) => {
+          if (direction === 'right') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            setReplyingToId(item.id);
+            swipeableRefs.current.get(String(item.id))?.close();
+          }
+        }}
+      >
+        <View style={[styles.messageRow, isMe ? styles.messageRowRight : styles.messageRowLeft, isSelected && { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={handlePress}
+            onLongPress={handleLongPress}
+            delayLongPress={300}
+            style={[
+              styles.bubble,
+              isMe ? styles.bubbleRight : styles.bubbleLeft,
+              isSelected && { backgroundColor: isMe ? '#9E2400' : '#E5E7EB', opacity: 0.8 },
+              isDeletedEverywhere && { backgroundColor: isMe ? '#A03010' : '#E5E7EB', opacity: 0.6 }
+            ]}
+          >
+            {item.reply_to_id && !isDeletedEverywhere && (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => {
+                  try {
+                    const index = displayedMessages.findIndex(m => String(m.id) === String(item.reply_to_id));
+                    if (index !== -1) {
+                      flatListRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0.5 });
+                    }
+                  } catch (e) {}
+                }}
+                style={{ backgroundColor: isMe ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)', padding: 8, borderRadius: 8, marginBottom: 6, borderLeftWidth: 3, borderLeftColor: isMe ? '#FFF' : Colors.accent.primary }}
+              >
+                <Text style={{ fontSize: 13, color: isMe ? '#FFF' : Colors.text.primary, opacity: 0.8 }} numberOfLines={2}>
+                  {messages.find(m => String(m.id) === String(item.reply_to_id))?.text || 'Message not found'}
+                </Text>
+              </TouchableOpacity>
+            )}
+            <View style={{ flexDirection: 'row', alignItems: 'flex-end', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+              <Text style={[
+                styles.messageText, 
+                isMe ? styles.messageTextRight : styles.messageTextLeft, 
+                { flexShrink: 1, marginRight: 12 },
+                isDeletedEverywhere && { fontStyle: 'italic', opacity: 0.8 }
+              ]}>
+                {isDeletedEverywhere ? `🚫 ${item.text}` : item.text}
+              </Text>
+              <View style={styles.bubbleMetaContainer}>
+                <Text style={[styles.bubbleTimeText, isMe ? styles.bubbleTimeTextRight : styles.bubbleTimeTextLeft]}>
+                  {formatTime(item.created_at)}
+                </Text>
+                {isMe && item.id !== 9999 && (
+                  <Ionicons name={ticks?.name || 'checkmark'} size={15} color={ticks?.color || 'transparent'} style={styles.tickIcon} />
+                )}
+              </View>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </Swipeable>
       </View>
     );
   };
@@ -910,9 +1055,24 @@ export default function PeerChatScreen() {
 
   return (
     <View style={[styles.container, { paddingTop: Math.max(insets.top - 10, 10) }]}>
+
       {/* Header */}
-      <View style={styles.header}>
-        {isSearchActive ? (
+      <View style={[styles.header, isSelectionMode && { backgroundColor: '#DBEAFE' }]}>
+        {isSelectionMode ? (
+          <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity onPress={() => setSelectedMsgIds([])} style={{ padding: 5 }}>
+                <Ionicons name="close" size={26} color="#1E3A8A" />
+              </TouchableOpacity>
+              <Text style={{ fontSize: 18, fontWeight: '600', color: '#1E3A8A', marginLeft: 15 }}>{selectedMsgIds.length}</Text>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <TouchableOpacity onPress={() => handleDeleteMessages(false)} style={{ padding: 10 }}>
+                <Ionicons name="trash-outline" size={24} color="#1E3A8A" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : isSearchActive ? (
           <View style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
             <TouchableOpacity onPress={() => { setIsSearchActive(false); setSearchQuery(''); }} style={{ padding: 5 }}>
               <Ionicons name="arrow-back" size={24} color="#1F2937" />
@@ -929,7 +1089,9 @@ export default function PeerChatScreen() {
           <>
             <TouchableOpacity
               style={styles.backButton}
-              onPress={() => router.replace('/(student)/peers')}
+              onPress={() => {
+                router.replace('/(student)/peers');
+              }}
             >
               <Ionicons name="arrow-back" size={24} color="#1F2937" />
             </TouchableOpacity>
@@ -962,12 +1124,28 @@ export default function PeerChatScreen() {
               <Ionicons name="search-outline" size={24} color="#1F2937" />
             </TouchableOpacity>
             
-            <TouchableOpacity style={{ padding: 10 }} onPress={handleToggleBlock}>
-              <Ionicons name={isBlocked ? "shield-checkmark" : "shield-outline"} size={22} color={isBlocked ? "#EF4444" : "#1F2937"} />
+            <TouchableOpacity style={{ padding: 10 }} onPress={() => setIsHeaderMenuVisible(true)}>
+              <Ionicons name="ellipsis-vertical" size={24} color="#1F2937" />
             </TouchableOpacity>
           </>
         )}
       </View>
+
+      {/* Header Settings Menu (3-dots) */}
+      <Modal visible={isHeaderMenuVisible} transparent animationType="fade" onRequestClose={() => setIsHeaderMenuVisible(false)}>
+        <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setIsHeaderMenuVisible(false)}>
+          <View style={{ position: 'absolute', top: 60, right: 15, backgroundColor: '#FFF', borderRadius: 8, paddingVertical: 5, width: 150, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4, elevation: 5 }}>
+            <TouchableOpacity style={{ paddingHorizontal: 15, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { setIsHeaderMenuVisible(false); handleToggleBlock(); }}>
+              <Ionicons name={isBlocked ? "shield-checkmark" : "shield-outline"} size={18} color={isBlocked ? "#EF4444" : "#1F2937"} />
+              <Text style={{ fontSize: 14, color: isBlocked ? "#EF4444" : "#1F2937" }}>{isBlocked ? "Unblock" : "Block"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={{ paddingHorizontal: 15, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', gap: 10 }} onPress={() => { setIsHeaderMenuVisible(false); Alert.alert('Reported', 'User has been reported.'); }}>
+              <Ionicons name="flag-outline" size={18} color="#EF4444" />
+              <Text style={{ fontSize: 14, color: '#EF4444' }}>Report</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Messages */}
       <KeyboardAvoidingView
@@ -983,6 +1161,12 @@ export default function PeerChatScreen() {
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          onScrollToIndexFailed={(info) => {
+            const wait = new Promise(resolve => setTimeout(resolve, 500));
+            wait.then(() => {
+              flatListRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.5 });
+            });
+          }}
         />
 
         {/* Input Bar wrapped in SafeAreaView to handle bottom notch natively */}
@@ -1096,74 +1280,6 @@ export default function PeerChatScreen() {
             </TouchableOpacity>
           </Animated.View>
         </View>
-      </Modal>
-
-      {/* WhatsApp-Style Action Sheet for Message Deletion */}
-      <Modal
-        visible={selectedMsgId !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSelectedMsgId(null)}
-      >
-        <TouchableOpacity
-          style={styles.actionSheetOverlay}
-          activeOpacity={1}
-          onPress={() => setSelectedMsgId(null)}
-        >
-          <View style={styles.actionSheetContainer}>
-            <View style={styles.actionSheetHeader}>
-              <Text style={styles.actionSheetTitle}>Message Options</Text>
-            </View>
-            
-            {(() => {
-              const selectedMsg = messages.find(m => m.id === selectedMsgId);
-              const isOwnMessage = selectedMsg?.sender_id === user?.id;
-              return (
-                <>
-                  <TouchableOpacity
-                    style={styles.actionSheetButton}
-                    onPress={() => {
-                      setReplyingToId(selectedMsgId);
-                      setSelectedMsgId(null);
-                    }}
-                  >
-                    <Ionicons name="arrow-undo-outline" size={20} color={Colors.text.primary} />
-                    <Text style={styles.actionSheetButtonText}>Reply</Text>
-                  </TouchableOpacity>
-                  
-                  {isOwnMessage ? (
-                    <>
-                      <TouchableOpacity
-                        style={styles.actionSheetButton}
-                        onPress={() => handleDeleteMessage(false)}
-                      >
-                        <Ionicons name="trash-outline" size={20} color="#EF4444" />
-                        <Text style={[styles.actionSheetButtonText, { color: '#EF4444' }]}>Delete for Me</Text>
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity
-                        style={styles.actionSheetButton}
-                        onPress={() => handleDeleteMessage(true)}
-                      >
-                        <Ionicons name="trash-bin-outline" size={20} color="#EF4444" />
-                        <Text style={[styles.actionSheetButtonText, { color: '#EF4444' }]}>Delete for Everyone</Text>
-                      </TouchableOpacity>
-                    </>
-                  ) : (
-                    <Text style={styles.actionSheetInfo}>You can only delete your own messages.</Text>
-                  )}
-                </>
-              );
-            })()}
-
-            <TouchableOpacity
-              style={[styles.actionSheetButton, styles.actionSheetCancelButton]}
-              onPress={() => setSelectedMsgId(null)}
-            >
-              <Text style={styles.actionSheetCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
       </Modal>
 
       {/* Profile Detail Modal */}
@@ -1336,8 +1452,8 @@ const styles = StyleSheet.create({
     borderColor: '#9E2400',
   },
   messageText: {
-    fontSize: 13.5,
-    lineHeight: 18,
+    fontSize: 15,
+    lineHeight: 20,
   },
   messageTextLeft: {
     color: '#1F2937',
@@ -1353,7 +1469,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   bubbleTimeText: {
-    fontSize: 9.5,
+    fontSize: 10,
   },
   bubbleTimeTextLeft: {
     color: '#9CA3AF',

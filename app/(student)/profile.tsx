@@ -21,7 +21,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CustomAlert } from '@/components/CustomAlert';
 import { Colors, Shadows } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
-import { supabase, signOutAll } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
+import { signOutAll } from '@/lib/authActions';
 import { backupProcedure } from '@/lib/backupService';
 
 const HELP_TOPICS = [

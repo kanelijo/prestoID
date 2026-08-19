@@ -13,6 +13,7 @@ import {
   Switch,
   Platform,
   KeyboardAvoidingView,
+  RefreshControl,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -24,11 +25,15 @@ import { useChatStore, PeerMessage } from '@/stores/useChatStore';
 import CachedImage from '@/components/CachedImage';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import * as WebBrowser from 'expo-web-browser';
-import { sendPushNotification, CHANNELS } from '@/lib/notifications';
+import { sendPushNotification, CHANNELS, currentActivePeerId } from '@/lib/notifications';
 import {
+  getPeerMessagesFromLocal,
   savePeerMessageToLocal,
+  getLocalMessagesForPeer,
+  markPeerMessageDelivered,
   getAllPeerMessagesFromLocal,
   updatePeerMessageReadStatusInLocal,
+  deleteAllPeerMessagesFromLocal,
 } from '@/lib/localDb';
 
 interface Student {
@@ -58,6 +63,7 @@ export default function PeerConversationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user, studentData, onlineUserIds, onlinePresence } = useAuthStore();
+  const messagesByPeer = useChatStore(state => state.messagesByPeer);
   const { setMessages: setStoreMessages } = useChatStore();
   const channelRef = useRef<any>(null);
 
@@ -72,8 +78,50 @@ export default function PeerConversationsScreen() {
   const [chatPeers, setChatPeers] = useState<any[]>([]);
   const [allRequests, setAllRequests] = useState<any[]>([]);
 
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, []);
+
   // Profile Popup / Terms Modal
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+
+  // Multi-select for chats
+  const [selectedPeerIds, setSelectedPeerIds] = useState<string[]>([]);
+  const isSelectionMode = selectedPeerIds.length > 0;
+
+  const handleDeleteSelectedChats = () => {
+    if (selectedPeerIds.length === 0) return;
+    
+    Alert.alert(
+      "Clear Chats?",
+      `This will completely clear the chat history for ${selectedPeerIds.length} peer(s). You will remain connected to them.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear", style: "destructive", onPress: async () => {
+          if (!user?.id) return;
+          
+          for (const peerId of selectedPeerIds) {
+            // Delete from local SQLite
+            deleteAllPeerMessagesFromLocal(user.id, peerId);
+            // Delete from RAM Store directly
+            useChatStore.getState().setMessages(peerId, []);
+            
+            // Delete from Supabase messages queue
+            await supabase.from('student_messages')
+              .delete()
+              .or(`and(sender_id.eq.${user.id},receiver_id.eq.${peerId}),and(sender_id.eq.${peerId},receiver_id.eq.${user.id})`);
+          }
+          
+          setSelectedPeerIds([]);
+          loadData();
+        }}
+      ]
+    );
+  };
   const [isPopupVisible, setIsPopupVisible] = useState(false);
   const [agreeRespect, setAgreeRespect] = useState(false);
   const [agreeBanWarning, setAgreeBanWarning] = useState(false);
@@ -128,6 +176,9 @@ export default function PeerConversationsScreen() {
         (payload) => {
           const newMsg = payload.new as any;
           if (newMsg?.receiver_id === user?.id || newMsg?.sender_id === user?.id) {
+            // Don't reload if this message is for the active chat — student-chat.tsx handles it
+            const msgPeer = newMsg?.sender_id === user?.id ? newMsg?.receiver_id : newMsg?.sender_id;
+            if (msgPeer === currentActivePeerId) return;
             loadData();
           }
         }
@@ -209,6 +260,10 @@ export default function PeerConversationsScreen() {
       if (transitMessages && transitMessages.length > 0) {
         const transitIdsToDelete: any[] = [];
         for (const msg of transitMessages) {
+          // SKIP messages from the active chat peer — student-chat.tsx handles those
+          const msgPeerId = msg.sender_id === myUid ? msg.receiver_id : msg.sender_id;
+          if (msgPeerId === currentActivePeerId) continue;
+
           if (msg.text && msg.text.startsWith('__READ_RECEIPT__:')) {
             const readMsgId = msg.text.split(':')[1];
             updatePeerMessageReadStatusInLocal(readMsgId, true);
@@ -217,7 +272,7 @@ export default function PeerConversationsScreen() {
           }
           if (msg.text && msg.text.startsWith('__DELIVERED__:')) {
             const delMsgId = msg.text.split(':')[1];
-            const { markPeerMessageDelivered } = require('@/lib/localDb');
+
             markPeerMessageDelivered(delMsgId);
             transitIdsToDelete.push(msg.id);
             continue;
@@ -234,7 +289,9 @@ export default function PeerConversationsScreen() {
           }).then();
         }
         // Immediately delete from Supabase queue to keep space clean!
-        supabase.from('student_messages').delete().in('id', transitIdsToDelete).then();
+        if (transitIdsToDelete.length > 0) {
+          supabase.from('student_messages').delete().in('id', transitIdsToDelete).then();
+        }
       }
 
       // Build unread counts and last message info from local SQLite
@@ -248,9 +305,10 @@ export default function PeerConversationsScreen() {
         msgsByPeerId[otherId].push(m);
       });
       
-      // Update global RAM store
-      Object.keys(msgsByPeerId).forEach(peerId => {
-        setStoreMessages(peerId, msgsByPeerId[peerId]);
+      // Update global RAM store — but NEVER overwrite the active chat's state
+      Object.keys(msgsByPeerId).forEach(pId => {
+        if (pId === currentActivePeerId) return; // student-chat.tsx owns this peer's state
+        setStoreMessages(pId, msgsByPeerId[pId]);
       });
 
       const conversationMap = new Map<string, { lastMsg: any, unreadCount: number }>();
@@ -595,7 +653,12 @@ export default function PeerConversationsScreen() {
       }
     };
 
-    const getTickDetails = (msg: any) => {
+    const peerMsgs = messagesByPeer[item.user_id] || [];
+    const lastMsg = peerMsgs.length > 0 ? peerMsgs[peerMsgs.length - 1] : null;
+    const unreadCount = peerMsgs.filter(m => m.sender_id === item.user_id && !m.is_read).length;
+
+    const getTickDetails = () => {
+      const msg = lastMsg;
       if (!msg) return null;
       if (msg.sender_id !== user?.id) return null;
       if (msg.is_read) {
@@ -626,16 +689,44 @@ export default function PeerConversationsScreen() {
       }
     };
 
-    const ticks = getTickDetails(item.lastMsg);
-    const lastMsgTime = item.lastMsg ? formatLastMsgTime(item.lastMsg.created_at) : '';
+    const ticks = getTickDetails();
+    const lastMsgTime = lastMsg ? formatLastMsgTime(lastMsg.created_at) : '';
+
+    const isSelected = selectedPeerIds.includes(item.user_id);
+
+    const handlePress = () => {
+      if (isSelectionMode) {
+        import('expo-haptics').then(Haptics => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light));
+        if (isSelected) {
+          setSelectedPeerIds(prev => prev.filter(id => id !== item.user_id));
+        } else {
+          setSelectedPeerIds(prev => [...prev, item.user_id]);
+        }
+      } else {
+        router.push({ pathname: '/(student)/student-chat', params: { peerId: item.user_id } });
+      }
+    };
+
+    const handleLongPress = () => {
+      if (!isSelectionMode) {
+        import('expo-haptics').then(Haptics => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium));
+        setSelectedPeerIds([item.user_id]);
+      }
+    };
 
     return (
       <TouchableOpacity
-        style={styles.studentCard}
+        style={[styles.studentCard, isSelected && { backgroundColor: 'rgba(59, 130, 246, 0.1)' }]}
         activeOpacity={0.7}
-        onPress={() => router.push({ pathname: '/(student)/student-chat', params: { peerId: item.user_id } })}
+        onPress={handlePress}
+        onLongPress={handleLongPress}
       >
         <View style={{ position: 'relative' }}>
+          {isSelected && (
+            <View style={{ position: 'absolute', top: -5, left: -5, zIndex: 10, backgroundColor: Colors.accent.primary, borderRadius: 10, width: 20, height: 20, alignItems: 'center', justifyContent: 'center' }}>
+              <Ionicons name="checkmark" size={14} color="#FFF" />
+            </View>
+          )}
           {item.photo_url ? (
             <CachedImage uri={item.photo_url} style={styles.avatar as any} />
           ) : (
@@ -648,10 +739,10 @@ export default function PeerConversationsScreen() {
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <Text style={styles.studentName} numberOfLines={1}>{item.name}</Text>
-            {item.lastMsg ? (
+            {lastMsg ? (
               <Text style={[
                 styles.lastMsgTimeText,
-                item.unreadCount > 0 && { color: Colors.accent.primary, fontWeight: '700' }
+                unreadCount > 0 && { color: Colors.accent.primary, fontWeight: '700' }
               ]}>
                 {lastMsgTime}
               </Text>
@@ -661,16 +752,16 @@ export default function PeerConversationsScreen() {
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 3 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flex: 1, marginRight: 8 }}>
               {ticks && (
-                <Ionicons name={ticks.name} size={14} color={ticks.color} />
+                <Ionicons name={ticks.name} size={16} color={ticks.color} />
               )}
               <Text style={styles.lastMsgText} numberOfLines={1}>
-                {item.lastMsg ? item.lastMsg.text : 'No messages yet. Tap to chat!'}
+                {lastMsg ? lastMsg.text : 'No messages yet. Tap to chat!'}
               </Text>
             </View>
             
-            {item.unreadCount > 0 ? (
+            {unreadCount > 0 ? (
               <View style={styles.unreadBadge}>
-                <Text style={styles.unreadBadgeText}>{item.unreadCount}</Text>
+                <Text style={styles.unreadBadgeText}>{unreadCount}</Text>
               </View>
             ) : (
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
@@ -700,16 +791,30 @@ export default function PeerConversationsScreen() {
   return (
     <View style={[styles.container, { paddingTop: Math.max(insets.top - 10, 10) }]}>
       {/* Header */}
-      <View style={styles.header}>
-        {activeSegment === 'directory' && (
-          <TouchableOpacity onPress={() => setActiveSegment('chats')} style={styles.headerBackBtn}>
-            <Ionicons name="arrow-back" size={24} color={Colors.text.primary} />
+      {isSelectionMode ? (
+        <View style={[styles.header, { justifyContent: 'space-between' }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 15 }}>
+            <TouchableOpacity onPress={() => setSelectedPeerIds([])} style={{ padding: 4 }}>
+              <Ionicons name="close" size={24} color="#1F2937" />
+            </TouchableOpacity>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#1F2937' }}>{selectedPeerIds.length}</Text>
+          </View>
+          <TouchableOpacity onPress={handleDeleteSelectedChats} style={{ padding: 4 }}>
+            <Ionicons name="trash-outline" size={22} color="#EF4444" />
           </TouchableOpacity>
-        )}
-        <Text style={styles.headerTitle}>
-          {activeSegment === 'directory' ? 'Peer Directory' : 'Coaching Peers'}
-        </Text>
-      </View>
+        </View>
+      ) : (
+        <View style={styles.header}>
+          {activeSegment === 'directory' && (
+            <TouchableOpacity onPress={() => setActiveSegment('chats')} style={styles.headerBackBtn}>
+              <Ionicons name="arrow-back" size={24} color={Colors.text.primary} />
+            </TouchableOpacity>
+          )}
+          <Text style={styles.headerTitle}>
+            {activeSegment === 'directory' ? 'Peer Directory' : 'Coaching Peers'}
+          </Text>
+        </View>
+      )}
 
       {/* Current Student Profile Bio Header */}
       <View style={styles.myBioHeader}>
@@ -749,6 +854,7 @@ export default function PeerConversationsScreen() {
             keyExtractor={item => item.id}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent.primary} />}
             ListEmptyComponent={
               <View style={styles.emptyState}>
                 <Ionicons name="people-outline" size={40} color={Colors.text.tertiary} />
@@ -758,7 +864,11 @@ export default function PeerConversationsScreen() {
           />
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          contentContainerStyle={styles.scrollContent} 
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent.primary} />}
+        >
           {/* Pending Chat Requests */}
           {activeRequests.length > 0 && (
             <View style={styles.requestsSection}>

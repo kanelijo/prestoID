@@ -538,6 +538,20 @@ export function deletePeerMessageFromLocal(msgId: string | number, forEveryone: 
   }
 }
 
+export function deleteAllPeerMessagesFromLocal(userId: string, peerId: string) {
+  if (useFallback || !db) return;
+  try {
+    db.runSync(
+      `DELETE FROM local_peer_messages 
+       WHERE (sender_id = ? AND receiver_id = ?) 
+          OR (sender_id = ? AND receiver_id = ?)`,
+      [userId, peerId, peerId, userId]
+    );
+  } catch (e) {
+    console.warn('Failed to delete all peer messages from SQLite:', e);
+  }
+}
+
 export function getPeerMessagesUnreadCount(userId: string): number {
   if (useFallback || !db) return 0;
   try {

@@ -119,6 +119,7 @@ async function ensureChannels() {
         name: ch.name,
         description: ch.desc,
         importance: Notifications.AndroidImportance.HIGH,
+        sound: ch.id === CHANNELS.chat ? 'chat_noti.mp3' : 'app_noti.mp3',
         vibrationPattern: [0, 200, 100, 200],
         enableVibrate: true,
         showBadge: true,

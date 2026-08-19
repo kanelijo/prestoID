@@ -4,19 +4,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import CachedImage from './CachedImage';
 import { useRouter } from 'expo-router';
-
-let Audio: any = null;
-try {
-  Audio = require('expo-av').Audio;
-} catch (e) {
-  console.log('expo-av native module missing, sounds will be disabled');
-}
+import { useAudioPlayer } from 'expo-audio';
 
 export default function InAppNotification() {
   const { isPopupVisible, currentPopupNotification, hideNotificationPopup } = useNotificationStore();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const slideAnim = useRef(new Animated.Value(-150)).current;
+
+  // Use the modern expo-audio API
+  const player = useAudioPlayer(require('@/assets/audio/app_noti.mp3'));
 
   useEffect(() => {
     if (isPopupVisible && currentPopupNotification) {
@@ -36,29 +33,10 @@ export default function InAppNotification() {
     }
   }, [isPopupVisible]);
 
-  const playSound = async () => {
-    if (!Audio) return;
-    try {
-      // Setup Audio
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-        shouldRouteThroughEarpiece: false,
-      });
-      // App notification sound
-      const { sound } = await Audio.Sound.createAsync(
-        require('@/assets/audio/AppNoti.mp3')
-      );
-      await sound.playAsync();
-      
-      // Cleanup after playing
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          sound.unloadAsync();
-        }
-      });
-    } catch (e) {
-      console.log('Failed to play notification sound', e);
+  const playSound = () => {
+    if (player) {
+      // expo-audio automatically handles loading and playback cleanly
+      player.play();
     }
   };
 

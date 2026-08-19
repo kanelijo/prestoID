@@ -165,14 +165,8 @@ export default function AdminLayout() {
       <Tabs.Screen
         name="community"
         options={{
+          href: null,
           tabBarStyle: { display: 'none' },
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'megaphone' : 'megaphone-outline'}
-              label="Community"
-              focused={focused}
-            />
-          ),
         }}
       />
       <Tabs.Screen

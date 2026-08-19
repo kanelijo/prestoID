@@ -12,6 +12,8 @@ import { useFeatureFlags } from '@/stores/useFeatureFlags';
 import OfflineBanner from '@/components/OfflineBanner';
 import InAppNotification from '@/components/InAppNotification';
 import { supabase } from '@/lib/supabase';
+import { currentActiveScreen, currentActivePeerId } from '@/lib/notifications';
+import { savePeerMessageToLocal, getPeerMessagesFromLocal, markPeerMessagesAsReadInLocal } from '@/lib/localDb';
 
 type TabIconProps = {
   name: keyof typeof Ionicons.glyphMap;
@@ -91,7 +93,6 @@ export default function StudentLayout() {
           }).then(({ data: selectData }) => {
             const confirmedMsg = (selectData && (selectData as any).length > 0) ? (selectData as any)[0] : null;
             if (confirmedMsg) {
-              const { savePeerMessageToLocal } = require('@/lib/localDb');
               savePeerMessageToLocal({ ...(confirmedMsg as any), is_read: true });
             }
           });
@@ -101,7 +102,7 @@ export default function StudentLayout() {
         const receiverId = data?.receiverId || user?.id;
 
         if (senderId && receiverId) {
-          const { markPeerMessagesAsReadInLocal } = require('@/lib/localDb');
+
           markPeerMessagesAsReadInLocal(senderId, receiverId);
           useNotificationStore.getState().fetchPeerUnreadCount(receiverId);
 
@@ -143,7 +144,7 @@ export default function StudentLayout() {
         const body = notification.request.content.body;
         const senderId = data?.peerId || data?.senderId;
         
-        const { currentActiveScreen, currentActivePeerId } = require('@/lib/notifications');
+
         const isCurrentlyInThisChat = currentActiveScreen === 'peer_chat' && currentActivePeerId === senderId;
         
         if (title && body && !isCurrentlyInThisChat) {
@@ -193,29 +194,15 @@ export default function StudentLayout() {
       <Tabs.Screen
         name="community"
         options={{
+          href: null,
           tabBarStyle: { display: 'none' },
-          tabBarBadge: studentCommunityUnreadCount > 0 ? studentCommunityUnreadCount : undefined,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'megaphone' : 'megaphone-outline'}
-              label="Community"
-              focused={focused}
-            />
-          ),
         }}
       />
       <Tabs.Screen
         name="peers"
         options={{
-          href: isFeatureActive('student_to_student_chat') ? '/(student)/peers' : null,
-          tabBarBadge: peerUnreadCount > 0 ? peerUnreadCount : undefined,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'people-sharp' : 'people-outline'}
-              label="Peers"
-              focused={focused}
-            />
-          ),
+          href: null,
+          tabBarStyle: { display: 'none' },
         }}
       />
       <Tabs.Screen

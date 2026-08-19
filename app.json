@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "light",
     "scheme": "zenza",
-    "icon": "./assets/images/icon.png",
+    "icon": "./assets/images/zenza2.png",
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.kanelijo.zenza",
@@ -17,7 +17,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "foregroundImage": "./assets/images/zenza2.png",
         "backgroundColor": "#000000"
       },
       "package": "com.kanelijo.zenza",
@@ -26,9 +26,15 @@
         "CAMERA",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "CAMERA",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
       ]
     },
     "web": {
@@ -54,22 +60,28 @@
         "expo-notifications",
         {
           "icon": "./assets/images/notification-icon.png",
-          "color": "#AF2800"
+          "color": "#AF2800",
+          "sounds": [
+            "./assets/audio/app_noti.mp3",
+            "./assets/audio/chat_noti.mp3"
+          ]
         }
       ],
       "react-native-video",
-      "expo-mail-composer"
+      "expo-mail-composer",
+      "expo-web-browser",
+      "expo-audio"
     ],
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "e1b1d0b2-c04d-4e47-bbde-ec7873709e4b"
+        "projectId": "7bee66f7-5c7f-4261-8496-56697b00bbfb"
       }
     },
-    "owner": "nilesh_kuntal",
     "runtimeVersion": "1.0.0",
     "updates": {
-      "url": "https://u.expo.dev/e1b1d0b2-c04d-4e47-bbde-ec7873709e4b"
-    }
+      "url": "https://u.expo.dev/7bee66f7-5c7f-4261-8496-56697b00bbfb"
+    },
+    "owner": "andrewnk"
   }
 }

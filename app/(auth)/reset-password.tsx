@@ -14,7 +14,8 @@ import {
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { supabase, signOutAll } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
+import { signOutAll } from '@/lib/authActions';
 import { Colors, Gradients } from '@/constants/colors';
 
 export default function ResetPasswordScreen() {
