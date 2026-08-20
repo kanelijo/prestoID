@@ -125,30 +125,49 @@ export default function ZenZaTestEngineScreen() {
     };
   }, [isStarted]);
 
+  const exitLogsRef = useRef<any[]>([]);
+  const exitTimerRef = useRef<any>(null);
+
   const handleAppStateChange = (nextAppState: any) => {
     // Only enforce anti-cheat when a live test is actively in progress
     if (!isTestActive.current || hasSubmitted.current) return;
     
     if (appState.current.match(/active/) && nextAppState.match(/inactive|background/)) {
       backgroundTime.current = Date.now();
+      const exitTimeISO = new Date().toISOString();
+      exitLogsRef.current.push({ timestamp: exitTimeISO, type: 'app_exit' });
       saveActiveTestState({}); // Saves lastActiveTime timestamp automatically
+
+      // Start 40-second warning countdown timer before auto-submitting
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => {
+        if (!hasSubmitted.current) {
+          submitTest('violation_40s_exit');
+        }
+      }, 40000);
     } else if (appState.current.match(/inactive|background/) && nextAppState === 'active') {
+      if (exitTimerRef.current) {
+        clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
+
       if (backgroundTime.current) {
-        const timeAway = Date.now() - backgroundTime.current;
-        lastTimeRef.current += timeAway; // Deduct time spent in background from question timer
+        const timeAwayMs = Date.now() - backgroundTime.current;
+        const durationSec = Math.round(timeAwayMs / 1000);
+        lastTimeRef.current += timeAwayMs; // Deduct time spent in background from question timer
         
-        if (timeAway > 20 * 60 * 1000) {
-          CustomAlert.alert('Violation Detected', 'You left the test for more than 20 minutes. Auto-submitting.');
-          submitTest('violation');
+        // Update last exit log entry with duration
+        if (exitLogsRef.current.length > 0) {
+          exitLogsRef.current[exitLogsRef.current.length - 1].duration_seconds = durationSec;
+        }
+
+        if (durationSec >= 40) {
+          CustomAlert.alert('Violation Detected', 'You left the test for more than 40 seconds. Auto-submitting.');
+          submitTest('violation_40s_exit');
         } else {
-          // Returned within 20 minutes: Grant 10 minutes bonus time!
-          const bonusMs = 10 * 60 * 1000;
-          endTimeRef.current = endTimeRef.current + bonusMs;
-          saveActiveTestState({ endTime: endTimeRef.current });
-          
           CustomAlert.alert(
-            'Test Resumed ⏱️',
-            'Welcome back! Since you returned within 20 minutes, an additional 10 minutes has been added to your remaining test duration.'
+            'Anti-Cheat Warning ⚠️',
+            `You exited the exam app for ${durationSec}s. This app switch has been logged for teacher review.`
           );
         }
       }
@@ -163,8 +182,8 @@ export default function ZenZaTestEngineScreen() {
       if (!verified || id === 'demo-test-id') {
         setTestDetails({ id: 'demo', title: 'ZenZa AI Mock', duration_minutes: 60, positive_marks: 5, negative_marks: 0 });
         setQuestions([
-          { id: 'q1', question_text: 'What is the primary advantage of a RAG pipeline?', options: ['It uses 100% internet data', 'It prevents hallucinations by locking context', 'It is slower but more creative', 'It replaces the teacher'], correct_option: 1 },
-          { id: 'q2', question_text: 'Why do we use FlatList instead of PagerView for tests?', options: ['It has a nice background', 'It is web-only', 'Zero latency native view controllers', 'Better cross-platform compatibility'], correct_option: 3 }
+          { id: 'q1', question_text: 'What is the primary advantage of a RAG pipeline?', options: ['It uses 100% internet data', 'It prevents hallucinations by locking context', 'It is slower but more creative', 'It replaces the teacher'] },
+          { id: 'q2', question_text: 'Why do we use FlatList instead of PagerView for tests?', options: ['It has a nice background', 'It is web-only', 'Zero latency native view controllers', 'Better cross-platform compatibility'] }
         ]);
         setIsLoading(false);
         return;
@@ -189,7 +208,12 @@ export default function ZenZaTestEngineScreen() {
       if (test.questions && Array.isArray(test.questions) && test.questions.length > 0) {
         finalQuestions = test.questions;
       } else {
-        const { data: qData } = await supabase.from('test_questions').select('*').eq('test_id', id).order('created_at');
+        // 🔒 SECURITY FIX: Exclude correct_option and explanation from client question fetch
+        const { data: qData } = await supabase
+          .from('test_questions')
+          .select('id, test_id, question_text, option_a, option_b, option_c, option_d, topic_tag, order_index')
+          .eq('test_id', id)
+          .order('created_at');
         finalQuestions = qData || [];
       }
 
@@ -202,30 +226,7 @@ export default function ZenZaTestEngineScreen() {
         const cachedState = JSON.parse(cachedStateStr);
         if (cachedState.isStarted) {
           const now = Date.now();
-          
-          // Calculate time offline/away
-          const lastActive = cachedState.lastActiveTime || cachedState.endTime || now;
-          const timeOffline = now - lastActive;
-          let updatedEndTime = cachedState.endTime;
-          let receivedBonus = false;
-
-          // If they returned within 20 minutes (1200000 ms), grant 10 minutes (600000 ms) bonus
-          if (timeOffline > 0 && timeOffline <= 20 * 60 * 1000) {
-            receivedBonus = true;
-            const bonusMs = 10 * 60 * 1000;
-            if (now < cachedState.endTime) {
-              updatedEndTime = cachedState.endTime + bonusMs;
-            } else {
-              updatedEndTime = now + bonusMs;
-            }
-            // Save immediately back to cache
-            await AsyncStorage.setItem(`@active_test_state_${id}`, JSON.stringify({
-              ...cachedState,
-              endTime: updatedEndTime,
-              lastActiveTime: now
-            }));
-          }
-
+          const updatedEndTime = cachedState.endTime;
           const remaining = Math.max(0, Math.floor((updatedEndTime - now) / 1000));
           if (remaining > 0) {
             // Load local answers into quiz store first
@@ -244,14 +245,6 @@ export default function ZenZaTestEngineScreen() {
             // Scroll to cached question index
             setTimeout(() => {
               flatListRef.current?.scrollToIndex({ index: cachedState.currentQIndex || 0, animated: false });
-              if (receivedBonus) {
-                setTimeout(() => {
-                  CustomAlert.alert(
-                    'Test Resumed ⏱️',
-                    'Welcome back! Since you returned within 20 minutes, an additional 10 minutes has been added to your remaining test duration.'
-                  );
-                }, 400);
-              }
             }, 150);
           } else {
             // Time has expired while the app was closed
@@ -467,55 +460,20 @@ export default function ZenZaTestEngineScreen() {
 
     while (retryCount < maxRetries && !success) {
       try {
-        // Get student table record ID for dual-ID lookup safety
-        const { data: stRec } = await supabase.from('students').select('id').eq('user_id', activeStudentId).maybeSingle();
-        const possibleStudentIds = [activeStudentId];
-        if (stRec?.id) possibleStudentIds.push(stRec.id);
+        // 🔒 SECURE SERVER-SIDE EVALUATION & RANK CALCULATION VIA RPC
+        const { data: rpcRes, error: rpcErr } = await supabase.rpc('submit_test_answers', {
+          p_test_id: id,
+          p_student_id: activeStudentId,
+          p_answers: latestAnswers,
+          p_time_logs: timeLogsSeconds,
+          p_exit_logs: exitLogsRef.current || []
+        });
 
-        // Check if submission already exists for student & test
-        const { data: existingSubs } = await supabase
-          .from('test_submissions')
-          .select('id, score')
-          .eq('test_id', id)
-          .in('student_id', possibleStudentIds)
-          .limit(1);
+        if (rpcErr) throw rpcErr;
 
-        const existingSub = existingSubs && existingSubs.length > 0 ? existingSubs[0] : null;
-
-        if (existingSub) {
-          // Update score and answers on existing submission row
-          const { data: updatedData, error: upErr } = await supabase
-            .from('test_submissions')
-            .update({
-              score: totalScore,
-              answers: latestAnswers,
-              time_logs: timeLogsSeconds,
-              submitted_at: new Date().toISOString()
-            })
-            .eq('id', existingSub.id)
-            .select('id')
-            .single();
-
-          if (upErr) throw upErr;
-          newSubId = updatedData.id;
-        } else {
-          // Create new submission row
-          const { data: insertedData, error: insErr } = await supabase
-            .from('test_submissions')
-            .insert({
-              test_id: id,
-              student_id: activeStudentId,
-              answers: latestAnswers,
-              time_logs: timeLogsSeconds,
-              score: totalScore,
-              total_questions: questions.length,
-              submitted_at: new Date().toISOString()
-            })
-            .select('id')
-            .single();
-
-          if (insErr) throw insErr;
-          newSubId = insertedData.id;
+        if (rpcRes && rpcRes.length > 0) {
+          newSubId = rpcRes[0].submission_id;
+          totalScore = rpcRes[0].final_score;
         }
 
         success = true;

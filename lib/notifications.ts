@@ -118,13 +118,14 @@ async function ensureChannels() {
       await Notifications.setNotificationChannelAsync(ch.id, {
         name: ch.name,
         description: ch.desc,
-        importance: Notifications.AndroidImportance.HIGH,
+        importance: Notifications.AndroidImportance.MAX,
         sound: 'default',
-        vibrationPattern: [0, 200, 100, 200],
+        vibrationPattern: [0, 250, 150, 250],
         enableVibrate: true,
         showBadge: true,
         enableLights: true,
         lightColor: '#AF2800',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
       });
     } catch (e) {
       console.warn('Channel setup failed:', ch.id, e);
@@ -245,8 +246,13 @@ export async function fetchStudentPushTokens(
       .eq('business_id', businessId)
       .not('user_id', 'is', null);
 
-    if (targetBatch && targetBatch !== 'All') {
-      studentQuery = studentQuery.eq('batch_name', targetBatch);
+    const isAllBatch = !targetBatch || 
+      targetBatch.toLowerCase() === 'all' || 
+      targetBatch.toLowerCase() === 'all batches' || 
+      targetBatch.trim() === '';
+
+    if (!isAllBatch) {
+      studentQuery = studentQuery.ilike('batch_name', `%${targetBatch.trim()}%`);
     }
 
     const { data: studentRecords } = await studentQuery;

@@ -56,6 +56,12 @@ const AVAILABLE_FEATURES: FeatureItem[] = [
     description: 'Automatically schedule and generate exams daily based on defined subjects.',
     icon: 'calendar-outline',
   },
+  {
+    key: 'public_test_feature',
+    name: 'Public Test Hub',
+    description: 'Enable or disable the Open Practice Environment & Skip Credentials flow.',
+    icon: 'sparkles-outline',
+  },
 ];
 
 const SANDBOX_FEATURES: SandboxItem[] = [

@@ -19,6 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useFeatureFlags } from '@/stores/useFeatureFlags';
 
 import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 
@@ -27,6 +28,8 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 export default function ClaimProfileScreen() {
   const router = useRouter();
   const { user, setRole, setBusiness } = useAuthStore();
+  const { isFeatureActive } = useFeatureFlags();
+  const isPublicTestsEnabled = isFeatureActive('public_test_feature');
   const [businessCode, setBusinessCode] = useState('');
   const [passcode, setPasscode] = useState('');
   const [useAadhaar, setUseAadhaar] = useState(false);
@@ -196,6 +199,11 @@ export default function ClaimProfileScreen() {
         console.warn('Failed to save profile cache on claim:', cacheErr);
       }
 
+      if (user?.id) {
+        await supabase.from('profiles').update({ is_external: false }).eq('id', user.id);
+      }
+      useAuthStore.getState().setOnboarded(true);
+      useAuthStore.getState().setActiveEnvironment('enrolled');
       Alert.alert(
         'Welcome! 🎉',
         `Profile claimed successfully!\nYou are now linked to ${business.business_name}.`,
@@ -215,7 +223,7 @@ export default function ClaimProfileScreen() {
 
       {/* Bottom Sheet */}
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.sheetContainer}
       >
         <View style={styles.sheet}>
@@ -333,13 +341,33 @@ export default function ClaimProfileScreen() {
               </LinearGradient>
             </TouchableOpacity>
 
-            {/* Info hint */}
-            <View style={styles.infoRow}>
-              <Ionicons name="information-circle-outline" size={16} color={Colors.text.tertiary} />
-              <Text style={styles.infoText}>
-                Don't have these? Contact your coaching center.
-              </Text>
-            </View>
+            {/* Skip Credentials Button for Public / Guest Students */}
+            {isPublicTestsEnabled && (
+              <>
+                <TouchableOpacity
+                  onPress={async () => {
+                    if (user?.id) {
+                      await supabase.from('profiles').update({ is_external: true }).eq('id', user.id);
+                    }
+                    useAuthStore.getState().setOnboarded(true);
+                    useAuthStore.getState().setActiveEnvironment('public');
+                    router.replace('/(student)/public-tests');
+                  }}
+                  style={styles.skipButton}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.skipButtonText}>👉 Skip Credentials & Access Public Open Tests</Text>
+                </TouchableOpacity>
+
+                {/* Explanatory Note */}
+                <View style={styles.skipNoteBox}>
+                  <Ionicons name="information-circle" size={16} color={Colors.accent.primary} style={{ marginRight: 6 }} />
+                  <Text style={styles.skipNoteText}>
+                    If you are an independent student or don't have coaching credentials yet, skip this step to access Open Practice Tests, All-India Mock Exams, and Speed Drills.
+                  </Text>
+                </View>
+              </>
+            )}
           </ScrollView>
         </View>
       </KeyboardAvoidingView>
@@ -496,8 +524,38 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   infoText: {
-    fontSize: 11,
+    fontSize: 12,
     color: Colors.text.tertiary,
-    fontWeight: '500',
+  },
+  skipButton: {
+    marginTop: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#1E1E2E',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  skipButtonText: {
+    color: Colors.text.primary,
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  skipNoteBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(175,40,0,0.1)',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(175,40,0,0.25)',
+  },
+  skipNoteText: {
+    flex: 1,
+    fontSize: 11,
+    color: Colors.text.secondary,
+    lineHeight: 15,
   },
 });

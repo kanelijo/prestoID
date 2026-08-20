@@ -71,6 +71,7 @@ CREATE TABLE public.students (
   dob TEXT,
   fee_amount NUMERIC NOT NULL DEFAULT 0,
   fee_cycle TEXT DEFAULT 'monthly' CHECK (fee_cycle IN ('monthly', 'yearly', 'one time')),
+  fee_due_date TEXT DEFAULT '15',
   fee_status TEXT DEFAULT 'unpaid' CHECK (fee_status IN ('paid', 'unpaid', 'overdue')),
   next_due_date DATE DEFAULT (CURRENT_DATE + INTERVAL '1 month'),
   admission_date DATE DEFAULT CURRENT_DATE,

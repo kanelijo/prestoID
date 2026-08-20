@@ -74,7 +74,7 @@ export default function SplashScreen() {
         if (session && session.user) {
           const { data: profile } = await supabase
             .from('profiles')
-            .select('role, business_id, claimed, avatar_url')
+            .select('role, business_id, claimed, avatar_url, is_external')
             .eq('id', session.user.id)
             .single();
 
@@ -82,6 +82,7 @@ export default function SplashScreen() {
           let businessId = profile?.business_id;
           let claimed = profile?.claimed;
           let avatarUrl = profile?.avatar_url;
+          let isExternal = profile?.is_external;
           let businessData = null;
 
           if (businessId) {
@@ -116,7 +117,11 @@ export default function SplashScreen() {
             if (role === 'admin') {
               dest = businessId ? '/(admin)/students' : '/(auth)/create-institute';
             } else {
-              dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
+              if (isExternal) {
+                dest = '/(student)/public-tests';
+              } else {
+                dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
+              }
             }
 
             if ((global as any).pendingNotificationRedirect) {

@@ -21,6 +21,7 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease",
         "resourceClass": "medium"
       },
       "env": {
@@ -31,6 +32,10 @@
     },
     "production": {
       "channel": "production",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
       "env": {
         "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyB8PV8ae3c4gQJVz739gq6cDBooWmKGTSg",
         "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_TKAlCfvaAMmniz",

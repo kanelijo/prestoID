@@ -69,10 +69,38 @@ if (TaskManager) {
 
 import { initializeZenzaStorage } from '@/lib/storage';
 import { Platform } from 'react-native';
+import * as NavigationBar from 'expo-navigation-bar';
 
 export default function RootLayout() {
   const router = useRouter();
   const { user, businessId, studentData, role } = useAuthStore();
+
+  // Auto-hide Android system soft navigation bar (Sticky Immersive Mode)
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      const applyAndroidNavBarConfig = () => {
+        try {
+          if (typeof (NavigationBar as any).setHidden === 'function') {
+            (NavigationBar as any).setHidden(true);
+          } else if (typeof (NavigationBar as any).setVisibilityAsync === 'function') {
+            (NavigationBar as any).setVisibilityAsync('hidden');
+          }
+        } catch (e) {
+          // Ignore non-android runtime warning
+        }
+      };
+
+      applyAndroidNavBarConfig();
+
+      const appStateSub = AppState.addEventListener('change', (nextState) => {
+        if (nextState === 'active') {
+          applyAndroidNavBarConfig();
+        }
+      });
+
+      return () => appStateSub.remove();
+    }
+  }, []);
 
   // Global Presence: Track online status whenever user is in the app
   useEffect(() => {
@@ -179,6 +207,26 @@ export default function RootLayout() {
   }, [user?.id, businessId, studentData?.business_id, role]);
 
   useEffect(() => {
+    // Auto-Check and Download EAS Over-The-Air Updates on App Start
+    const checkForUpdates = async () => {
+      try {
+        const Updates = require('expo-updates');
+        if (__DEV__ || !Updates.isEnabled) return;
+        const update = await Updates.checkForUpdateAsync();
+        if (update.isAvailable) {
+          console.log('[EAS Update] New OTA update bundle found. Fetching now...');
+          const fetched = await Updates.fetchUpdateAsync();
+          if (fetched.isNew) {
+            console.log('[EAS Update] Update fetched! Reloading app...');
+            await Updates.reloadAsync();
+          }
+        }
+      } catch (err: any) {
+        console.log('[EAS Update] OTA check notification:', err?.message || err);
+      }
+    };
+    checkForUpdates();
+
     // Run automated storage & cache eviction 
     runBackgroundCacheCleanup();
 
@@ -323,6 +371,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <StatusBar style="dark" />
+        {Platform.OS === 'android' && typeof (NavigationBar as any).NavigationBar === 'function' ? (
+          <NavigationBar.NavigationBar hidden={true} />
+        ) : null}
         <Stack
           screenOptions={{
             headerShown: false,

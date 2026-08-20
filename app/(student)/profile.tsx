@@ -87,6 +87,8 @@ export default function StudentSettingsScreen() {
   };
 
   // Load settings on mount
+  const [isExternalStudent, setIsExternalStudent] = useState<boolean>(false);
+
   useEffect(() => {
     const loadSettings = async () => {
       try {
@@ -94,12 +96,24 @@ export default function StudentSettingsScreen() {
         const feeVal = await AsyncStorage.getItem('@presto_student_settings_fee_reminders');
         if (attVal !== null) setAttendanceAlerts(attVal === 'true');
         if (feeVal !== null) setFeeReminders(feeVal === 'true');
+
+        if (user?.id) {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('is_external, business_id')
+            .eq('id', user.id)
+            .single();
+
+          if (prof) {
+            setIsExternalStudent(prof.is_external === true || !prof.business_id);
+          }
+        }
       } catch (e) {
         console.warn('Failed to load settings from storage:', e);
       }
     };
     loadSettings();
-  }, []);
+  }, [user?.id]);
 
   const handleToggleAttendanceAlerts = async (value: boolean) => {
     setAttendanceAlerts(value);
@@ -372,8 +386,41 @@ export default function StudentSettingsScreen() {
 
         {activeTab === 'profile' && (
           <View>
-        {/* Notification Settings */}
-        <View style={styles.section}>
+            {/* Conditional Button: Join Coaching (Public Students) vs Explore Open Practice (Enrolled Students) */}
+            {isExternalStudent ? (
+              <TouchableOpacity
+                style={{
+                  backgroundColor: '#1E1E2E',
+                  borderRadius: 16,
+                  padding: 16,
+                  marginHorizontal: 16,
+                  marginBottom: 16,
+                  borderWidth: 1.5,
+                  borderColor: Colors.accent.primary,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+                onPress={() => router.push('/(auth)/claim-profile')}
+                activeOpacity={0.8}
+              >
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                    <Ionicons name="school" size={18} color={Colors.accent.primary} />
+                    <Text style={{ color: Colors.text.primary, fontWeight: 'bold', fontSize: 15 }}>
+                      Join a Coaching Institute
+                    </Text>
+                  </View>
+                  <Text style={{ color: Colors.text.tertiary, fontSize: 12, lineHeight: 16 }}>
+                    Have a Coaching Code & Secret Passcode? Upgrade to an Enrolled Coaching Student.
+                  </Text>
+                </View>
+                <Ionicons name="arrow-forward-circle" size={26} color={Colors.accent.primary} />
+              </TouchableOpacity>
+            ) : null}
+
+            {/* Notification Settings */}
+            <View style={styles.section}>
           <Text style={styles.sectionTitle}>Notifications</Text>
           <View style={styles.card}>
             <View style={styles.settingRow}>

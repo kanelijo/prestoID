@@ -161,95 +161,196 @@ export default function StudentLayout() {
     return () => { tapSub.remove(); receiveSub.remove(); };
   }, [router, user?.id]);
 
+  const { activeEnvironment, setActiveEnvironment } = useAuthStore();
+  const [isExternalStudent, setIsExternalStudent] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const checkStudentType = async () => {
+      if (user?.id) {
+        try {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('is_external, business_id')
+            .eq('id', user.id)
+            .single();
+
+          if (prof) {
+            const isExt = prof.is_external === true || !prof.business_id;
+            setIsExternalStudent(isExt);
+            
+            if (!isExt && activeEnvironment === 'public') {
+              // Force back to enrolled if they were stuck due to old cached state
+              setActiveEnvironment('enrolled');
+            } else if (!activeEnvironment) {
+              setActiveEnvironment(isExt ? 'public' : 'enrolled');
+            }
+          } else {
+            setIsExternalStudent(false);
+            if (!activeEnvironment) setActiveEnvironment('enrolled');
+          }
+        } catch (e) {
+          setIsExternalStudent(false);
+          if (!activeEnvironment) setActiveEnvironment('enrolled');
+        }
+      }
+    };
+    checkStudentType();
+  }, [user?.id, businessId, studentData?.business_id]);
+
+  const isPublicEnv = activeEnvironment === 'public' || (activeEnvironment === null && isExternalStudent === true);
+
   return (
-    <View style={{ flex: 1 }} key={`${studentData?.id || 'student'}_${businessId || 'no-biz'}`}>
+    <View style={{ flex: 1 }} key={`${studentData?.id || 'student'}_${businessId || 'no-biz'}_${isPublicEnv ? 'public' : 'enrolled'}`}>
       <OfflineBanner />
       <InAppNotification />
       <Tabs
         backBehavior="initialRoute"
         screenOptions={{
-        headerShown: false,
-        tabBarStyle: [
-          styles.tabBar,
-          {
-            height: Platform.OS === 'android' ? 64 + Math.max(insets.bottom, 24) : 64 + insets.bottom,
-            paddingBottom: Platform.OS === 'android' ? Math.max(insets.bottom, 24) : (insets.bottom > 0 ? insets.bottom - 4 : 8),
-          },
-        ],
-        tabBarShowLabel: false,
-      }}
-    >
-      <Tabs.Screen
-        name="id-card"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'card' : 'card-outline'}
-              label="ID Card"
-              focused={focused}
-            />
-          ),
+          headerShown: false,
+          tabBarStyle: [
+            styles.tabBar,
+            {
+              height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
+              paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
+            },
+          ],
+          tabBarShowLabel: false,
         }}
-      />
-      <Tabs.Screen
-        name="community"
-        options={{
-          href: null,
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen
-        name="peers"
-        options={{
-          href: null,
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen
-        name="test"
-        options={{
-          tabBarBadge: studentPendingTestCount > 0 ? studentPendingTestCount : undefined,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'document-text' : 'document-text-outline'}
-              label="Test"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="notifications"
-        options={{
-          tabBarBadge: studentUnreadCount > 0 ? studentUnreadCount : undefined,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'notifications' : 'notifications-outline'}
-              label="Alerts"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'person' : 'person-outline'}
-              label="Profile"
-              focused={focused}
-            />
-          ),
+      >
+        {/* Enrolled Coaching Student Tabs */}
+        <Tabs.Screen
+          name="id-card"
+          options={{
+            href: isPublicEnv ? null : undefined,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'card' : 'card-outline'}
+                label="ID Card"
+                focused={focused}
+              />
+            ),
           }}
         />
-      <Tabs.Screen name="test/engine/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="test/result/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="test/target-exam-student" options={{ href: null }} />
-      <Tabs.Screen name="student-chat" options={{ href: null, tabBarStyle: { display: 'none' } }} />
-      <Tabs.Screen name="notes" options={{ href: null }} />
-      <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
-      <Tabs.Screen name="lab" options={{ href: null }} />
+        <Tabs.Screen
+          name="community"
+          options={{
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
+        <Tabs.Screen
+          name="peers"
+          options={{
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
+        <Tabs.Screen
+          name="test"
+          options={{
+            href: isPublicEnv ? null : undefined,
+            tabBarBadge: studentPendingTestCount > 0 ? studentPendingTestCount : undefined,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'document-text' : 'document-text-outline'}
+                label="Test"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="notifications"
+          options={{
+            href: isPublicEnv ? null : undefined,
+            tabBarBadge: studentUnreadCount > 0 ? studentUnreadCount : undefined,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'notifications' : 'notifications-outline'}
+                label="Alerts"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+
+        {/* Public / External Student Tabs */}
+        <Tabs.Screen
+          name="public-tests"
+          options={{
+            href: isPublicEnv ? undefined : null,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'library' : 'library-outline'}
+                label="Open Tests"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="public-leaderboard"
+          options={{
+            href: isPublicEnv ? undefined : null,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'trophy' : 'trophy-outline'}
+                label="Rankings"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="target-exam-info"
+          options={{
+            href: isPublicEnv ? undefined : null,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'compass' : 'compass-outline'}
+                label="Target Hub"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
+          name="public-feed"
+          options={{
+            href: isPublicEnv ? undefined : null,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'newspaper' : 'newspaper-outline'}
+                label="Feed"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+
+        {/* Shared Profile Tab */}
+        <Tabs.Screen
+          name="profile"
+          options={{
+            href: undefined,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'person' : 'person-outline'}
+                label="Profile"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+
+        {/* Sub-screens with hidden tab bar */}
+        <Tabs.Screen name="test/engine/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="test/result/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="test/target-exam-student" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="student-chat" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="notes" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="pdf-viewer" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="lab" options={{ href: null, tabBarStyle: { display: 'none' } }} />
       </Tabs>
     </View>
   );

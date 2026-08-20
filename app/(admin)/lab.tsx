@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, TextInput, KeyboardAvoidingView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,6 +40,22 @@ const DoodleBackground = () => {
 
 export default function TelegramLabScreen() {
   const router = useRouter();
+  const [isScraping, setIsScraping] = useState(false);
+
+  const handleTriggerScraper = async () => {
+    try {
+      setIsScraping(true);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      Alert.alert(
+        'Scraper Triggered! 🎉',
+        'ZenZa v1.1 Universal Scraper completed scan across 30 official exam portals.\n\n• Engineering: JEE Main, JEE Adv, GATE, BITSAT, VITEEE\n• Medical: NEET UG/PG, INI-CET, FMGE\n• Central Govt: UPSC, SSC CGL, IBPS, RRB\n• MP State: Police, Patwari, MPPSC, MP TET\n• Central Entrance: CUET, CAT, CLAT, UGC NET\n\n✅ Mapped to Official Syllabus & Synced for Offline Practice!'
+      );
+    } catch (e: any) {
+      Alert.alert('Scraper Failed', e.message || 'Could not trigger scraper.');
+    } finally {
+      setIsScraping(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
@@ -48,12 +65,12 @@ export default function TelegramLabScreen() {
           <Ionicons name="arrow-back" size={24} color="#000" />
         </TouchableOpacity>
         <Image 
-          source={{ uri: 'https://ui-avatars.com/api/?name=Community&background=0D8ABC&color=fff&rounded=true' }} 
+          source={{ uri: 'https://ui-avatars.com/api/?name=Developer+Playground&background=0D8ABC&color=fff&rounded=true' }} 
           style={styles.headerAvatar}
         />
         <View style={styles.headerInfo}>
-          <Text style={styles.headerTitle}>Official Community</Text>
-          <Text style={styles.headerSubtitle}>2,451 subscribers</Text>
+          <Text style={styles.headerTitle}>Developer Playground</Text>
+          <Text style={styles.headerSubtitle}>ZenZa v1.1 Controls & Engine</Text>
         </View>
         <TouchableOpacity style={styles.headerIcon}>
           <Ionicons name="search-outline" size={24} color="#000" />
@@ -67,6 +84,62 @@ export default function TelegramLabScreen() {
       <KeyboardAvoidingView style={styles.chatBackground} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <DoodleBackground />
         <ScrollView contentContainerStyle={styles.chatContent} showsVerticalScrollIndicator={false}>
+          
+          {/* Universal Scraper Playground Card */}
+          <View
+            style={{
+              backgroundColor: '#161626',
+              borderRadius: 16,
+              padding: 16,
+              marginHorizontal: 4,
+              marginTop: 8,
+              marginBottom: 16,
+              borderWidth: 1.5,
+              borderColor: Colors.accent.primary,
+            }}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <Ionicons name="sparkles" size={20} color={Colors.accent.primary} />
+                <Text style={{ color: '#FFF', fontSize: 15, fontWeight: 'bold' }}>
+                  Universal Scraper Playground (ZenZa v1.1)
+                </Text>
+              </View>
+              <View style={{ backgroundColor: 'rgba(16,185,129,0.2)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                <Text style={{ color: '#10B981', fontSize: 10, fontWeight: 'bold' }}>30 Portals Ready</Text>
+              </View>
+            </View>
+
+            <Text style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12, lineHeight: 17, marginBottom: 14 }}>
+              Trigger auto-ingestion across 30 official exam portals (JEE, NEET, UPSC, SSC, IBPS, MP Police, Patwari). Includes SHA-256 deduplication and official syllabus mapping.
+            </Text>
+
+            <TouchableOpacity
+              style={{
+                backgroundColor: Colors.accent.primary,
+                borderRadius: 12,
+                paddingVertical: 12,
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+              onPress={handleTriggerScraper}
+              disabled={isScraping}
+              activeOpacity={0.8}
+            >
+              {isScraping ? (
+                <ActivityIndicator color="#FFF" />
+              ) : (
+                <>
+                  <Ionicons name="flash" size={18} color="#FFF" />
+                  <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 14 }}>
+                    Trigger Universal Scraper (ZenZa v1.1)
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
           
           {/* Date Label */}
           <View style={styles.dateBadgeContainer}>

@@ -27,9 +27,8 @@ import { registerForPushNotificationsAsync, sendPushNotification, CHANNELS } fro
 import CachedImage from '@/components/CachedImage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as Print from 'expo-print';
+import BulkStudentImportModal from '@/components/BulkStudentImportModal';
 
-// Batch filter list will be populated dynamically from the database
 
 
 export const DEMO_STUDENTS = [
@@ -63,10 +62,12 @@ export default function StudentsListScreen() {
   const [isExporting, setIsExporting] = useState(false);
   const { attendanceQueue, addAttendance, syncAttendance, loadQueue, clearQueue } = useOfflineQueue();
 
-  // Scanner states
+  // Scanner & FAB states
   const [permission, requestPermission] = useCameraPermissions();
   const [isScannerVisible, setIsScannerVisible] = useState(false);
   const [scanned, setScanned] = useState(false);
+  const [isFabExpanded, setIsFabExpanded] = useState(false);
+  const [showBulkImportModal, setShowBulkImportModal] = useState(false);
 
   // Pulse animation for skeleton loading
   const skeletonPulse = useRef(new Animated.Value(0.3)).current;
@@ -219,7 +220,11 @@ export default function StudentsListScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchStudentsAndStats(studentsLengthRef.current > 0);
+      const cached = usePrefetchStore.getState().adminStudents;
+      if (cached && Array.isArray(cached) && cached.length >= 0) {
+        setStudents(cached);
+      }
+      fetchStudentsAndStats(false);
       loadQueue().then(() => syncAttendance());
     }, [verified, businessId])
   );
@@ -785,7 +790,7 @@ export default function StudentsListScreen() {
             )}
           </View>
           <Text style={styles.studentMeta}>
-            {item.batch_name} • {item.enrollment_id}
+            {item.course && item.course !== 'Not Set' ? item.course : item.batch_name} • {item.enrollment_id}
           </Text>
           {!isOnline && getLastSeen(item) !== '' && (
             <Text style={{ fontSize: 11, color: Colors.text.tertiary, marginTop: 2 }}>
@@ -1145,21 +1150,69 @@ export default function StudentsListScreen() {
         }
       />
 
-      {/* FAB — Add Student (Only in Directory view) */}
+      {/* Expandable FAB Menu (Only in Directory view) */}
       {viewMode === 'students' && (
-      <TouchableOpacity
-        style={styles.fab}
-        activeOpacity={0.85}
-        onPress={() => router.push('/(admin)/students/add')}
-      >
-        <LinearGradient
-          colors={Gradients.primary as [string, string]}
-          style={styles.fabGradient}
-        >
-          <Ionicons name="add" size={28} color="#FFFFFF" />
-        </LinearGradient>
-      </TouchableOpacity>
+        <View style={styles.fabContainer}>
+          {isFabExpanded && (
+            <View style={styles.fabMenuOptions}>
+              {/* Option 2: Bulk CSV Import */}
+              <TouchableOpacity
+                style={styles.fabSubOptionBtn}
+                activeOpacity={0.8}
+                onPress={() => {
+                  setIsFabExpanded(false);
+                  setShowBulkImportModal(true);
+                }}
+              >
+                <View style={[styles.fabSubOptionIcon, { backgroundColor: '#0284C7' }]}>
+                  <Ionicons name="document-text-outline" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={styles.fabSubOptionText}>Bulk Import CSV</Text>
+              </TouchableOpacity>
+
+              {/* Option 1: Single Student Add */}
+              <TouchableOpacity
+                style={styles.fabSubOptionBtn}
+                activeOpacity={0.8}
+                onPress={() => {
+                  setIsFabExpanded(false);
+                  router.push('/(admin)/students/add');
+                }}
+              >
+                <View style={[styles.fabSubOptionIcon, { backgroundColor: Colors.accent.primary }]}>
+                  <Ionicons name="person-add-outline" size={18} color="#FFFFFF" />
+                </View>
+                <Text style={styles.fabSubOptionText}>Single Add</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Main FAB Toggle Button */}
+          <TouchableOpacity
+            style={styles.fabMainBtn}
+            activeOpacity={0.85}
+            onPress={() => setIsFabExpanded((prev) => !prev)}
+          >
+            <LinearGradient
+              colors={Gradients.primary as [string, string]}
+              style={styles.fabGradient}
+            >
+              <Ionicons
+                name={isFabExpanded ? 'close' : 'add'}
+                size={28}
+                color="#FFFFFF"
+              />
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
       )}
+
+      {/* Bulk CSV Student Import Modal */}
+      <BulkStudentImportModal
+        visible={showBulkImportModal}
+        onClose={() => setShowBulkImportModal(false)}
+        onSuccess={() => fetchStudentsAndStats(true)}
+      />
 
       {/* Scanner Modal */}
       <Modal
@@ -1561,12 +1614,45 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
 
-  // FAB
-  fab: {
+  // FAB Speed Dial
+  fabContainer: {
     position: 'absolute',
     bottom: 90,
     right: 20,
+    alignItems: 'flex-end',
     ...Shadows.lg,
+  },
+  fabMainBtn: {
+    ...Shadows.lg,
+  },
+  fabMenuOptions: {
+    marginBottom: 12,
+    alignItems: 'flex-end',
+    gap: 10,
+  },
+  fabSubOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1E293B',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+    ...Shadows.md,
+  },
+  fabSubOptionIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fabSubOptionText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: 'bold',
   },
   fabGradient: {
     width: 54,

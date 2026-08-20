@@ -22,13 +22,9 @@
       },
       "package": "com.kanelijo.zenza",
       "googleServicesFile": "./google-services.json",
+      "enableProguardInReleaseBuilds": true,
+      "enableShrinkResourcesInReleaseBuilds": true,
       "permissions": [
-        "CAMERA",
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "CAMERA",
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
@@ -78,9 +74,14 @@
         "projectId": "7bee66f7-5c7f-4261-8496-56697b00bbfb"
       }
     },
-    "runtimeVersion": "1.0.0",
+    "runtimeVersion": "1.2.0",
     "updates": {
-      "url": "https://u.expo.dev/7bee66f7-5c7f-4261-8496-56697b00bbfb"
+      "url": "https://u.expo.dev/7bee66f7-5c7f-4261-8496-56697b00bbfb",
+      "requestHeaders": {
+        "expo-channel-name": "preview"
+      },
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 5000
     },
     "owner": "andrewnk"
   }

@@ -6,6 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { usePrefetchStore } from '@/stores/usePrefetchStore';
 import { DEMO_STUDENTS } from './index';
 import { sendPushNotification } from '@/lib/notifications';
 
@@ -525,6 +526,7 @@ export default function StudentDetailScreen() {
     phone: '',
     parent_phone: '',
     batch_name: '',
+    course: '',
     fee_amount: '',
     dob: '',
     address: ''
@@ -652,14 +654,23 @@ export default function StudentDetailScreen() {
     Linking.openURL(`tel:${phoneNum.replace(/\s/g, '')}`);
   };
 
+  // Direct WhatsApp Messaging with NO prefilled message
   const handleWhatsApp = () => {
-    if (!student?.phone) return;
-    Linking.openURL(`https://wa.me/91${student.phone.replace(/\s/g, '')}`);
+    if (!student?.phone) {
+      Alert.alert('No Phone', 'No student phone number available.');
+      return;
+    }
+    const cleanPhone = student.phone.replace(/\s/g, '').replace(/[^0-9]/g, '');
+    Linking.openURL(`whatsapp://send?phone=+91${cleanPhone}`);
   };
 
   const handleWhatsAppParent = () => {
-    if (!student?.parent_phone) return;
-    Linking.openURL(`https://wa.me/91${student.parent_phone.replace(/\s/g, '')}`);
+    if (!student?.parent_phone) {
+      Alert.alert('No Phone', 'No parent phone number available.');
+      return;
+    }
+    const cleanPhone = student.parent_phone.replace(/\s/g, '').replace(/[^0-9]/g, '');
+    Linking.openURL(`whatsapp://send?phone=+91${cleanPhone}`);
   };
 
   const handleSendReminder = async () => {
@@ -811,41 +822,82 @@ export default function StudentDetailScreen() {
   };
 
   const executeDelete = async () => {
-    if (!verified || id.startsWith('demo-')) {
-      if (Platform.OS === 'web') {
-        alert('Deleted (Test Mode) Student record deleted successfully.');
-      } else {
-        Alert.alert('Deleted (Test Mode)', 'Student record deleted successfully.');
-      }
-      router.back();
-      return;
-    }
-
     setIsLoading(true);
     try {
-      const { error } = await supabase
-        .from('students')
-        .delete()
-        .eq('id', id);
+      const targetId = student?.id || id;
+      const targetName = student?.name;
+      const targetAadhaar = student?.aadhaar_number;
+      const targetEnrollment = student?.enrollment_id;
 
-      if (error) throw error;
-      
-      // Delete corresponding profile row if exists
-      if (student?.user_id) {
-        await supabase.from('profiles').delete().eq('id', student.user_id);
+      // 1. Instantly update Zustand prefetch store memory state
+      const prefetchState = usePrefetchStore.getState();
+      if (prefetchState && Array.isArray(prefetchState.adminStudents)) {
+        const filtered = prefetchState.adminStudents.filter(
+          (s: any) =>
+            s.id !== targetId &&
+            s.id !== id &&
+            s.enrollment_id !== targetEnrollment &&
+            s.name !== targetName
+        );
+        usePrefetchStore.setState({ adminStudents: filtered });
+      }
+
+      // 2. Instantly remove from DEMO_STUDENTS array if present
+      for (let i = DEMO_STUDENTS.length - 1; i >= 0; i--) {
+        if (
+          DEMO_STUDENTS[i].id === targetId ||
+          DEMO_STUDENTS[i].id === id ||
+          (targetName && DEMO_STUDENTS[i].name === targetName) ||
+          (targetEnrollment && DEMO_STUDENTS[i].enrollment_id === targetEnrollment)
+        ) {
+          DEMO_STUDENTS.splice(i, 1);
+        }
+      }
+
+      // 3. Fast Server-Side RPC Cascade Deletion (<2ms)
+      if (targetId && !String(targetId).startsWith('demo-')) {
+        try {
+          await supabase.rpc('delete_student_by_id', { p_id: String(targetId) });
+        } catch (rpcErr) {
+          console.warn('RPC delete_student_by_id fallback:', rpcErr);
+        }
+
+        try {
+          await supabase.rpc('delete_student_cascade', { p_student_id: String(targetId) });
+        } catch (_) {}
+
+        // Direct client-side fallback deletions
+        await supabase.from('attendance').delete().eq('student_id', targetId);
+        await supabase.from('test_submissions').delete().eq('student_id', targetId);
+        await supabase.from('payments').delete().eq('student_id', targetId);
+
+        if (targetAadhaar) {
+          await supabase.from('attendance').delete().eq('student_id', targetAadhaar);
+          await supabase.from('students').delete().eq('aadhaar_number', targetAadhaar);
+        }
+        if (targetEnrollment) {
+          await supabase.from('students').delete().eq('enrollment_id', targetEnrollment);
+        }
+
+        await supabase.from('students').delete().eq('id', targetId);
+
+        if (student?.user_id) {
+          await supabase.from('profiles').delete().eq('id', student.user_id);
+        }
       }
 
       if (Platform.OS === 'web') {
         alert('Student record deleted successfully.');
       } else {
-        Alert.alert('Deleted', 'Student record deleted successfully.');
+        Alert.alert('Deleted 🎉', `${targetName || 'Student'} record deleted successfully.`);
       }
       router.back();
     } catch (err: any) {
+      console.warn('Delete error:', err);
       if (Platform.OS === 'web') {
-        alert(err.message || 'Something went wrong.');
+        alert(err.message || 'Something went wrong deleting student.');
       } else {
-        Alert.alert('Delete Failed', err.message || 'Something went wrong.');
+        Alert.alert('Delete Failed', err.message || 'Something went wrong deleting student.');
       }
       setIsLoading(false);
     }
@@ -913,6 +965,7 @@ export default function StudentDetailScreen() {
       phone: student.phone || '',
       parent_phone: student.parent_phone || '',
       batch_name: student.batch_name || '',
+      course: student.course || '',
       fee_amount: String(student.fee_amount || 2500),
       dob: student.dob || '',
       address: student.address || ''
@@ -931,16 +984,22 @@ export default function StudentDetailScreen() {
     }
 
     if (!verified || id.startsWith('demo-')) {
-      setStudent({
+      const updatedObj = {
         ...student,
         name: editForm.name,
         phone: editForm.phone,
         parent_phone: editForm.parent_phone,
         batch_name: editForm.batch_name,
+        course: editForm.course || 'General Course',
         fee_amount: Number(editForm.fee_amount),
         dob: editForm.dob,
         address: editForm.address
-      });
+      };
+      setStudent(updatedObj);
+      const demoIdx = DEMO_STUDENTS.findIndex(s => s.id === id);
+      if (demoIdx !== -1) {
+        DEMO_STUDENTS[demoIdx] = { ...DEMO_STUDENTS[demoIdx], ...updatedObj };
+      }
       setIsEditModalVisible(false);
       Alert.alert('Updated (Test Mode)', 'Student details updated successfully.');
       return;
@@ -955,6 +1014,7 @@ export default function StudentDetailScreen() {
           phone: editForm.phone,
           parent_phone: editForm.parent_phone,
           batch_name: editForm.batch_name,
+          course: editForm.course || 'General Course',
           fee_amount: Number(editForm.fee_amount),
           dob: editForm.dob,
           address: editForm.address
@@ -966,7 +1026,7 @@ export default function StudentDetailScreen() {
       // Update matching profile name
       await supabase.from('profiles').update({ name: editForm.name }).eq('id', id);
 
-      setStudent({ ...student, ...editForm, fee_amount: Number(editForm.fee_amount) });
+      setStudent({ ...student, ...editForm, course: editForm.course || 'General Course', fee_amount: Number(editForm.fee_amount) });
       setIsEditModalVisible(false);
       Alert.alert('Updated', 'Student details updated successfully.');
     } catch (err: any) {
@@ -1454,14 +1514,63 @@ export default function StudentDetailScreen() {
                 </View>
 
                 <View style={styles.inputContainer}>
+                  <Text style={styles.inputLabel}>Course / Stream Name *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={editForm.course}
+                    onChangeText={(text) => setEditForm({ ...editForm, course: text })}
+                    placeholder="e.g. BANKING, SSC, MPPSC, UPSC"
+                    placeholderTextColor={Colors.text.tertiary}
+                  />
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                    {['BANKING', 'SSC', 'MPPSC', 'UPSC', 'Railway', 'VYAPAM', 'General'].map((c) => (
+                      <TouchableOpacity
+                        key={c}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 5,
+                          borderRadius: 8,
+                          backgroundColor: editForm.course === c ? Colors.accent.primary : Colors.bg.tertiary,
+                          marginRight: 6,
+                        }}
+                        onPress={() => setEditForm({ ...editForm, course: c })}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: 'bold', color: editForm.course === c ? '#FFF' : Colors.text.secondary }}>
+                          {c}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+
+                <View style={styles.inputContainer}>
                   <Text style={styles.inputLabel}>Batch Name *</Text>
                   <TextInput
                     style={styles.input}
                     value={editForm.batch_name}
                     onChangeText={(text) => setEditForm({ ...editForm, batch_name: text })}
-                    placeholder="e.g. MPPSC"
+                    placeholder="e.g. Morning, Evening, Batch A"
                     placeholderTextColor={Colors.text.tertiary}
                   />
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                    {['Morning', 'Afternoon', 'Evening', 'Batch A', 'Batch B'].map((b) => (
+                      <TouchableOpacity
+                        key={b}
+                        style={{
+                          paddingHorizontal: 10,
+                          paddingVertical: 5,
+                          borderRadius: 8,
+                          backgroundColor: editForm.batch_name === b ? Colors.accent.primary : Colors.bg.tertiary,
+                          marginRight: 6,
+                        }}
+                        onPress={() => setEditForm({ ...editForm, batch_name: b })}
+                      >
+                        <Text style={{ fontSize: 11, fontWeight: 'bold', color: editForm.batch_name === b ? '#FFF' : Colors.text.secondary }}>
+                          {b}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                 </View>
 
                 <View style={styles.inputContainer}>
