@@ -16,6 +16,7 @@ try {
 import * as FileSystem from 'expo-file-system/legacy';
 import { decode } from 'base64-arraybuffer';
 import { sendPushNotification, fetchStudentPushTokens, CHANNELS } from '@/lib/notifications';
+import DateTimePickerBottomSheet from '@/components/DateTimePickerBottomSheet';
 
 // Mock test data for fallback
 const MOCK_QUESTIONS = [
@@ -46,6 +47,11 @@ export default function TestReviewScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPublishing, setIsPublishing] = useState(false);
 
+  // Publish Modal State
+  const [isPublishModalVisible, setIsPublishModalVisible] = useState(false);
+  const [publishMode, setPublishMode] = useState<'local' | 'schedule'>('local');
+  const [scheduleDate, setScheduleDate] = useState<Date>(new Date(Date.now() + 86400000));
+  const [isDatePickerVisible, setIsDatePickerVisible] = useState(false);
   // Edit Modal State
   const [editingQuestion, setEditingQuestion] = useState<any | null>(null);
   const [editorMode, setEditorMode] = useState<'text' | 'image'>('text');
@@ -337,60 +343,68 @@ export default function TestReviewScreen() {
     }
   };
 
-  const handlePublish = async () => {
-    Alert.alert('Publish Test', 'Are you sure you want to publish this test? Students in the target batches will be notified.', [
-      { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Publish', 
-        onPress: async () => {
-          setIsPublishing(true);
-          try {
-            if (!verified || id === 'demo-test-id') {
-              Alert.alert('Success', 'Test published successfully!');
-              router.replace('/(admin)/test');
-              return;
-            }
+  const handlePublish = () => {
+    setIsPublishModalVisible(true);
+  };
 
-            const { error } = await supabase
-              .from('tests')
-              .update({ status: 'published', start_time: new Date().toISOString() })
-              .eq('id', id);
+  const executePublish = async () => {
+    setIsPublishing(true);
+    try {
+      if (!verified || id === 'demo-test-id') {
+        Alert.alert('Success', 'Test published successfully!');
+        router.replace('/(admin)/test');
+        return;
+      }
 
-            if (error) throw error;
+      let newStatus = 'published';
+      let newStartTime = new Date().toISOString();
 
-            // Fetch target students' push tokens to send notifications
-            try {
-              const targetBatch = testDetails?.batch_name;
-              const targetBusinessId = testDetails?.business_id || businessId;
-              const { user } = useAuthStore.getState();
+      if (publishMode === 'schedule') {
+        if (!scheduleDate) {
+          throw new Error('Please select a valid date and time.');
+        }
+        newStartTime = scheduleDate.toISOString();
+        newStatus = 'scheduled';
+      }
 
-              if (targetBusinessId) {
-                const tokens = await fetchStudentPushTokens(targetBusinessId, user?.id, targetBatch);
-                if (tokens.length > 0) {
-                  await sendPushNotification(
-                    tokens,
-                    'New Test Published 📝',
-                    `A new test "${testDetails?.title || 'Mock Test'}" has been published. Duration: ${testDetails?.duration_minutes || 60} mins.`,
-                    { screen: 'test', testId: id },
-                    1,
-                    CHANNELS.tests
-                  );
-                }
-              }
-            } catch (pushErr) {
-              console.warn('Failed to send push notifications:', pushErr);
-            }
+      const { error } = await supabase
+        .from('tests')
+        .update({ status: newStatus, start_time: newStartTime })
+        .eq('id', id);
 
-            Alert.alert('Success', 'Test published successfully!');
-            router.replace('/(admin)/test');
-          } catch (err: any) {
-            Alert.alert('Error', err.message);
-          } finally {
-            setIsPublishing(false);
+      if (error) throw error;
+
+      // Fetch target students' push tokens to send notifications
+      try {
+        const targetBatch = testDetails?.batch_name;
+        const targetBusinessId = testDetails?.business_id || businessId;
+        const { user } = useAuthStore.getState();
+
+        if (targetBusinessId) {
+          const tokens = await fetchStudentPushTokens(targetBusinessId, user?.id, targetBatch);
+          if (tokens.length > 0) {
+            await sendPushNotification(
+              tokens,
+              publishMode === 'schedule' ? 'Live Test Scheduled ⏰' : 'New Test Published 📝',
+              `A test "${testDetails?.title || 'Mock Test'}" has been ${publishMode === 'schedule' ? 'scheduled.' : 'published.'} Duration: ${testDetails?.duration_minutes || 60} mins.`,
+              { screen: 'test', testId: id },
+              1,
+              CHANNELS.tests
+            );
           }
         }
+      } catch (pushErr) {
+        console.warn('Failed to send push notifications:', pushErr);
       }
-    ]);
+
+      Alert.alert('Success', publishMode === 'schedule' ? 'Live Test scheduled successfully!' : 'Test published successfully!');
+      setIsPublishModalVisible(false);
+      router.replace('/(admin)/test');
+    } catch (err: any) {
+      Alert.alert('Error', err.message);
+    } finally {
+      setIsPublishing(false);
+    }
   };
 
   if (isLoading) {
@@ -663,6 +677,80 @@ export default function TestReviewScreen() {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+      {/* Publish Options Modal */}
+      <Modal visible={isPublishModalVisible} transparent animationType="slide" onRequestClose={() => setIsPublishModalVisible(false)}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Publish Options</Text>
+                <TouchableOpacity onPress={() => setIsPublishModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={Colors.text.primary} />
+                </TouchableOpacity>
+              </View>
+              
+              <View style={{ marginBottom: 20 }}>
+                <Text style={{ color: Colors.text.secondary, marginBottom: 12 }}>How do you want to publish this test?</Text>
+                
+                <TouchableOpacity 
+                  style={[styles.selectorChip, publishMode === 'local' && styles.selectorChipActive, { marginBottom: 10, height: 48, flex: undefined, width: '100%' }]}
+                  onPress={() => setPublishMode('local')}
+                >
+                  <Text style={[styles.selectorChipText, publishMode === 'local' && styles.selectorChipTextActive]}>
+                    Standard Local Test (Available Now)
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={[styles.selectorChip, publishMode === 'schedule' && styles.selectorChipActive, { height: 48, flex: undefined, width: '100%' }]}
+                  onPress={() => setPublishMode('schedule')}
+                >
+                  <Text style={[styles.selectorChipText, publishMode === 'schedule' && styles.selectorChipTextActive]}>
+                    Schedule Live Test (Global Clock Sync)
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {publishMode === 'schedule' && (
+                <View style={{ marginBottom: 20 }}>
+                  <Text style={{ color: Colors.text.primary, fontWeight: '600', marginBottom: 8 }}>Schedule Start Time</Text>
+                  <TouchableOpacity 
+                    style={[styles.textInput, { justifyContent: 'center', height: 48, backgroundColor: Colors.bg.secondary }]}
+                    onPress={() => setIsDatePickerVisible(true)}
+                  >
+                    <Text style={{ color: Colors.text.primary, fontSize: 16 }}>
+                      {scheduleDate ? scheduleDate.toLocaleString() : 'Select Date & Time'}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={{ color: Colors.text.tertiary, fontSize: 12, marginTop: 8 }}>
+                    Students will see this in the Live Test tab, but it will remain locked until you press Start.
+                  </Text>
+                </View>
+              )}
+
+              <TouchableOpacity 
+                style={[styles.saveBtn, { opacity: isPublishing ? 0.7 : 1, flex: undefined, width: '100%', marginTop: 20 }]}
+                disabled={isPublishing}
+                onPress={executePublish}
+              >
+                {isPublishing ? (
+                  <ActivityIndicator size="small" color="#FFF" />
+                ) : (
+                  <Text style={styles.saveBtnText}>Publish Test</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <DateTimePickerBottomSheet 
+        visible={isDatePickerVisible}
+        onClose={() => setIsDatePickerVisible(false)}
+        currentDate={scheduleDate}
+        onSave={(date) => setScheduleDate(date)}
+      />
+
     </SafeAreaView>
   );
 }
@@ -1104,4 +1192,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFF',
   },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: Colors.card?.border || '#E5E5E5',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: Colors.text.primary,
+    fontSize: 16,
+  }
 });

@@ -91,15 +91,15 @@ if (Notifications) {
   });
 }
 
-// Notification channel IDs
+// Notification channel IDs (Incremented to v4 to force Android to apply new sounds)
 export const CHANNELS = {
-  chat:       'kf_chat_v3',
-  community:  'kf_community_v3',
-  fees:       'kf_fees_v3',
-  tests:      'kf_tests_v3',
-  attendance: 'kf_attendance_v3',
-  admin:      'kf_admin_v3',
-  general:    'kf_general_v3',
+  chat:       'kf_chat_v4',
+  community:  'kf_community_v4',
+  fees:       'kf_fees_v4',
+  tests:      'kf_tests_v4',
+  attendance: 'kf_attendance_v4',
+  admin:      'kf_admin_v4',
+  general:    'kf_general_v4',
 };
 
 async function ensureChannels() {
@@ -119,7 +119,7 @@ async function ensureChannels() {
         name: ch.name,
         description: ch.desc,
         importance: Notifications.AndroidImportance.MAX,
-        sound: 'default',
+        sound: ch.id === CHANNELS.chat ? 'chat_noti.mp3' : 'app_noti.mp3',
         vibrationPattern: [0, 250, 150, 250],
         enableVibrate: true,
         showBadge: true,

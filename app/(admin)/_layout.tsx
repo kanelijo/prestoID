@@ -182,6 +182,18 @@ export default function AdminLayout() {
         }}
       />
       <Tabs.Screen
+        name="leaderboard"
+        options={{
+          tabBarIcon: ({ focused }) => (
+            <TabIcon
+              name={focused ? 'podium' : 'podium-outline'}
+              label="Leaderboard"
+              focused={focused}
+            />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="notifications"
         options={{
           tabBarBadge: adminUnreadCount > 0 ? adminUnreadCount : undefined,
@@ -211,6 +223,7 @@ export default function AdminLayout() {
       <Tabs.Screen name="test/target-exam-admin" options={{ href: null }} />
       <Tabs.Screen name="test/banks" options={{ href: null }} />
       <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
+      <Tabs.Screen name="test/live-dashboard/[id]" options={{ href: null }} />
       <Tabs.Screen name="test/zenza-review" options={{ href: null }} />
       <Tabs.Screen name="test/analytics/[id]" options={{ href: null }} />
       <Tabs.Screen name="notebank" options={{ href: null }} />

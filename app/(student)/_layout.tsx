@@ -260,6 +260,19 @@ export default function StudentLayout() {
           }}
         />
         <Tabs.Screen
+          name="leaderboard"
+          options={{
+            href: isPublicEnv ? null : undefined,
+            tabBarIcon: ({ focused }) => (
+              <TabIcon
+                name={focused ? 'podium' : 'podium-outline'}
+                label="Leaderboard"
+                focused={focused}
+              />
+            ),
+          }}
+        />
+        <Tabs.Screen
           name="notifications"
           options={{
             href: isPublicEnv ? null : undefined,

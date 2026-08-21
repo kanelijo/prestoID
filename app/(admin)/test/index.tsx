@@ -719,6 +719,58 @@ export default function AdminTestScreen() {
               </LinearGradient>
             </TouchableOpacity>
           )}
+
+          {/* LIVE SCHEDULED TESTS SECTION */}
+          <View style={{ marginTop: 24, paddingHorizontal: 4 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Animated.View style={{ 
+                width: 10, height: 10, borderRadius: 5, backgroundColor: '#FF3B30', marginRight: 8,
+                opacity: skeletonPulse 
+              }} />
+              <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text.primary }}>
+                Live & Scheduled Tests
+              </Text>
+            </View>
+
+            {tests.filter(t => t.status === 'scheduled' || t.status === 'live').length === 0 ? (
+              <View style={[styles.creatorCard, { backgroundColor: '#F9FAFB', alignItems: 'center', padding: 20 }]}>
+                <Ionicons name="time-outline" size={32} color={Colors.text.tertiary} />
+                <Text style={{ color: Colors.text.secondary, marginTop: 8, fontSize: 13, textAlign: 'center' }}>
+                  No live or scheduled tests. Publish a test as "Schedule Live Test" to see it here.
+                </Text>
+              </View>
+            ) : (
+              tests.filter(t => t.status === 'scheduled' || t.status === 'live').map(liveTest => (
+                <TouchableOpacity 
+                  key={liveTest.id}
+                  style={[styles.creatorCard, { marginBottom: 12, borderWidth: 1, borderColor: liveTest.status === 'live' ? '#FF3B30' : Colors.card.border }]}
+                  activeOpacity={0.8}
+                  onPress={() => router.push(`/(admin)/test/live-dashboard/${liveTest.id}`)}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', padding: 16 }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text.primary }}>{liveTest.title}</Text>
+                      <Text style={{ fontSize: 12, color: Colors.text.secondary, marginTop: 4 }}>
+                        {new Date(liveTest.start_time).toLocaleString()} • {liveTest.duration_minutes} mins
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      {liveTest.status === 'scheduled' ? (
+                        <View style={{ backgroundColor: '#F2F2F7', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 }}>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: Colors.text.secondary }}>WAITING</Text>
+                        </View>
+                      ) : (
+                        <View style={{ backgroundColor: '#FF3B3015', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, borderWidth: 1, borderColor: '#FF3B3030' }}>
+                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#FF3B30' }}>LIVE NOW</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              ))
+            )}
+          </View>
+
         </ScrollView>
       ) : (
         <View style={{ flex: 1, paddingHorizontal: 20 }}>

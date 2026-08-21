@@ -21,6 +21,7 @@ import { useNotificationStore } from '@/stores/useNotificationStore';
 import { usePrefetchStore } from '@/stores/usePrefetchStore';
 import { useFeatureFlags } from '@/stores/useFeatureFlags';
 import RazorpayCheckout from 'react-native-razorpay';
+import LiveTestCard from '@/components/LiveTestCard';
 import { 
   saveTestToLocal,
   saveChatMessageToLocal,
@@ -229,8 +230,10 @@ export default function StudentTestScreen() {
   const { isFeatureActive } = useFeatureFlags();
   const activeStudentId = user?.id;
 
-  const [activeTab, setActiveTab] = useState<'pending' | 'completed' | 'ai'>('pending');
+  const [activeTab, setActiveTab] = useState<'pending' | 'completed' | 'ai' | 'exam'>('pending');
   const prefetch = usePrefetchStore();
+  const [liveTests, setLiveTests] = useState<any[]>([]);
+  const [scheduledTests, setScheduledTests] = useState<any[]>([]);
   const [pendingTests, setPendingTests] = useState<any[]>(prefetch.testsReady ? prefetch.pendingTests : []);
   const [completedTests, setCompletedTests] = useState<any[]>(prefetch.testsReady ? prefetch.completedTests : []);
   const [isLoading, setIsLoading] = useState(!prefetch.testsReady);
@@ -1149,11 +1152,11 @@ CRITICAL MATH FORMATTING RULES:
         }
       }
 
-      // 2. Fetch Published Tests
+      // 2. Fetch Published, Scheduled, and Live Tests
       let testQuery = supabase
         .from('tests')
         .select('*')
-        .eq('status', 'published')
+        .in('status', ['published', 'scheduled', 'live'])
         .neq('is_deleted', true)
         .order('created_at', { ascending: false });
 
@@ -1205,8 +1208,17 @@ CRITICAL MATH FORMATTING RULES:
       }
 
       const takenTestIds = new Set((safeSubmissions || []).map((s: any) => s.test_id));
+      
+      const live = applicableTests
+        .filter((t: any) => !takenTestIds.has(t.id) && t.status === 'live')
+        .sort((a: any, b: any) => new Date(b.start_time || b.created_at || 0).getTime() - new Date(a.start_time || a.created_at || 0).getTime());
+
+      const scheduled = applicableTests
+        .filter((t: any) => !takenTestIds.has(t.id) && t.status === 'scheduled')
+        .sort((a: any, b: any) => new Date(a.start_time || a.created_at || 0).getTime() - new Date(b.start_time || b.created_at || 0).getTime());
+
       const pending = applicableTests
-        .filter((t: any) => !takenTestIds.has(t.id))
+        .filter((t: any) => !takenTestIds.has(t.id) && t.status === 'published')
         .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
 
       const sortedCompleted = (safeSubmissions || []).sort((a: any, b: any) => {
@@ -1215,10 +1227,14 @@ CRITICAL MATH FORMATTING RULES:
         return dateB - dateA;
       });
 
+      setLiveTests(live);
+      setScheduledTests(scheduled);
       setPendingTests(pending);
       setCompletedTests(sortedCompleted);
     } catch (err) {
       console.warn("fetchTests error:", err);
+      setLiveTests([]);
+      setScheduledTests([]);
       setPendingTests([]);
       setCompletedTests([]);
     } finally {
@@ -1694,20 +1710,46 @@ CRITICAL MATH FORMATTING RULES:
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'ai' && styles.tabActive]}
-            onPress={() => setActiveTab('ai')}
+            style={[styles.tab, activeTab === 'exam' && styles.tabActive]}
+            onPress={() => setActiveTab('exam')}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <Ionicons name="sparkles" size={14} color={activeTab === 'ai' ? Colors.accent.primary : Colors.text.tertiary} />
-              <Text style={[styles.tabText, activeTab === 'ai' && styles.tabTextActive]}>
-                AI Practice
-              </Text>
-            </View>
+            <Text style={[styles.tabText, activeTab === 'exam' && styles.tabTextActive]}>
+              Exam Mode
+            </Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {activeTab === 'ai' ? (
+      {activeTab === 'exam' ? (
+        <View style={{ flex: 1 }} key="exam_mode_container">
+          <FlatList
+            data={completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled')} // Just to show completed live tests if needed, or we just render manually
+            ListHeaderComponent={() => (
+              <View style={{ paddingHorizontal: 20, paddingTop: 16 }}>
+                <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginBottom: 12 }}>Live & Scheduled</Text>
+                {(liveTests.length > 0 || scheduledTests.length > 0) ? (
+                  <View style={{ gap: 12 }}>
+                    {liveTests.map((t: any) => <LiveTestCard key={`live_${t.id}`} test={t} />)}
+                    {scheduledTests.map((t: any) => <LiveTestCard key={`sched_${t.id}`} test={t} />)}
+                  </View>
+                ) : (
+                  <Text style={{ color: Colors.text.tertiary, fontSize: 14 }}>No upcoming exams at the moment.</Text>
+                )}
+
+                <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginTop: 24, marginBottom: 12 }}>Completed Exams</Text>
+                {completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled').map((item: any) => (
+                  <TestCard key={`comp_${item.id}`} item={item.tests} completed studentId={activeStudentId} />
+                ))}
+                {completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled').length === 0 && (
+                  <Text style={{ color: Colors.text.tertiary, fontSize: 14 }}>No completed exams yet.</Text>
+                )}
+              </View>
+            )}
+            renderItem={null}
+            contentContainerStyle={{ paddingBottom: 100 }}
+          />
+        </View>
+      ) : activeTab === 'ai' ? (
         renderAiPracticeTab()
       ) : selectedSubject ? (
         <View style={{ flex: 1 }} key="drilled_subject_container">
@@ -1757,15 +1799,36 @@ CRITICAL MATH FORMATTING RULES:
             showsVerticalScrollIndicator={false}
             refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} colors={[Colors.accent.primary]} />}
             ListHeaderComponent={
-              categories.length > 0 ? (
-                <View style={styles.gridHeader}>
-                  <Text style={styles.gridHeaderText}>
-                    {activeTab === 'pending' 
-                      ? `${pendingTests.length} test${pendingTests.length !== 1 ? 's' : ''} pending · ${categories.length} subject${categories.length !== 1 ? 's' : ''}`
-                      : `${completedTests.length} test${completedTests.length !== 1 ? 's' : ''} completed · ${categories.length} subject${categories.length !== 1 ? 's' : ''}`}
-                  </Text>
-                </View>
-              ) : null
+              <View>
+                {activeTab === 'pending' && (liveTests.length > 0 || scheduledTests.length > 0) && (
+                  <View style={{ marginBottom: 24, marginLeft: 20 }}>
+                    <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginBottom: 12 }}>
+                      Live & Scheduled
+                    </Text>
+                    <FlatList
+                      data={[...liveTests, ...scheduledTests]}
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      keyExtractor={(item) => item.id}
+                      renderItem={({ item }) => (
+                        <LiveTestCard 
+                          test={item} 
+                          onPress={() => router.push(`/(student)/test/engine/${item.id}`)}
+                        />
+                      )}
+                    />
+                  </View>
+                )}
+                {categories.length > 0 ? (
+                  <View style={styles.gridHeader}>
+                    <Text style={styles.gridHeaderText}>
+                      {activeTab === 'pending' 
+                        ? `${pendingTests.length} test${pendingTests.length !== 1 ? 's' : ''} pending · ${categories.length} subject${categories.length !== 1 ? 's' : ''}`
+                        : `${completedTests.length} test${completedTests.length !== 1 ? 's' : ''} completed · ${categories.length} subject${categories.length !== 1 ? 's' : ''}`}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             }
             ListEmptyComponent={
               <View style={styles.emptyState}>

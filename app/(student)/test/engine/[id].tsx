@@ -89,6 +89,25 @@ export default function ZenZaTestEngineScreen() {
   );
 
   useEffect(() => {
+    // Listen for realtime status changes for this specific test
+    if (id && typeof id === 'string' && id !== 'demo-test-id') {
+      const channel = supabase.channel(`public:tests:id=eq.${id}`)
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'tests', filter: `id=eq.${id}` },
+          (payload) => {
+            if (payload.new) {
+              setTestDetails((prev: any) => ({ ...prev, ...payload.new }));
+            }
+          }
+        )
+        .subscribe();
+      
+      return () => { supabase.removeChannel(channel); };
+    }
+  }, [id]);
+
+  useEffect(() => {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
     return () => subscription.remove();
   }, []);
@@ -197,7 +216,7 @@ export default function ZenZaTestEngineScreen() {
 
       // Fetch Test (Try Local SQLite Engine SSOT first for 0ms launch & offline mode)
       let test: any = getTestFromLocal(String(id));
-      if (!test) {
+      if (!test || test.status === 'scheduled' || test.status === 'live') {
         const { data: remoteTest, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
         if (tErr) throw tErr;
         test = remoteTest;
@@ -294,7 +313,20 @@ export default function ZenZaTestEngineScreen() {
   };
 
   const startTimer = (durationMinutes: number) => {
-    endTimeRef.current = Date.now() + (durationMinutes * 60 * 1000);
+    if (testDetails?.status === 'live' && testDetails?.start_time) {
+      // Global clock sync: calculate exact end time based on test's absolute start_time
+      const absoluteStartTime = new Date(testDetails.start_time).getTime();
+      endTimeRef.current = absoluteStartTime + (durationMinutes * 60 * 1000);
+      
+      // Fallback: If user joins exactly after test ended
+      if (Date.now() >= endTimeRef.current) {
+         submitTest(false);
+         return;
+      }
+    } else {
+      endTimeRef.current = Date.now() + (durationMinutes * 60 * 1000);
+    }
+
     isTestActive.current = true; // Mark test as live — anti-cheat now active
     activateKeepAwakeAsync();          // Prevent screen from sleeping during test
     setIsStarted(true);
@@ -602,16 +634,24 @@ export default function ZenZaTestEngineScreen() {
         </ScrollView>
 
         <View style={{ gap: 8, paddingBottom: 0, width: '100%' }}>
-          <TouchableOpacity 
-            style={{ backgroundColor: Colors.accent.primary, paddingVertical: 14, borderRadius: 12, alignItems: 'center', shadowColor: Colors.accent.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}
-            onPress={() => {
-              setIsStarted(true);
-              lastTimeRef.current = Date.now();
-              startTimer(testDetails?.duration_minutes || 60);
-            }}
-          >
-            <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Start Test</Text>
-          </TouchableOpacity>
+          {testDetails?.status === 'scheduled' ? (
+            <View style={{ backgroundColor: Colors.bg.secondary, paddingVertical: 14, borderRadius: 12, alignItems: 'center' }}>
+              <ActivityIndicator size="small" color={Colors.accent.primary} style={{ marginBottom: 4 }} />
+              <Text style={{ color: Colors.text.primary, fontSize: 16, fontWeight: '700' }}>Waiting for Teacher...</Text>
+              <Text style={{ color: Colors.text.secondary, fontSize: 12, marginTop: 4 }}>The test will start automatically</Text>
+            </View>
+          ) : (
+            <TouchableOpacity 
+              style={{ backgroundColor: Colors.accent.primary, paddingVertical: 14, borderRadius: 12, alignItems: 'center', shadowColor: Colors.accent.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 4 }}
+              onPress={() => {
+                setIsStarted(true);
+                lastTimeRef.current = Date.now();
+                startTimer(testDetails?.duration_minutes || 60);
+              }}
+            >
+              <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Start Test</Text>
+            </TouchableOpacity>
+          )}
           
           <TouchableOpacity 
             style={{ paddingVertical: 10, alignItems: 'center' }}
