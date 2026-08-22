@@ -1334,7 +1334,8 @@ CRITICAL MATH FORMATTING RULES:
   };
 
   // Build subject categories based on active tab
-  const activeTests = activeTab === 'pending' ? pendingTests : completedTests;
+  const normalCompletedTests = completedTests.filter((t: any) => t.tests?.status !== 'live' && t.tests?.status !== 'scheduled');
+  const activeTests = activeTab === 'pending' ? pendingTests : normalCompletedTests;
   const subjectMap = new Map<string, any[]>();
   for (const t of activeTests) {
     const testItem = activeTab === 'completed' ? t.tests : t;
@@ -1706,7 +1707,7 @@ CRITICAL MATH FORMATTING RULES:
             onPress={() => setActiveTab('completed')}
           >
             <Text style={[styles.tabText, activeTab === 'completed' && styles.tabTextActive]}>
-              Completed ({completedTests.length})
+              Completed ({completedTests.filter((t: any) => t.tests?.status !== 'live' && t.tests?.status !== 'scheduled' && t.tests?.status !== 'completed').length})
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
@@ -1723,24 +1724,24 @@ CRITICAL MATH FORMATTING RULES:
       {activeTab === 'exam' ? (
         <View style={{ flex: 1 }} key="exam_mode_container">
           <FlatList
-            data={completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled')} // Just to show completed live tests if needed, or we just render manually
+            data={completedTests.filter((t: any) => ['live', 'scheduled', 'completed'].includes(t.tests?.status))}
             ListHeaderComponent={() => (
               <View style={{ paddingHorizontal: 20, paddingTop: 16 }}>
                 <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginBottom: 12 }}>Live & Scheduled</Text>
                 {(liveTests.length > 0 || scheduledTests.length > 0) ? (
                   <View style={{ gap: 12 }}>
-                    {liveTests.map((t: any) => <LiveTestCard key={`live_${t.id}`} test={t} />)}
-                    {scheduledTests.map((t: any) => <LiveTestCard key={`sched_${t.id}`} test={t} />)}
+                    {liveTests.map((t: any, i) => <LiveTestCard key={`live_${t.id}`} test={t} index={i} />)}
+                    {scheduledTests.map((t: any, i) => <LiveTestCard key={`sched_${t.id}`} test={t} index={liveTests.length + i} />)}
                   </View>
                 ) : (
                   <Text style={{ color: Colors.text.tertiary, fontSize: 14 }}>No upcoming exams at the moment.</Text>
                 )}
 
                 <Text style={{ fontSize: 18, fontWeight: '800', color: Colors.text.primary, marginTop: 24, marginBottom: 12 }}>Completed Exams</Text>
-                {completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled').map((item: any) => (
-                  <TestCard key={`comp_${item.id}`} item={item.tests} completed studentId={activeStudentId} />
+                {completedTests.filter((t: any) => ['live', 'scheduled', 'completed'].includes(t.tests?.status)).map((item: any) => (
+                  <CompletedTestCard key={`comp_${item.id}`} item={item} onPress={() => router.push(`/(student)/test/result/${item.id}`)} />
                 ))}
-                {completedTests.filter((t: any) => t.tests?.status === 'live' || t.tests?.status === 'scheduled').length === 0 && (
+                {completedTests.filter((t: any) => ['live', 'scheduled', 'completed'].includes(t.tests?.status)).length === 0 && (
                   <Text style={{ color: Colors.text.tertiary, fontSize: 14 }}>No completed exams yet.</Text>
                 )}
               </View>

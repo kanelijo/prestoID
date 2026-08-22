@@ -678,7 +678,7 @@ export default function TestReviewScreen() {
         </View>
       </Modal>
       {/* Publish Options Modal */}
-      <Modal visible={isPublishModalVisible} transparent animationType="slide" onRequestClose={() => setIsPublishModalVisible(false)}>
+      <Modal visible={isPublishModalVisible && !isDatePickerVisible} transparent animationType="slide" onRequestClose={() => setIsPublishModalVisible(false)}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>

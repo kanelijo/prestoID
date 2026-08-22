@@ -45,6 +45,7 @@ export default function ZenZaTestEngineScreen() {
   const changesRef = useRef<Record<string, number>>({});
   const revisitsRef = useRef<Record<string, number>>({});
   const autoAdvanceTimeoutRef = useRef<any>(null);
+  const channelRef = useRef<any>(null);
   const lastTimeRef = useRef<number>(Date.now());
   const hasSubmitted = useRef<boolean>(false);
   // Only true between startTimer() and submitTest() — NOT during analysis/review
@@ -90,22 +91,111 @@ export default function ZenZaTestEngineScreen() {
 
   useEffect(() => {
     // Listen for realtime status changes for this specific test
+    let isMounted = true;
+    let createdChannel: any = null;
+
     if (id && typeof id === 'string' && id !== 'demo-test-id') {
-      const channel = supabase.channel(`public:tests:id=eq.${id}`)
-        .on(
+      const initRealtime = async () => {
+        const topicName = `public:tests:id=eq.${id}`;
+        const existing = supabase.getChannels().find(ch => ch.topic === `realtime:${topicName}` || ch.topic === topicName);
+        if (existing) {
+          await supabase.removeChannel(existing);
+        }
+        if (!isMounted) return;
+
+        let studentName = user?.full_name || 'Anonymous Student';
+        let studentAvatar = user?.avatar_url || null;
+
+        if (user?.id) {
+          const { data: st } = await supabase.from('students').select('name, photo_url').eq('user_id', user.id).maybeSingle();
+          if (st) {
+            if (st.name) studentName = st.name;
+            if (st.photo_url) studentAvatar = st.photo_url;
+          }
+        }
+
+        const channel = supabase.channel(topicName, {
+          config: { presence: { key: user?.id || 'anonymous' } }
+        });
+
+        channel.on(
           'postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'tests', filter: `id=eq.${id}` },
           (payload) => {
-            if (payload.new) {
+            if (payload.new && isMounted) {
               setTestDetails((prev: any) => ({ ...prev, ...payload.new }));
             }
           }
-        )
-        .subscribe();
-      
-      return () => { supabase.removeChannel(channel); };
+        );
+
+        channel.subscribe(async (status) => {
+          if (status === 'SUBSCRIBED' && isMounted) {
+            channelRef.current = channel;
+            createdChannel = channel;
+            await channel.track({
+              user_id: user?.id,
+              name: studentName,
+              avatar: studentAvatar,
+              status: isStarted ? 'writing' : 'waiting',
+              online_at: new Date().toISOString(),
+            });
+          }
+        });
+      };
+
+      initRealtime();
+
+      return () => {
+        isMounted = false;
+        if (channelRef.current) {
+          const ch = channelRef.current;
+          channelRef.current = null;
+          ch.untrack().finally(() => {
+            supabase.removeChannel(ch);
+          });
+        } else if (createdChannel) {
+          createdChannel.untrack().finally(() => {
+            supabase.removeChannel(createdChannel);
+          });
+        }
+      };
     }
-  }, [id]);
+  }, [id, user?.id]);
+
+  // Re-track presence when isStarted changes to update status to 'writing'
+  useEffect(() => {
+    if (channelRef.current && user?.id) {
+      channelRef.current.track({
+        user_id: user.id,
+        name: user.full_name || 'Student',
+        avatar: user.avatar_url || null,
+        status: isStarted ? 'writing' : 'waiting',
+        online_at: new Date().toISOString(),
+      });
+    }
+  }, [isStarted]);
+
+  // Auto-start test when status becomes 'live' while student is waiting
+  useEffect(() => {
+    if (!isStarted && testDetails?.status === 'live' && verified) {
+      setIsStarted(true);
+      lastTimeRef.current = Date.now();
+      startTimer(testDetails?.duration_minutes || testDetails?.time_limit || 60);
+    }
+  }, [testDetails?.status, isStarted, verified]);
+
+  // Polling fallback every 3 seconds while waiting for teacher to start test
+  useEffect(() => {
+    if (!isStarted && id && id !== 'demo-test-id' && (!testDetails || testDetails.status === 'scheduled')) {
+      const interval = setInterval(async () => {
+        const { data } = await supabase.from('tests').select('*').eq('id', id).maybeSingle();
+        if (data && data.status) {
+          setTestDetails((prev: any) => ({ ...prev, ...data }));
+        }
+      }, 3000);
+      return () => clearInterval(interval);
+    }
+  }, [isStarted, id, testDetails?.status]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', handleAppStateChange);
@@ -245,7 +335,16 @@ export default function ZenZaTestEngineScreen() {
         const cachedState = JSON.parse(cachedStateStr);
         if (cachedState.isStarted) {
           const now = Date.now();
-          const updatedEndTime = cachedState.endTime;
+          let updatedEndTime = cachedState.endTime;
+          
+          if (test.status === 'live' && test.start_time) {
+            const absoluteStartTime = new Date(test.start_time).getTime();
+            const duration = test.duration_minutes || test.time_limit || 60;
+            if (!isNaN(absoluteStartTime)) {
+              updatedEndTime = absoluteStartTime + (duration * 60 * 1000);
+            }
+          }
+
           const remaining = Math.max(0, Math.floor((updatedEndTime - now) / 1000));
           if (remaining > 0) {
             // Load local answers into quiz store first
@@ -318,8 +417,8 @@ export default function ZenZaTestEngineScreen() {
       const absoluteStartTime = new Date(testDetails.start_time).getTime();
       endTimeRef.current = absoluteStartTime + (durationMinutes * 60 * 1000);
       
-      // Fallback: If user joins exactly after test ended
-      if (Date.now() >= endTimeRef.current) {
+      // Fallback: If user joins exactly after test ended (or Date parse failed)
+      if (!isNaN(endTimeRef.current) && Date.now() >= endTimeRef.current) {
          submitTest(false);
          return;
       }
@@ -646,7 +745,7 @@ export default function ZenZaTestEngineScreen() {
               onPress={() => {
                 setIsStarted(true);
                 lastTimeRef.current = Date.now();
-                startTimer(testDetails?.duration_minutes || 60);
+                startTimer(testDetails?.duration_minutes || testDetails?.time_limit || 60);
               }}
             >
               <Text style={{ color: '#fff', fontSize: 16, fontWeight: '700' }}>Start Test</Text>
@@ -655,7 +754,7 @@ export default function ZenZaTestEngineScreen() {
           
           <TouchableOpacity 
             style={{ paddingVertical: 10, alignItems: 'center' }}
-            onPress={() => router.back()}
+            onPress={() => router.push('/(student)/test')}
           >
             <Text style={{ color: Colors.text.secondary, fontSize: 14, fontWeight: '600' }}>Cancel</Text>
           </TouchableOpacity>

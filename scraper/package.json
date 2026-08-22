@@ -1,0 +1,19 @@
+{
+  "name": "zenza-universal-scraper",
+  "version": "1.0.0",
+  "description": "Standalone Node.js Web Scraper for KanelFlow Content Lake",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@supabase/supabase-js": "^2.39.3",
+    "axios": "^1.6.5",
+    "cheerio": "^1.0.0-rc.12",
+    "crypto": "^1.0.1",
+    "dotenv": "^16.4.1",
+    "ws": "^8.21.3"
+  }
+}

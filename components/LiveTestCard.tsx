@@ -6,10 +6,11 @@ import Animated, { useSharedValue, useAnimatedStyle, withRepeat, withTiming, wit
 
 interface LiveTestCardProps {
   test: any;
-  onPress: () => void;
+  index?: number;
+  onPress?: () => void;
 }
 
-export default function LiveTestCard({ test, onPress }: LiveTestCardProps) {
+export default function LiveTestCard({ test, index, onPress }: LiveTestCardProps) {
   const isLive = test.status === 'live';
   
   // Heartbeat Animation
@@ -44,21 +45,30 @@ export default function LiveTestCard({ test, onPress }: LiveTestCardProps) {
     opacity: opacity.value,
   }));
 
-  const startTime = new Date(test.start_time);
-  const formattedTime = startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const formatDate = (dateString: string) => {
+    if (!dateString) return 'Available Now';
+    const d = new Date(dateString);
+    return d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, month: 'short', day: 'numeric' });
+  };
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress}>
+    <TouchableOpacity style={[styles.card, isLive && { borderColor: '#FF0000', borderWidth: 2 }]} onPress={onPress}>
       <View style={styles.headerRow}>
         <View style={styles.badgeContainer}>
-          {isLive && (
-            <Animated.View style={[styles.heartbeatDot, heartbeatStyle]} />
+          {index !== undefined && (
+            <Text style={{ fontSize: 12, fontWeight: '700', color: Colors.text.tertiary, textTransform: 'uppercase', marginRight: 8 }}>
+              Test {index + 1}
+            </Text>
           )}
-          <Text style={[styles.badgeText, isLive ? styles.liveText : styles.scheduledText]}>
-            {isLive ? 'LIVE NOW' : 'SCHEDULED'}
-          </Text>
+          {isLive && (
+            <Animated.View style={[styles.heartbeatDot, heartbeatStyle, { backgroundColor: '#FF0000' }]} />
+          )}
+          <View style={[styles.badgeBg, isLive ? { backgroundColor: '#FF0000' } : { backgroundColor: Colors.accent.primary }]}>
+            <Text style={[styles.badgeText, { color: '#FFF' }]}>
+              {isLive ? 'LIVE NOW' : 'SCHEDULED'}
+            </Text>
+          </View>
         </View>
-        <Text style={styles.subjectText}>{test.subject}</Text>
       </View>
       
       <Text style={styles.title} numberOfLines={2}>{test.title}</Text>
@@ -66,14 +76,12 @@ export default function LiveTestCard({ test, onPress }: LiveTestCardProps) {
       <View style={styles.footerRow}>
         <View style={styles.infoPill}>
           <Ionicons name="time-outline" size={14} color={Colors.text.secondary} />
-          <Text style={styles.infoText}>{test.time_limit} mins</Text>
+          <Text style={styles.infoText}>{test.duration_minutes || test.time_limit} mins</Text>
         </View>
-        {!isLive && (
-          <View style={styles.infoPill}>
-            <Ionicons name="calendar-outline" size={14} color={Colors.text.secondary} />
-            <Text style={styles.infoText}>{formattedTime}</Text>
-          </View>
-        )}
+        <View style={styles.infoPill}>
+          <Ionicons name="calendar-outline" size={14} color={Colors.text.secondary} />
+          <Text style={styles.infoText}>{formatDate(test.start_time || test.scheduled_at)}</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -115,9 +123,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#FF3B30',
     marginRight: 6,
   },
+  badgeBg: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
   badgeText: {
     fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.5,
   },
   liveText: {
     color: '#FF3B30',

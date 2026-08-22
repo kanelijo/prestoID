@@ -1,0 +1,34 @@
+name: ZenZa Universal Scraper Daily Job
+
+on:
+  schedule:
+    # Runs at 00:00 UTC every day
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  scrape-and-ingest:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Install Dependencies
+        working-directory: ./scraper
+        run: npm install
+
+      - name: Run Universal Scraper
+        working-directory: ./scraper
+        env:
+          # These secrets must be added to your GitHub Repository Secrets
+          EXPO_PUBLIC_SCRAPER_URL: ${{ secrets.EXPO_PUBLIC_SCRAPER_URL }}
+          SCRAPER_SERVICE_ROLE_KEY: ${{ secrets.SCRAPER_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: npm start

@@ -25,36 +25,60 @@ DECLARE
     v_score INT := 0;
     v_sub_id UUID;
     v_rank INT := 1;
+    v_questions JSONB;
     q_rec RECORD;
     student_ans TEXT;
 BEGIN
-    -- Fetch positive & negative marking rules for this test (default +5, -0)
-    SELECT COALESCE(positive_marks, 5), COALESCE(negative_marks, 0)
-    INTO v_pos_marks, v_neg_marks
+    -- Fetch positive & negative marks, AND the questions array from JSONB
+    SELECT 
+        COALESCE(positive_marks, 5), 
+        COALESCE(negative_marks, 0),
+        questions
+    INTO v_pos_marks, v_neg_marks, v_questions
     FROM public.tests
     WHERE id = p_test_id;
 
-    -- Count total questions in test
-    SELECT COUNT(*) INTO v_total_questions
-    FROM public.test_questions
-    WHERE test_id = p_test_id;
-
-    -- Grade answers securely on server against secret correct_option
-    FOR q_rec IN SELECT id, correct_option FROM public.test_questions WHERE test_id = p_test_id LOOP
-        -- p_answers->>q_rec.id returns a TEXT representation of the JSON value
-        student_ans := p_answers->>q_rec.id::text;
+    -- Count total questions
+    IF v_questions IS NOT NULL AND jsonb_typeof(v_questions) = 'array' THEN
+        v_total_questions := jsonb_array_length(v_questions);
         
-        IF student_ans IS NULL OR student_ans = '' THEN
-            v_skipped_count := v_skipped_count + 1;
-        -- We MUST cast q_rec.correct_option (INT) to TEXT to avoid Postgres type mismatch errors
-        ELSIF student_ans = q_rec.correct_option::text THEN
-            v_correct_count := v_correct_count + 1;
-            v_score := v_score + v_pos_marks;
-        ELSE
-            v_wrong_count := v_wrong_count + 1;
-            v_score := v_score - v_neg_marks;
-        END IF;
-    END LOOP;
+        -- Grade answers by iterating through the JSONB questions array
+        FOR q_rec IN 
+            SELECT 
+                (elem->>'id')::text as q_id,
+                (elem->>'correct_option')::text as correct_opt
+            FROM jsonb_array_elements(v_questions) AS elem
+        LOOP
+            student_ans := p_answers->>q_rec.q_id;
+            
+            IF student_ans IS NULL OR student_ans = '' THEN
+                v_skipped_count := v_skipped_count + 1;
+            ELSIF student_ans = q_rec.correct_opt THEN
+                v_correct_count := v_correct_count + 1;
+                v_score := v_score + v_pos_marks;
+            ELSE
+                v_wrong_count := v_wrong_count + 1;
+                v_score := v_score - v_neg_marks;
+            END IF;
+        END LOOP;
+    ELSE
+        -- Fallback to test_questions table if JSONB doesn't exist
+        SELECT COUNT(*) INTO v_total_questions FROM public.test_questions WHERE test_id = p_test_id;
+        
+        FOR q_rec IN SELECT id::text as q_id, correct_option::text as correct_opt FROM public.test_questions WHERE test_id = p_test_id LOOP
+            student_ans := p_answers->>q_rec.q_id;
+            
+            IF student_ans IS NULL OR student_ans = '' THEN
+                v_skipped_count := v_skipped_count + 1;
+            ELSIF student_ans = q_rec.correct_opt THEN
+                v_correct_count := v_correct_count + 1;
+                v_score := v_score + v_pos_marks;
+            ELSE
+                v_wrong_count := v_wrong_count + 1;
+                v_score := v_score - v_neg_marks;
+            END IF;
+        END LOOP;
+    END IF;
 
     -- Upsert submission row in test_submissions
     INSERT INTO public.test_submissions (
@@ -105,7 +129,6 @@ BEGIN
         v_rank;
 END;
 $$;
-
 
 -- LEADERBOARD RPC
 CREATE OR REPLACE FUNCTION public.get_leaderboard()

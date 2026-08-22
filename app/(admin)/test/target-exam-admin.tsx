@@ -15,6 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
+import { scraperSupabase } from '@/lib/scraperSupabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 interface Exam {
@@ -41,6 +42,11 @@ export default function TargetExamAdminScreen() {
   const [subExams, setSubExams] = useState<Record<string, SubExam[]>>({});
   const [isLoading, setIsLoading] = useState(true);
 
+  // Scraper State
+  const [scrapedCategories, setScrapedCategories] = useState<any[]>([]);
+  const [scrapedExams, setScrapedExams] = useState<Record<string, any[]>>({});
+  const [isScraping, setIsScraping] = useState(false);
+
   // Modal states for creating/editing Exam Category
   const [isExamModalVisible, setIsExamModalVisible] = useState(false);
   const [examName, setExamName] = useState('');
@@ -59,7 +65,43 @@ export default function TargetExamAdminScreen() {
 
   useEffect(() => {
     fetchExams();
+    fetchScrapedData();
   }, [businessId]);
+
+  const fetchScrapedData = async () => {
+    try {
+      setIsScraping(true);
+      const { data: cats, error: catError } = await scraperSupabase
+        .from('scraped_exam_categories')
+        .select('*')
+        .order('name');
+      if (catError) throw catError;
+      
+      setScrapedCategories(cats || []);
+      
+      if (cats && cats.length > 0) {
+        const catIds = cats.map((c: any) => c.id);
+        const { data: examsData, error: examError } = await scraperSupabase
+          .from('scraped_exams')
+          .select('*')
+          .in('category_id', catIds)
+          .order('name');
+          
+        if (examError) throw examError;
+        
+        const examMap: Record<string, any[]> = {};
+        (examsData || []).forEach((e: any) => {
+          if (!examMap[e.category_id]) examMap[e.category_id] = [];
+          examMap[e.category_id].push(e);
+        });
+        setScrapedExams(examMap);
+      }
+    } catch (err: any) {
+      console.warn("Failed to fetch scraped data:", err.message);
+    } finally {
+      setIsScraping(false);
+    }
+  };
 
   const fetchExams = async () => {
     if (!businessId) return;
@@ -203,22 +245,7 @@ export default function TargetExamAdminScreen() {
     ]);
   };
 
-  const [isScraping, setIsScraping] = useState(false);
 
-  const handleTriggerScraper = async () => {
-    try {
-      setIsScraping(true);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      Alert.alert(
-        'Scraper Triggered! 🎉',
-        'ZenZa v1.1 Scraper completed scan across 30 official exam portals.\n\n• Engineering: JEE Main, JEE Adv, GATE, BITSAT, VITEEE\n• Medical: NEET UG/PG, INI-CET, FMGE\n• Central Govt: UPSC, SSC CGL, IBPS, RRB\n• MP State: Police, Patwari, MPPSC, MP TET\n• Central Entrance: CUET, CAT, CLAT, UGC NET\n\n✅ Ingested with SHA-256 Deduplication (0 Overlap).'
-      );
-    } catch (e: any) {
-      Alert.alert('Scraper Failed', e.message || 'Could not trigger scraper.');
-    } finally {
-      setIsScraping(false);
-    }
-  };
 
   if (isLoading) {
     return (
@@ -239,58 +266,51 @@ export default function TargetExamAdminScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Trigger Universal Scraper Playground Card (ZenZa v1.1) */}
-        <View
-          style={{
-            backgroundColor: '#1E1E2E',
-            borderRadius: 16,
-            padding: 16,
-            marginBottom: 20,
-            borderWidth: 1.5,
-            borderColor: Colors.accent.primary,
-          }}
-        >
+        {/* Scraped Content Lake UI */}
+        <View style={{ backgroundColor: '#1E1E2E', borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1.5, borderColor: Colors.accent.primary }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Ionicons name="sparkles" size={20} color={Colors.accent.primary} />
+              <Ionicons name="cloud-download" size={20} color={Colors.accent.primary} />
               <Text style={{ color: Colors.text.primary, fontSize: 15, fontWeight: 'bold' }}>
-                Universal Scraper Playground (ZenZa v1.1)
+                Content Lake (Scraped Data)
               </Text>
             </View>
-            <View style={{ backgroundColor: 'rgba(16,185,129,0.2)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
-              <Text style={{ color: '#10B981', fontSize: 10, fontWeight: 'bold' }}>30 Portals Ready</Text>
-            </View>
+            <TouchableOpacity onPress={fetchScrapedData} disabled={isScraping}>
+              <Ionicons name="refresh" size={20} color={isScraping ? Colors.text.secondary : Colors.accent.primary} />
+            </TouchableOpacity>
           </View>
-
           <Text style={{ color: Colors.text.tertiary, fontSize: 12, lineHeight: 17, marginBottom: 14 }}>
-            Trigger auto-ingestion for Engineering (JEE/GATE), Medical (NEET), Central Govt (UPSC/SSC), MP State (Police/Patwari), & Central Entrance Exams. Includes SHA-256 deduplication.
+            Live view of your separate Supabase scraping database.
           </Text>
 
-          <TouchableOpacity
-            style={{
-              backgroundColor: Colors.accent.primary,
-              borderRadius: 12,
-              paddingVertical: 12,
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-            }}
-            onPress={handleTriggerScraper}
-            disabled={isScraping}
-            activeOpacity={0.8}
-          >
-            {isScraping ? (
-              <ActivityIndicator color="#FFF" />
-            ) : (
-              <>
-                <Ionicons name="flash" size={18} color="#FFF" />
-                <Text style={{ color: '#FFF', fontWeight: 'bold', fontSize: 14 }}>
-                  Trigger Universal Scraper (ZenZa v1.1)
+          {isScraping && scrapedCategories.length === 0 ? (
+            <ActivityIndicator color={Colors.accent.primary} />
+          ) : scrapedCategories.length === 0 ? (
+            <View style={{ padding: 12, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8 }}>
+              <Text style={{ color: Colors.text.secondary, fontSize: 12, textAlign: 'center' }}>No scraped data available yet.</Text>
+            </View>
+          ) : (
+            scrapedCategories.map(cat => (
+              <View key={cat.id} style={{ marginBottom: 12 }}>
+                <Text style={{ color: Colors.text.primary, fontWeight: 'bold', fontSize: 14, marginBottom: 6 }}>
+                  {cat.name}
                 </Text>
-              </>
-            )}
-          </TouchableOpacity>
+                {scrapedExams[cat.id] && scrapedExams[cat.id].map(exam => (
+                  <View key={exam.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 10, backgroundColor: 'rgba(255,255,255,0.05)', borderRadius: 8, marginBottom: 6 }}>
+                    <View>
+                      <Text style={{ color: Colors.text.primary, fontSize: 13, fontWeight: '500' }}>{exam.name}</Text>
+                      {exam.exam_duration_minutes && (
+                        <Text style={{ color: Colors.text.secondary, fontSize: 11, marginTop: 2 }}>Duration: {exam.exam_duration_minutes} mins</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity style={{ backgroundColor: Colors.accent.primary, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 }}>
+                      <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>Import</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </View>
+            ))
+          )}
         </View>
 
         <View style={styles.cardHeader}>

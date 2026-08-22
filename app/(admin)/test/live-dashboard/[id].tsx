@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, FlatList, Alert, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, FlatList, Alert, Modal, TextInput, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,29 +18,88 @@ export default function LiveDashboardScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
 
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const [completedSubmissions, setCompletedSubmissions] = useState<any[]>([]);
+
   // Edit Time Modal
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editDate, setEditDate] = useState<Date | null>(null);
   const [isSavingTime, setIsSavingTime] = useState(false);
 
+  const openEditModal = () => {
+    setEditDate(testDetails?.start_time ? new Date(testDetails.start_time) : new Date());
+    setIsEditModalVisible(true);
+  };
+
+  const saveNewTime = async (newDate: Date) => {
+    try {
+      setIsSavingTime(true);
+      const { error } = await supabase
+        .from('tests')
+        .update({ start_time: newDate.toISOString() })
+        .eq('id', id);
+      if (error) throw error;
+      setTestDetails((prev: any) => ({ ...prev, start_time: newDate.toISOString() }));
+      setIsEditModalVisible(false);
+    } catch (e: any) {
+      Alert.alert('Error', e.message);
+    } finally {
+      setIsSavingTime(false);
+    }
+  };
+
   useEffect(() => {
     fetchTestDetails();
-    fetchActiveStudents();
 
-    // Subscribe to real-time student submissions joining the test
-    const sub = supabase.channel('live-dashboard')
-      .on('postgres_changes', {
-        event: '*',
-        schema: 'public',
-        table: 'test_submissions',
-        filter: `test_id=eq.${id}`
-      }, (payload) => {
-        fetchActiveStudents(); // Refresh list on any submission change
-      })
-      .subscribe();
+    let isMounted = true;
+    const topicName = `public:tests:id=eq.${id}`;
+
+    const setupRealtime = async () => {
+      const existing = supabase.getChannels().find(ch => ch.topic === `realtime:${topicName}` || ch.topic === topicName);
+      if (existing) {
+        await supabase.removeChannel(existing);
+      }
+      if (!isMounted) return;
+
+      const channel = supabase.channel(topicName);
+
+      channel
+        .on('presence', { event: 'sync' }, () => {
+          const newState = channel.presenceState();
+          const active: any[] = [];
+          for (const key in newState) {
+            const presences = newState[key];
+            if (presences.length > 0) {
+              active.push(presences[0]);
+            }
+          }
+          if (isMounted) setActiveStudents(active);
+        })
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'test_submissions', filter: `test_id=eq.${id}` },
+          () => {
+            if (isMounted) fetchTestDetails();
+          }
+        )
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'tests', filter: `id=eq.${id}` },
+          (payload) => {
+            if (payload.new && isMounted) {
+              setTestDetails((prev: any) => ({ ...prev, ...payload.new }));
+            }
+          }
+        )
+        .subscribe();
+    };
+
+    setupRealtime();
 
     return () => {
-      supabase.removeChannel(sub);
+      isMounted = false;
+      const ch = supabase.getChannels().find(c => c.topic === topicName || c.topic === `realtime:${topicName}`);
+      if (ch) supabase.removeChannel(ch);
     };
   }, [id]);
 
@@ -49,6 +108,15 @@ export default function LiveDashboardScreen() {
       const { data, error } = await supabase.from('tests').select('*').eq('id', id).single();
       if (error) throw error;
       setTestDetails(data);
+
+      const { data: subs } = await supabase
+        .from('test_submissions')
+        .select('*, students(name, photo_url)')
+        .eq('test_id', id);
+
+      if (subs) {
+        setCompletedSubmissions(subs);
+      }
     } catch (e) {
       console.warn('Failed to fetch test details', e);
     } finally {
@@ -56,36 +124,62 @@ export default function LiveDashboardScreen() {
     }
   };
 
-  const fetchActiveStudents = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('test_submissions')
-        .select(`
-          id,
-          student_id,
-          status,
-          score,
-          profiles:student_id (name, avatar_url)
-        `)
-        .eq('test_id', id);
-      
-      if (error) throw error;
-      
-      // Transform data to make it flat
-      const formatted = (data || []).map(sub => ({
-        id: sub.id,
-        student_id: sub.student_id,
-        status: sub.status,
-        score: sub.score,
-        name: Array.isArray(sub.profiles) ? sub.profiles[0]?.name : sub.profiles?.name || 'Unknown Student',
-        avatar_url: Array.isArray(sub.profiles) ? sub.profiles[0]?.avatar_url : sub.profiles?.avatar_url,
-      }));
-      
-      setActiveStudents(formatted);
-    } catch (e) {
-      console.warn('Failed to fetch active students', e);
+  useEffect(() => {
+    if (testDetails?.status === 'live' && testDetails?.start_time && testDetails?.duration_minutes) {
+      const updateTimer = () => {
+        const endTime = new Date(testDetails.start_time).getTime() + (testDetails.duration_minutes * 60 * 1000);
+        const rem = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+        setRemainingSeconds(rem);
+        if (rem <= 0) {
+          handleEndTest(true);
+        }
+      };
+
+      updateTimer();
+      const interval = setInterval(updateTimer, 1000);
+      return () => clearInterval(interval);
+    } else {
+      setRemainingSeconds(null);
     }
+  }, [testDetails]);
+
+  const formatTimer = (secs: number | null) => {
+    if (secs === null) return '';
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
+
+  // Combine presence active students with DB completed submissions
+  const allDisplayStudents = () => {
+    const list: any[] = [];
+    const seenUserIds = new Set<string>();
+
+    // 1. Add DB Submissions (Completed)
+    completedSubmissions.forEach(sub => {
+      const uId = sub.student_id;
+      seenUserIds.add(uId);
+      list.push({
+        user_id: uId,
+        name: sub.students?.name || 'Student',
+        avatar: sub.students?.photo_url || null,
+        status: 'submitted',
+        score: sub.score,
+      });
+    });
+
+    // 2. Add Active Presence (Waiting or Writing)
+    activeStudents.forEach(pres => {
+      const uId = pres.user_id;
+      if (uId && !seenUserIds.has(uId)) {
+        list.push(pres);
+      }
+    });
+
+    return list;
+  };
+
+
 
   const handleStartTest = async () => {
     Alert.alert('Start Test', 'Are you sure you want to start this test now? Students will be able to enter immediately.', [
@@ -98,7 +192,10 @@ export default function LiveDashboardScreen() {
           try {
             const { error } = await supabase
               .from('tests')
-              .update({ status: 'live' })
+              .update({ 
+                status: 'live',
+                start_time: new Date().toISOString()
+              })
               .eq('id', id);
             
             if (error) throw error;
@@ -114,30 +211,27 @@ export default function LiveDashboardScreen() {
     ]);
   };
 
-  const openEditModal = () => {
-    if (!testDetails?.start_time) return;
-    setEditDate(new Date(testDetails.start_time));
-    setIsEditModalVisible(true);
+  const handleEndTest = async (auto = false) => {
+    if (!auto) {
+      Alert.alert('End Exam', 'Are you sure you want to end this live exam early? All active students will be forced to submit.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'End Now', style: 'destructive', onPress: performEndTest }
+      ]);
+    } else {
+      performEndTest();
+    }
   };
 
-  const saveNewTime = async (newDate: Date) => {
-    setIsSavingTime(true);
+  const performEndTest = async () => {
     try {
-      const newIsoDate = newDate.toISOString();
       const { error } = await supabase
         .from('tests')
-        .update({ start_time: newIsoDate })
+        .update({ status: 'completed' })
         .eq('id', id);
-      
       if (error) throw error;
-      
-      setIsEditModalVisible(false);
       fetchTestDetails();
-      Alert.alert('Success', 'Schedule updated successfully.');
     } catch (e: any) {
-      Alert.alert('Error', 'Invalid Date/Time format or network error.');
-    } finally {
-      setIsSavingTime(false);
+      console.warn('Failed to end test:', e);
     }
   };
 
@@ -204,16 +298,28 @@ export default function LiveDashboardScreen() {
               )}
             </TouchableOpacity>
           )}
+
+          {testDetails?.status === 'live' && (
+            <TouchableOpacity 
+              style={[styles.startBtn, { backgroundColor: '#FF3B30' }]} 
+              onPress={() => handleEndTest()}
+            >
+              <Ionicons name="stop" size={20} color="#FFF" style={{ marginRight: 8 }} />
+              <Text style={styles.startBtnText}>
+                End Exam Now {remainingSeconds !== null ? `(${formatTimer(remainingSeconds)})` : ''}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         <Text style={{ fontSize: 18, fontWeight: '700', color: Colors.text.primary, marginTop: 24, marginBottom: 12 }}>
-          Active Students ({activeStudents.length})
+          Active Students ({allDisplayStudents().length})
         </Text>
       </View>
 
       <FlatList
-        data={activeStudents}
-        keyExtractor={item => item.id}
+        data={allDisplayStudents()}
+        keyExtractor={item => item.user_id || item.name || Math.random().toString()}
         contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 100 }}
         ListEmptyComponent={
           <View style={{ alignItems: 'center', marginTop: 40 }}>
@@ -221,25 +327,46 @@ export default function LiveDashboardScreen() {
             <Text style={{ color: Colors.text.secondary, marginTop: 12 }}>No students have joined yet.</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <View style={styles.studentCard}>
-            <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.bg.secondary, justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
-              <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.accent.primary }}>{item.name.charAt(0)}</Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 16, fontWeight: '600', color: Colors.text.primary }}>{item.name}</Text>
-              <Text style={{ fontSize: 12, color: Colors.text.secondary }}>
-                Status: <Text style={{ color: item.status === 'completed' ? '#34C759' : '#FF9500' }}>{item.status.toUpperCase()}</Text>
-              </Text>
-            </View>
-            {item.status === 'completed' && (
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={{ fontSize: 12, color: Colors.text.secondary }}>Score</Text>
-                <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text.primary }}>{item.score}</Text>
+        renderItem={({ item }) => {
+          const st = String(item.status || '').toLowerCase();
+          let statusText = 'WAITING IN LOBBY';
+          let statusColor = '#FF9500';
+
+          if (st === 'completed' || st === 'submitted') {
+            statusText = 'SUBMITTED';
+            statusColor = '#007AFF';
+          } else if (testDetails?.status === 'live' && (st === 'writing' || st === 'in_progress' || st === 'active')) {
+            statusText = 'WRITING EXAM';
+            statusColor = '#34C759';
+          } else {
+            statusText = 'WAITING IN LOBBY';
+            statusColor = '#FF9500';
+          }
+
+          return (
+            <View style={styles.studentCard}>
+              <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.bg.secondary, justifyContent: 'center', alignItems: 'center', marginRight: 12, overflow: 'hidden' }}>
+                {item.avatar ? (
+                  <Image source={{ uri: item.avatar }} style={{ width: '100%', height: '100%' }} />
+                ) : (
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.accent.primary }}>{item.name?.charAt(0) || 'A'}</Text>
+                )}
               </View>
-            )}
-          </View>
-        )}
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '600', color: Colors.text.primary }}>{item.name || 'Anonymous Student'}</Text>
+                <Text style={{ fontSize: 12, color: Colors.text.secondary }}>
+                  Status: <Text style={{ color: statusColor, fontWeight: '700' }}>{statusText}</Text>
+                </Text>
+              </View>
+              {(st === 'completed' || st === 'submitted') && item.score !== undefined && (
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ fontSize: 12, color: Colors.text.secondary }}>Score</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: Colors.text.primary }}>{item.score}</Text>
+                </View>
+              )}
+            </View>
+          );
+        }}
       />
 
       {/* Edit Time Modal */}
