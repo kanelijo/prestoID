@@ -93,7 +93,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0.0"
+        versionName "1.2.0"
 
         // Strip non-English translations from libraries (Google Play Services, Razorpay, AndroidX)
         resConfigs "en"

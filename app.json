@@ -71,18 +71,10 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "7bee66f7-5c7f-4261-8496-56697b00bbfb"
+        "projectId": "c2ee283f-bb36-444a-a886-67c1d16ef893"
       }
     },
     "runtimeVersion": "1.2.0",
-    "updates": {
-      "url": "https://u.expo.dev/7bee66f7-5c7f-4261-8496-56697b00bbfb",
-      "requestHeaders": {
-        "expo-channel-name": "preview"
-      },
-      "checkAutomatically": "ON_LOAD",
-      "fallbackToCacheTimeout": 5000
-    },
-    "owner": "andrewnk"
+    "owner": "team43"
   }
 }

@@ -11,6 +11,8 @@
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
 		BB2F792D24A3F905000567C9 /* Expo.plist in Resources */ = {isa = PBXBuildFile; fileRef = BB2F792C24A3F905000567C9 /* Expo.plist */; };
 		F11748422D0307B40044C1D9 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F11748412D0307B40044C1D9 /* AppDelegate.swift */; };
+		AF59E64CE82B400089EC58CE /* app_noti.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = AD52C2279ED14325B25B482B /* app_noti.mp3 */; };
+		ED730B1FE25540E2AD86C9BF /* chat_noti.mp3 in Resources */ = {isa = PBXBuildFile; fileRef = 223D30C5196A4F059E0F6CD7 /* chat_noti.mp3 */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +24,8 @@
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 		F11748412D0307B40044C1D9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = Zenza/AppDelegate.swift; sourceTree = "<group>"; };
 		F11748442D0722820044C1D9 /* Zenza-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = "Zenza-Bridging-Header.h"; path = "Zenza/Zenza-Bridging-Header.h"; sourceTree = "<group>"; };
+		AD52C2279ED14325B25B482B /* app_noti.mp3 */ = {isa = PBXFileReference; name = "app_noti.mp3"; path = "Zenza/app_noti.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		223D30C5196A4F059E0F6CD7 /* chat_noti.mp3 */ = {isa = PBXFileReference; name = "chat_noti.mp3"; path = "Zenza/chat_noti.mp3"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -44,6 +48,8 @@
 				13B07FB51A68108700A75B9A /* Images.xcassets */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */,
+				AD52C2279ED14325B25B482B /* app_noti.mp3 */,
+				223D30C5196A4F059E0F6CD7 /* chat_noti.mp3 */,
 			);
 			name = Zenza;
 			sourceTree = "<group>";
@@ -156,6 +162,8 @@
 				BB2F792D24A3F905000567C9 /* Expo.plist in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 				3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */,
+				AF59E64CE82B400089EC58CE /* app_noti.mp3 in Resources */,
+				ED730B1FE25540E2AD86C9BF /* chat_noti.mp3 in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
