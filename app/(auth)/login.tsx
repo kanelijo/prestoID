@@ -2,17 +2,21 @@ import { useState } from 'react';
 import {
   View,
   Text,
+  TextInput,
   TouchableOpacity,
   StyleSheet,
   Alert,
   ActivityIndicator,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import auth from '@react-native-firebase/auth';
 import { Colors } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -20,9 +24,8 @@ import { useAuthStore } from '@/stores/useAuthStore';
 const { height: screenHeight } = Dimensions.get('window');
 
 GoogleSignin.configure({
-  webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
+  webClientId: '500087439972-42l1848gjo7lm7du488ui5f44fluup5m.apps.googleusercontent.com',
   offlineAccess: true,
-  scopes: ['https://www.googleapis.com/auth/drive.appdata'],
 });
 
 export default function LoginScreen() {
@@ -30,17 +33,98 @@ export default function LoginScreen() {
   const { role: paramRole } = useLocalSearchParams<{ role?: 'student' | 'admin' }>();
   const role = paramRole || 'student';
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
+
+  // Phone Auth States
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [confirm, setConfirm] = useState<any>(null);
+  const [code, setCode] = useState('');
+
   const { setUser, setSession, setRole, setVerified } = useAuthStore();
 
-  const handleGoogleSignIn = async () => {
+  // ─── PHONE OTP ───────────────────────────────────────────
+
+  const handleSendOTP = async () => {
+    const cleaned = phoneNumber.replace(/\s/g, '');
+    if (!cleaned || cleaned.length < 10) {
+      Alert.alert('Invalid Number', 'Please enter a valid 10-digit phone number.');
+      return;
+    }
     setIsLoading(true);
     try {
-      await GoogleSignin.hasPlayServices();
-      try {
-        await GoogleSignin.signOut(); // Force clear previous session to show account chooser
-      } catch (e) {
-        // Ignore
+      const formatted = cleaned.startsWith('+') ? cleaned : `+91${cleaned}`;
+      const confirmation = await auth().signInWithPhoneNumber(formatted);
+      setConfirm(confirmation);
+    } catch (err: any) {
+      console.error('OTP Send Error:', err);
+      Alert.alert('Error', err.message || 'Failed to send OTP. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyOTP = async () => {
+    if (!code || code.length < 6) {
+      Alert.alert('Invalid Code', 'Please enter the 6-digit OTP.');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const userCredential = await confirm.confirm(code);
+      const firebaseUser = userCredential.user;
+      if (firebaseUser.phoneNumber) {
+        await loginToSupabaseWithPhone(firebaseUser.phoneNumber);
+      } else {
+        throw new Error('Phone number missing from Firebase verification.');
       }
+    } catch (err: any) {
+      console.error('OTP Verify Error:', err);
+      if (err.code === 'auth/invalid-verification-code') {
+        Alert.alert('Wrong Code', 'The OTP you entered is incorrect. Please try again.');
+      } else {
+        Alert.alert('Verification Failed', err.message || 'Invalid OTP code.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loginToSupabaseWithPhone = async (phone: string) => {
+    const safePhone = phone.replace(/\+/g, '');
+    const dummyEmail = `${safePhone}@zenza.app`;
+    const dummyPassword = `${safePhone}ZenzaSecure2026!`;
+
+    // Try sign in first
+    let { data, error } = await supabase.auth.signInWithPassword({
+      email: dummyEmail,
+      password: dummyPassword,
+    });
+
+    // If user doesn't exist, create account
+    if (error && error.message.includes('Invalid login credentials')) {
+      const signUpResult = await supabase.auth.signUp({
+        email: dummyEmail,
+        password: dummyPassword,
+        options: { data: { phone } },
+      });
+      data = signUpResult.data;
+      error = signUpResult.error;
+    }
+
+    if (error) throw error;
+    if (data.user && data.session) {
+      await processAuth(data.user, data.session);
+    }
+  };
+
+  // ─── GOOGLE SIGN-IN ──────────────────────────────────────
+
+  const handleGoogleSignIn = async () => {
+    setIsGoogleLoading(true);
+    try {
+      await GoogleSignin.hasPlayServices();
+      try { await GoogleSignin.signOut(); } catch (e) { /* ignore */ }
+
       const userInfo = await GoogleSignin.signIn();
       const idToken = userInfo.data?.idToken || (userInfo as any).idToken;
 
@@ -54,7 +138,6 @@ export default function LoginScreen() {
       });
 
       if (error) throw error;
-
       if (user && session) {
         await processAuth(user, session);
       }
@@ -63,9 +146,11 @@ export default function LoginScreen() {
         Alert.alert('Google Sign-In Failed', err.message || 'Failed to authenticate with Google.');
       }
     } finally {
-      setIsLoading(false);
+      setIsGoogleLoading(false);
     }
   };
+
+  // ─── SHARED AUTH PROCESSING ──────────────────────────────
 
   const processAuth = async (user: any, session: any) => {
     const store = useAuthStore.getState();
@@ -79,9 +164,7 @@ export default function LoginScreen() {
       .eq('id', user.id)
       .maybeSingle();
 
-    if (profileError) {
-      throw profileError;
-    }
+    if (profileError) throw profileError;
 
     let userRole = profile?.role;
 
@@ -90,7 +173,7 @@ export default function LoginScreen() {
         .from('profiles')
         .upsert({
           id: user.id,
-          name: role === 'student' ? 'Student' : (user.user_metadata?.name || 'User'),
+          name: role === 'student' ? 'Student' : (user.user_metadata?.name || 'Admin'),
           email: user.email,
           role: role,
           business_id: profile?.business_id || null,
@@ -142,7 +225,6 @@ export default function LoginScreen() {
 
     let destination = '';
     if (userRole === 'admin') {
-      // Check if admin has created their business profile
       const { data: inst, error: instError } = await supabase
         .from('businesses')
         .select('id')
@@ -155,7 +237,6 @@ export default function LoginScreen() {
         destination = '/(auth)/create-institute';
       }
     } else {
-      // Student
       if (profile?.claimed) {
         destination = '/(student)/id-card';
       } else {
@@ -165,76 +246,153 @@ export default function LoginScreen() {
 
     router.replace({
       pathname: '/restore',
-      params: { next: destination }
+      params: { next: destination },
     });
   };
 
+  // ─── UI ──────────────────────────────────────────────────
+
   return (
-    <LinearGradient
-      colors={['#AF2800', '#5C1400']}
-      style={styles.container}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 0, y: 1 }}
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* Back Button */}
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => {
-          if (router.canGoBack()) {
-            router.back();
-          } else {
-            router.replace('/onboarding');
-          }
-        }}
-        activeOpacity={0.8}
+      <LinearGradient
+        colors={['#AF2800', '#5C1400']}
+        style={styles.container}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 0, y: 1 }}
       >
-        <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
-      </TouchableOpacity>
+        {/* Back Button */}
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => {
+            if (confirm) {
+              setConfirm(null);
+              setCode('');
+            } else if (router.canGoBack()) {
+              router.back();
+            } else {
+              router.replace('/onboarding');
+            }
+          }}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
 
-      <View style={styles.content}>
-        {/* Branding */}
-        <View style={styles.brandingSection}>
-          <View style={styles.logoIcon}>
-            <Text style={styles.logoLetter}>Z</Text>
+        <View style={styles.content}>
+          {/* Branding */}
+          <View style={styles.brandingSection}>
+            <View style={styles.logoIcon}>
+              <Text style={styles.logoLetter}>Z</Text>
+            </View>
+            <Text style={styles.brandName}>Zenza</Text>
+            <Text style={styles.brandTagline}>Smart Learning Companion</Text>
           </View>
-          <Text style={styles.brandName}>Zenza</Text>
-          <Text style={styles.brandTagline}>Smart Learning Companion</Text>
-        </View>
 
-        {/* Auth Card */}
-        <View style={styles.authCard}>
-          <Text style={styles.heading}>
-            {role === 'admin' ? 'Admin Access' : 'Student Access'}
-          </Text>
-          <Text style={styles.subheading}>
-            {role === 'admin' 
-              ? 'Sign in to access your coaching management dashboard' 
-              : 'Sign in to access your student profile and digital ID card'}
-          </Text>
+          {/* Auth Card */}
+          <View style={styles.authCard}>
+            <Text style={styles.heading}>
+              {role === 'admin' ? 'Admin Access' : 'Student Access'}
+            </Text>
+            <Text style={styles.subheading}>
+              {confirm
+                ? 'Enter the 6-digit code sent to your phone'
+                : 'Enter your phone number to sign in securely'}
+            </Text>
 
-          {/* Google Button */}
-          <TouchableOpacity 
-            style={[styles.googleButton, isLoading && styles.buttonDisabled]} 
-            activeOpacity={0.8}
-            onPress={handleGoogleSignIn}
-            disabled={isLoading}
-          >
-            {isLoading ? (
-              <ActivityIndicator color="#AF2800" />
+            {/* Phone / OTP Input */}
+            {!confirm ? (
+              <View style={styles.inputContainer}>
+                <View style={styles.phonePrefix}>
+                  <Text style={styles.prefixText}>+91</Text>
+                </View>
+                <TextInput
+                  style={styles.phoneInput}
+                  placeholder="Phone Number"
+                  placeholderTextColor="rgba(0,0,0,0.35)"
+                  keyboardType="phone-pad"
+                  value={phoneNumber}
+                  onChangeText={setPhoneNumber}
+                  maxLength={10}
+                  autoFocus
+                />
+              </View>
             ) : (
+              <View style={styles.inputContainer}>
+                <TextInput
+                  style={[styles.phoneInput, styles.otpInput]}
+                  placeholder="● ● ● ● ● ●"
+                  placeholderTextColor="rgba(0,0,0,0.25)"
+                  keyboardType="number-pad"
+                  value={code}
+                  onChangeText={setCode}
+                  maxLength={6}
+                  autoFocus
+                />
+              </View>
+            )}
+
+            {/* Primary Button: Send OTP / Verify */}
+            <TouchableOpacity
+              style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
+              activeOpacity={0.8}
+              onPress={!confirm ? handleSendOTP : handleVerifyOTP}
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <>
+                  <Ionicons
+                    name={!confirm ? 'phone-portrait-outline' : 'shield-checkmark-outline'}
+                    size={20}
+                    color="#FFFFFF"
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.primaryButtonText}>
+                    {!confirm ? 'Send OTP' : 'Verify & Continue'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            {/* Divider */}
+            {!confirm && (
               <>
-                <Ionicons name="logo-google" size={22} color="#AF2800" />
-                <Text style={styles.googleText}>Continue with Google</Text>
+                <View style={styles.divider}>
+                  <View style={styles.dividerLine} />
+                  <Text style={styles.dividerText}>or</Text>
+                  <View style={styles.dividerLine} />
+                </View>
+
+                {/* Google Sign-In Button */}
+                <TouchableOpacity
+                  style={[styles.googleButton, isGoogleLoading && styles.buttonDisabled]}
+                  activeOpacity={0.8}
+                  onPress={handleGoogleSignIn}
+                  disabled={isGoogleLoading}
+                >
+                  {isGoogleLoading ? (
+                    <ActivityIndicator color="#AF2800" />
+                  ) : (
+                    <>
+                      <Ionicons name="logo-google" size={20} color="#AF2800" />
+                      <Text style={styles.googleText}>Continue with Google</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
               </>
             )}
-          </TouchableOpacity>
 
-          <Text style={styles.footerText}>
-            Secure authentication powered by Supabase RLS
-          </Text>
+            <Text style={styles.footerText}>
+              Secure authentication powered by Firebase & Supabase
+            </Text>
+          </View>
         </View>
-      </View>
-    </LinearGradient>
+      </LinearGradient>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -258,7 +416,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     justifyContent: 'space-between',
-    paddingTop: screenHeight * 0.18,
+    paddingTop: screenHeight * 0.12,
     paddingBottom: 40,
   },
   brandingSection: {
@@ -316,9 +474,84 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.text.secondary,
     textAlign: 'center',
-    marginBottom: 28,
+    marginBottom: 24,
     lineHeight: 20,
     fontWeight: '500',
+  },
+  inputContainer: {
+    flexDirection: 'row',
+    width: '100%',
+    height: 56,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E0E0E0',
+    overflow: 'hidden',
+    marginBottom: 16,
+  },
+  phonePrefix: {
+    width: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#EEEEEE',
+    borderRightWidth: 1,
+    borderRightColor: '#E0E0E0',
+  },
+  prefixText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: Colors.text.primary,
+  },
+  phoneInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    fontSize: 17,
+    color: Colors.text.primary,
+    fontWeight: '600',
+  },
+  otpInput: {
+    textAlign: 'center',
+    fontSize: 22,
+    letterSpacing: 12,
+  },
+  primaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#AF2800',
+    borderRadius: 16,
+    height: 56,
+    width: '100%',
+    shadowColor: '#AF2800',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginVertical: 16,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E0E0E0',
+  },
+  dividerText: {
+    marginHorizontal: 12,
+    fontSize: 13,
+    color: Colors.text.tertiary,
+    fontWeight: '600',
   },
   googleButton: {
     flexDirection: 'row',
@@ -328,27 +561,19 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: '#AF2800',
     borderRadius: 16,
-    height: 56,
+    height: 52,
     width: '100%',
-    shadowColor: '#AF2800',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 2,
-    gap: 12,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
+    gap: 10,
   },
   googleText: {
     color: '#AF2800',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
   },
   footerText: {
     fontSize: 11,
     color: Colors.text.tertiary,
-    marginTop: 20,
+    marginTop: 18,
     fontWeight: '500',
   },
 });

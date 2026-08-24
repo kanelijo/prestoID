@@ -14,13 +14,13 @@ import { supabase } from '@/lib/supabase';
 import CustomAlertContainer from '@/components/CustomAlert';
 import { savePeerMessageToLocal, runBackgroundCacheCleanup } from '@/lib/localDb';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import '@react-native-firebase/app';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 
 try {
   GoogleSignin.configure({
-    webClientId: '698075781767-7me6ngm7q5je5lod3ktc5vjk15er19q0.apps.googleusercontent.com',
+    webClientId: '500087439972-42l1848gjo7lm7du488ui5f44fluup5m.apps.googleusercontent.com',
     offlineAccess: true,
-    scopes: ['https://www.googleapis.com/auth/drive.appdata'],
   });
 } catch (e) {
   console.warn('GoogleSignin config error in _layout.tsx:', e);

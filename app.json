@@ -50,6 +50,8 @@
       "expo-status-bar",
       "expo-sharing",
       "@react-native-google-signin/google-signin",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
       "expo-image",
       "expo-sqlite",
       [
@@ -71,10 +73,10 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "c2ee283f-bb36-444a-a886-67c1d16ef893"
+        "projectId": "4b70ac66-7374-4916-a7f1-1eeafd7181de"
       }
     },
     "runtimeVersion": "1.2.0",
-    "owner": "team43"
+    "owner": "catataste"
   }
 }

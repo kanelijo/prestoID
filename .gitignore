@@ -11,3 +11,11 @@ web-build/
 .env
 .env.local
 lib/googleDriveCredentials.ts
+
+# Android build cache (Prevents local paths from breaking cloud EAS builds)
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+.cxx/
+.github/workflows/
