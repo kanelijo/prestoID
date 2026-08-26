@@ -64,8 +64,21 @@ export default function LoginScreen() {
     };
   }, [confirm, resendTimer]);
 
-  // ─── PHONE OTP ───────────────────────────────────────────
+  // ─── SAFE BACK BUTTON ────────────────────────────────────
+  const handleBackPress = () => {
+    if (confirm) {
+      setConfirm(null);
+      setCode('');
+      setResendTimer(30);
+      setCanResend(false);
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/onboarding' as any);
+    }
+  };
 
+  // ─── PHONE OTP ───────────────────────────────────────────
   const handleSendOTP = async () => {
     const cleaned = phoneNumber.replace(/\s/g, '');
     if (!cleaned || cleaned.length < 10) {
@@ -135,12 +148,12 @@ export default function LoginScreen() {
         password: dummyPassword,
         options: { data: { phone } },
       });
-      data = signUpResult.data;
+      data = signUpResult.data as any;
       error = signUpResult.error;
     }
 
     if (error) throw error;
-    if (data.user && data.session) {
+    if (data?.user && data?.session) {
       await supabase.from('profiles').upsert({
         id: data.user.id,
         phone: phone,
@@ -153,7 +166,6 @@ export default function LoginScreen() {
   };
 
   // ─── GOOGLE SIGN-IN ──────────────────────────────────────
-
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     try {
@@ -178,123 +190,82 @@ export default function LoginScreen() {
       }
     } catch (err: any) {
       if (err.code !== '12501' && err.message !== 'Sign in action cancelled') {
-        Alert.alert('Google Sign-In Failed', err.message || 'Failed to authenticate with Google.');
+        console.error('Google Sign-In Error:', err);
+        Alert.alert('Sign-In Error', err.message || 'Google authentication failed.');
       }
     } finally {
       setIsGoogleLoading(false);
     }
   };
 
-  // ─── SHARED AUTH PROCESSING & DUAL LOGIN RESOLUTION ──────
-
-  const processAuth = async (user: any, session: any, verifiedPhone?: string) => {
-    const store = useAuthStore.getState();
-    store.setUser(user);
-    store.setSession(session);
-
-    let profile: any = null;
-    const { data: profileData } = await supabase
-      .from('profiles')
-      .select('role, business_id, claimed, avatar_url, phone, email, full_name')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    profile = profileData;
-
-    if (!profile && (user.email || verifiedPhone)) {
-      let query = supabase.from('profiles').select('role, business_id, claimed, avatar_url, phone, email, full_name');
-      if (user.email) query = query.eq('email', user.email);
-      else if (verifiedPhone) query = query.eq('phone', verifiedPhone);
-      const { data: linkedProfile } = await query.maybeSingle();
-      if (linkedProfile) {
-        profile = linkedProfile;
-      }
-    }
-
-    let userRole = profile?.role;
-
-    if (!userRole) {
-      const { error: roleUpdateError } = await supabase
-        .from('profiles')
-        .upsert({
-          id: user.id,
-          name: role === 'student' ? 'Student' : (user.user_metadata?.name || 'Admin'),
-          full_name: role === 'student' ? 'Student' : (user.user_metadata?.name || 'Admin'),
-          email: user.email,
-          phone: verifiedPhone || profile?.phone || null,
-          role: role,
-          business_id: profile?.business_id || null,
-          claimed: profile?.claimed || false,
-        });
-
-      if (roleUpdateError) throw roleUpdateError;
-      userRole = role;
-    } else if (userRole !== role) {
-      throw new Error(`This account is registered as a ${userRole}. Please choose the ${userRole} tab to sign in.`);
-    }
-
-    store.setRole(userRole);
-    const avatarUrl = profile?.avatar_url || null;
-    store.setAvatarUrl(avatarUrl);
-
-    let businessData = null;
-    if (profile?.business_id) {
-      const { data: business } = await supabase
-        .from('businesses')
-        .select('id, organization_id, business_name, business_type')
-        .eq('id', profile.business_id)
-        .maybeSingle();
-
-      if (business) {
-        store.setBusiness(business.id, business.organization_id, business.business_name, business.business_type);
-        businessData = business;
-      }
-    }
-
+  // ─── UNIFIED AUTH PROCESSOR ──────────────────────────────
+  const processAuth = async (user: any, session: any, phoneIdentifier?: string) => {
     try {
-      const profileCache = {
-        userId: user.id,
-        email: user.email,
-        phone: verifiedPhone || profile?.phone || null,
-        role: userRole,
-        businessId: businessData?.id || null,
-        businessCode: businessData?.organization_id || null,
-        businessName: businessData?.business_name || null,
-        businessType: businessData?.business_type || null,
-        claimed: profile?.claimed || false,
-        avatarUrl,
-      };
-      await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
-    } catch (cacheErr) {
-      console.warn('Failed to save profile cache on login:', cacheErr);
-    }
+      setUser(user);
+      setSession(session);
+      setVerified(true);
 
-    let destination = '';
-    if (userRole === 'admin') {
-      const { data: inst } = await supabase
-        .from('businesses')
-        .select('id')
-        .eq('admin_id', user.id)
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
         .maybeSingle();
 
-      if (inst) {
-        destination = '/(admin)/students';
+      const userRole = profile?.role || role;
+      const userBizId = profile?.business_id;
+      setRole(userRole);
+
+      await AsyncStorage.setItem('zenza_role', userRole);
+
+      if (userRole === 'admin') {
+        if (!userBizId) {
+          router.replace('/create-institute' as any);
+        } else {
+          router.replace('/(admin)' as any);
+        }
       } else {
-        destination = '/(auth)/create-institute';
+        const { data: linkedStudent } = await supabase
+          .from('students')
+          .select('id, business_id')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (linkedStudent) {
+          router.replace('/(student)' as any);
+        } else {
+          let phoneToMatch = phoneIdentifier || user.phone || user.user_metadata?.phone;
+          if (phoneToMatch) {
+            const raw10 = phoneToMatch.replace(/[^0-9]/g, '').slice(-10);
+            const { data: matchedStudent } = await supabase
+              .from('students')
+              .select('id, business_id')
+              .eq('phone', raw10)
+              .is('user_id', null)
+              .maybeSingle();
+
+            if (matchedStudent) {
+              await supabase
+                .from('students')
+                .update({ user_id: user.id })
+                .eq('id', matchedStudent.id);
+
+              await supabase
+                .from('profiles')
+                .update({ business_id: matchedStudent.business_id })
+                .eq('id', user.id);
+
+              router.replace('/(student)' as any);
+              return;
+            }
+          }
+          router.replace('/claim-profile' as any);
+        }
       }
-    } else {
-      if (profile?.claimed && profile?.business_id) {
-        destination = '/(student)/id-card';
-      } else {
-        destination = '/(auth)/claim-profile';
-      }
+    } catch (e: any) {
+      console.error('Auth processing error:', e);
+      router.replace('/claim-profile' as any);
     }
-
-    setVerified(true);
-    router.replace(`/restore?next=${encodeURIComponent(destination)}` as any);
   };
-
-  // ─── UI ──────────────────────────────────────────────────
 
   return (
     <KeyboardAvoidingView
@@ -307,60 +278,55 @@ export default function LoginScreen() {
       >
         <TouchableOpacity
           style={styles.backButton}
-          onPress={() => {
-            if (confirm) {
-              setConfirm(null);
-              setCode('');
-            } else {
-              router.back();
-            }
-          }}
+          onPress={handleBackPress}
         >
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
 
         <View style={styles.content}>
-          <View style={styles.headerSection}>
-            <Text style={styles.headerTitle}>
-              {!confirm ? 'Verify your phone number' : 'Verifying your number'}
-            </Text>
-            <Text style={styles.headerSubtitle}>
-              {!confirm ? (
-                <>Zenza will send an SMS message to verify your phone number. <Text style={styles.accentSubText}>Carrier rates may apply.</Text></>
-              ) : (
-                <>Waiting to automatically detect an SMS sent to <Text style={styles.boldPhone}>+91 {phoneNumber}</Text>.{' '}
-                  <Text style={styles.wrongNumberLink} onPress={() => { setConfirm(null); setCode(''); }}>Wrong number?</Text>
-                </>
-              )}
+          {/* Header Branding */}
+          <View style={styles.brandingSection}>
+            <View style={styles.logoIcon}>
+              <Text style={styles.logoLetter}>Z</Text>
+            </View>
+            <Text style={styles.brandName}>Zenza</Text>
+            <Text style={styles.brandTagline}>
+              {role === 'admin' ? 'Institute Administration Portal' : 'Student & Learning Portal'}
             </Text>
           </View>
 
+          {/* Auth Card */}
           <View style={styles.authCard}>
+            <Text style={styles.cardTitle}>
+              {!confirm ? 'Sign in with Phone' : 'Enter Verification Code'}
+            </Text>
+            <Text style={styles.cardSubtitle}>
+              {!confirm
+                ? 'We will send a 6-digit OTP to verify your phone number'
+                : `Enter the code sent to +91 ${phoneNumber}`}
+            </Text>
+
             {!confirm ? (
               <>
-                <View style={styles.countryRow}>
-                  <Text style={styles.countryText}>India</Text>
-                  <Ionicons name="caret-down" size={12} color="#666" />
-                </View>
-                <View style={styles.countryDivider} />
-
-                <View style={styles.phoneInputRow}>
-                  <Text style={styles.phoneCodePrefix}>+91</Text>
-                  <View style={styles.verticalInputDivider} />
+                {/* Phone Input Box */}
+                <View style={styles.phoneInputContainer}>
+                  <View style={styles.countryCodeBadge}>
+                    <Text style={styles.countryCodeText}>🇮🇳 +91</Text>
+                  </View>
                   <TextInput
-                    style={styles.phoneInputField}
-                    placeholder="phone number"
-                    placeholderTextColor="#999"
+                    style={styles.phoneInput}
+                    placeholder="Enter phone number"
+                    placeholderTextColor="#94A3B8"
                     keyboardType="phone-pad"
                     value={phoneNumber}
                     onChangeText={setPhoneNumber}
                     maxLength={10}
-                    autoFocus
                   />
                 </View>
 
+                {/* Send OTP Action */}
                 <TouchableOpacity
-                  style={[styles.actionButton, isLoading && styles.buttonDisabled]}
+                  style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
                   activeOpacity={0.85}
                   onPress={handleSendOTP}
                   disabled={isLoading}
@@ -368,16 +334,18 @@ export default function LoginScreen() {
                   {isLoading ? (
                     <ActivityIndicator color="#FFFFFF" size="small" />
                   ) : (
-                    <Text style={styles.actionButtonText}>Next</Text>
+                    <Text style={styles.primaryButtonText}>Send OTP</Text>
                   )}
                 </TouchableOpacity>
 
+                {/* Divider */}
                 <View style={styles.dividerRow}>
                   <View style={styles.dividerLine} />
                   <Text style={styles.dividerText}>or continue with</Text>
                   <View style={styles.dividerLine} />
                 </View>
 
+                {/* Google Sign In */}
                 <TouchableOpacity
                   style={[styles.googleButton, isGoogleLoading && styles.buttonDisabled]}
                   activeOpacity={0.85}
@@ -388,19 +356,20 @@ export default function LoginScreen() {
                     <ActivityIndicator color="#AF2800" size="small" />
                   ) : (
                     <>
-                      <Ionicons name="logo-google" size={18} color="#AF2800" style={{ marginRight: 8 }} />
-                      <Text style={styles.googleButtonText}>Google</Text>
+                      <Ionicons name="logo-google" size={18} color="#AF2800" style={{ marginRight: 10 }} />
+                      <Text style={styles.googleButtonText}>Continue with Google</Text>
                     </>
                   )}
                 </TouchableOpacity>
               </>
             ) : (
               <>
-                <View style={styles.otpContainer}>
+                {/* OTP Box */}
+                <View style={styles.otpInputContainer}>
                   <TextInput
-                    style={styles.otpInputField}
-                    placeholder="- - -  - - -"
-                    placeholderTextColor="#AAA"
+                    style={styles.otpInput}
+                    placeholder="• • • • • •"
+                    placeholderTextColor="#CBD5E1"
                     keyboardType="number-pad"
                     value={code}
                     onChangeText={setCode}
@@ -409,8 +378,9 @@ export default function LoginScreen() {
                   />
                 </View>
 
+                {/* Verify Action */}
                 <TouchableOpacity
-                  style={[styles.actionButton, isLoading && styles.buttonDisabled]}
+                  style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
                   activeOpacity={0.85}
                   onPress={handleVerifyOTP}
                   disabled={isLoading}
@@ -418,30 +388,39 @@ export default function LoginScreen() {
                   {isLoading ? (
                     <ActivityIndicator color="#FFFFFF" size="small" />
                   ) : (
-                    <Text style={styles.actionButtonText}>Verify & Continue</Text>
+                    <Text style={styles.primaryButtonText}>Verify & Continue</Text>
                   )}
                 </TouchableOpacity>
 
+                {/* Resend Timer */}
                 <View style={styles.resendRow}>
                   {canResend ? (
                     <TouchableOpacity onPress={handleResendOTP} disabled={isLoading}>
                       <Text style={styles.resendActiveText}>
-                        <Ionicons name="chatbox-ellipses-outline" size={14} color="#AF2800" /> Resend SMS
+                        <Ionicons name="refresh-outline" size={14} color="#AF2800" /> Resend OTP
                       </Text>
                     </TouchableOpacity>
                   ) : (
                     <Text style={styles.resendCountdownText}>
-                      <Ionicons name="time-outline" size={13} color="#888" /> Resend SMS in {Math.floor(resendTimer / 60)}:{resendTimer % 60 < 10 ? '0' : ''}{resendTimer % 60}
+                      <Ionicons name="time-outline" size={13} color="#64748B" /> Resend OTP in 0:{resendTimer < 10 ? `0${resendTimer}` : resendTimer}
                     </Text>
                   )}
                 </View>
+
+                <TouchableOpacity
+                  style={styles.editNumberBtn}
+                  onPress={() => { setConfirm(null); setCode(''); }}
+                >
+                  <Text style={styles.editNumberText}>Change phone number</Text>
+                </TouchableOpacity>
               </>
             )}
-
-            <Text style={styles.footerText}>
-              Secure authentication powered by Firebase & Supabase
-            </Text>
           </View>
+
+          {/* Footer */}
+          <Text style={styles.footerNote}>
+            By continuing, you agree to Zenza's Terms & Privacy Policy
+          </Text>
         </View>
       </LinearGradient>
     </KeyboardAvoidingView>
@@ -459,7 +438,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10,
@@ -467,157 +446,141 @@ const styles = StyleSheet.create({
   content: {
     flex: 1,
     paddingHorizontal: 24,
-    justifyContent: 'space-between',
-    paddingTop: screenHeight * 0.12,
-    paddingBottom: 40,
+    justifyContent: 'center',
+    paddingTop: 60,
+    paddingBottom: 30,
   },
   brandingSection: {
     alignItems: 'center',
+    marginBottom: 28,
   },
   logoIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 24,
+    width: 72,
+    height: 72,
+    borderRadius: 22,
     backgroundColor: '#FFFFFF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.2,
-    shadowRadius: 16,
+    shadowRadius: 12,
     elevation: 8,
   },
   logoLetter: {
-    fontSize: 44,
+    fontSize: 40,
     fontWeight: '900',
     color: '#AF2800',
   },
   brandName: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '800',
     color: '#FFFFFF',
     letterSpacing: 0.5,
   },
   brandTagline: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 13,
+    color: 'rgba(255, 255, 255, 0.85)',
     marginTop: 4,
     fontWeight: '500',
   },
   authCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.15,
+    shadowRadius: 24,
     elevation: 10,
   },
-  headerSection: {
-    alignItems: 'center',
-    marginBottom: 28,
-    paddingHorizontal: 12,
-  },
-  headerTitle: {
-    fontSize: 22,
+  cardTitle: {
+    fontSize: 20,
     fontWeight: '800',
-    color: '#FFFFFF',
+    color: '#0F172A',
     textAlign: 'center',
-    marginBottom: 10,
+    marginBottom: 6,
   },
-  headerSubtitle: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.85)',
+  cardSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
     textAlign: 'center',
-    lineHeight: 21,
-  },
-  accentSubText: {
-    color: '#FFE57F',
-    fontWeight: '600',
-  },
-  boldPhone: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-  },
-  wrongNumberLink: {
-    color: '#FFE57F',
-    fontWeight: '700',
-    textDecorationLine: 'underline',
-  },
-  countryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
+    marginBottom: 22,
+    lineHeight: 18,
     paddingHorizontal: 8,
   },
-  countryText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#333333',
-  },
-  countryDivider: {
-    height: 1.5,
-    backgroundColor: '#00A884',
-    marginBottom: 16,
-  },
-  phoneInputRow: {
+  phoneInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F9FA',
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    paddingHorizontal: 16,
-    height: 56,
-    marginBottom: 20,
-  },
-  phoneCodePrefix: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: '#1E293B',
-  },
-  verticalInputDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: '#CBD5E1',
-    marginHorizontal: 12,
-  },
-  phoneInputField: {
-    flex: 1,
-    fontSize: 17,
-    fontWeight: '600',
-    color: '#1E293B',
-    letterSpacing: 1.5,
-  },
-  actionButton: {
-    backgroundColor: '#00A884',
-    borderRadius: 14,
     height: 52,
-    alignItems: 'center',
+    paddingHorizontal: 12,
+    marginBottom: 18,
+  },
+  countryCodeBadge: {
+    paddingRight: 10,
+    borderRightWidth: 1,
+    borderRightColor: '#CBD5E1',
+    marginRight: 10,
+  },
+  countryCodeText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  phoneInput: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#0F172A',
+    letterSpacing: 1,
+  },
+  otpInputContainer: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#AF2800',
+    height: 54,
     justifyContent: 'center',
-    shadowColor: '#00A884',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  otpInput: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: 8,
+    textAlign: 'center',
+    width: '100%',
+  },
+  primaryButton: {
+    backgroundColor: '#AF2800',
+    borderRadius: 14,
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#AF2800',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
-    marginBottom: 16,
+  },
+  primaryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '700',
   },
   buttonDisabled: {
     opacity: 0.6,
   },
-  actionButtonText: {
-    color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
   dividerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 14,
+    marginVertical: 18,
   },
   dividerLine: {
     flex: 1,
@@ -625,9 +588,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#E2E8F0',
   },
   dividerText: {
-    marginHorizontal: 10,
+    marginHorizontal: 12,
     fontSize: 12,
-    color: '#64748B',
+    color: '#94A3B8',
     fontWeight: '600',
   },
   googleButton: {
@@ -636,32 +599,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#FFF8F6',
     borderWidth: 1.5,
-    borderColor: '#AF2800',
+    borderColor: '#FFD7CC',
     borderRadius: 14,
     height: 48,
-    width: '100%',
   },
   googleButtonText: {
     color: '#AF2800',
     fontSize: 15,
     fontWeight: '700',
-  },
-  otpContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    marginBottom: 20,
-  },
-  otpInputField: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#1E293B',
-    letterSpacing: 10,
-    textAlign: 'center',
-    width: '100%',
-    paddingVertical: 8,
-    borderBottomWidth: 2,
-    borderBottomColor: '#00A884',
   },
   resendRow: {
     alignItems: 'center',
@@ -678,11 +623,21 @@ const styles = StyleSheet.create({
     color: '#AF2800',
     fontWeight: '700',
   },
-  footerText: {
+  editNumberBtn: {
+    alignItems: 'center',
+    marginTop: 12,
+  },
+  editNumberText: {
+    fontSize: 12.5,
+    color: '#64748B',
+    fontWeight: '600',
+    textDecorationLine: 'underline',
+  },
+  footerNote: {
     fontSize: 11,
-    color: '#94A3B8',
+    color: 'rgba(255, 255, 255, 0.8)',
     textAlign: 'center',
-    marginTop: 18,
+    marginTop: 20,
     fontWeight: '500',
   },
 });
