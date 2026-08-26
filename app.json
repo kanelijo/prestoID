@@ -1,0 +1,83 @@
+{
+  "expo": {
+    "name": "Zenza",
+    "slug": "Zenza",
+    "version": "1.2.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "scheme": "zenza",
+    "icon": "./assets/images/zenza2.png",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kanelijo.zenza",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Zenza needs camera access to scan student QR codes for attendance.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/zenza2.png",
+        "backgroundColor": "#000000"
+      },
+      "package": "com.kanelijo.zenza",
+      "googleServicesFile": "./google-services.json",
+      "enableProguardInReleaseBuilds": true,
+      "enableShrinkResourcesInReleaseBuilds": true,
+      "permissions": [
+        "CAMERA",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Zenza needs camera access to scan student QR codes."
+        }
+      ],
+      "expo-font",
+      "expo-splash-screen",
+      "expo-status-bar",
+      "expo-sharing",
+      "@react-native-google-signin/google-signin",
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "expo-image",
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification_icon.png",
+          "color": "#AF2800",
+          "sounds": [
+            "./assets/audio/app_noti.mp3",
+            "./assets/audio/chat_noti.mp3"
+          ]
+        }
+      ],
+      "react-native-video",
+      "expo-mail-composer",
+      "expo-web-browser",
+      "expo-audio"
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4b70ac66-7374-4916-a7f1-1eeafd7181de"
+      }
+    },
+    "runtimeVersion": "1.2.0",
+    "owner": "catataste"
+  }
+}

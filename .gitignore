@@ -1,0 +1,23 @@
+node_modules/
+.expo/
+dist/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+.env
+.env.local
+lib/googleDriveCredentials.ts
+
+# Android build cache (Prevents local paths from breaking cloud EAS builds)
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+modules/**/build/
+modules/**/.gradle/
+.cxx/
+.github/workflows/

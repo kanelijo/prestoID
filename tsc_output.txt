@@ -1,0 +1,60 @@
+app/(admin)/students/index.tsx(689,29): error TS2552: Cannot find name 'Print'. Did you mean 'print'?
+app/(admin)/test/review/[id].tsx(1195,3): error TS1117: An object literal cannot have multiple properties with the same name.
+app/(admin)/test/review/[id].tsx(1201,3): error TS1117: An object literal cannot have multiple properties with the same name.
+app/(student)/_layout.tsx(106,41): error TS2345: Argument of type '{}' is not assignable to parameter of type 'string'.
+app/(student)/_layout.tsx(154,13): error TS2322: Type 'unknown' is not assignable to type 'string | undefined'.
+app/(student)/_layout.tsx(155,13): error TS2322: Type '{} | null' is not assignable to type 'string | null | undefined'.
+  Type '{}' is not assignable to type 'string'.
+app/(student)/peers.tsx(32,3): error TS2305: Module '"@/lib/localDb"' has no exported member 'getLocalMessagesForPeer'.
+app/(student)/public-leaderboard.tsx(461,19): error TS2551: Property 'absoluteFillObject' does not exist on type 'typeof StyleSheet'. Did you mean 'absoluteFill'?
+app/(student)/student-chat.tsx(206,24): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(207,28): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(230,28): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(231,27): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(241,28): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(242,27): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(252,28): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(253,27): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(289,26): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(290,30): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(294,18): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(326,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(327,21): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(334,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(335,21): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(342,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(343,21): error TS7006: Parameter 'msg' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(371,20): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(371,39): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(632,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(633,39): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(700,18): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(724,21): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(755,22): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(756,21): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(792,20): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(792,42): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(879,30): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(879,49): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(882,30): error TS7006: Parameter 'prev' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(882,49): error TS7006: Parameter 'm' implicitly has an 'any' type.
+app/(student)/student-chat.tsx(1158,11): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: FlatListProps<Message>): FlatList<Message>', gave the following error.
+    Type 'PeerMessage[]' is not assignable to type 'ArrayLike<Message>'.
+      'number' index signatures are incompatible.
+        Type 'PeerMessage' is not assignable to type 'Message'.
+          Types of property 'id' are incompatible.
+            Type 'string | number' is not assignable to type 'number'.
+              Type 'string' is not assignable to type 'number'.
+  Overload 2 of 2, '(props: FlatListProps<Message>, context: any): FlatList<Message>', gave the following error.
+    Type 'PeerMessage[]' is not assignable to type 'ArrayLike<Message>'.
+      'number' index signatures are incompatible.
+        Type 'PeerMessage' is not assignable to type 'Message'.
+          Types of property 'id' are incompatible.
+            Type 'string | number' is not assignable to type 'number'.
+              Type 'string' is not assignable to type 'number'.
+app/(student)/test/engine/[id].tsx(334,21): error TS2345: Argument of type 'boolean' is not assignable to parameter of type 'string'.
+components/InAppNotification.tsx(67,26): error TS2322: Type '{ url: string; style: { width: number; height: number; borderRadius: number; marginRight: number; }; }' is not assignable to type 'IntrinsicAttributes & Props'.
+  Property 'url' does not exist on type 'IntrinsicAttributes & Props'.
+components/PublicHeaderProfileModal.tsx(299,19): error TS2551: Property 'absoluteFillObject' does not exist on type 'typeof StyleSheet'. Did you mean 'absoluteFill'?
+lib/localDb.ts(589,33): error TS2339: Property 'cacheDirectory' does not exist on type 'typeof import("/media/nilesh/New Volume/Lets Build Kanelijo/kanelflow/node_modules/expo-file-system/build/index")'.

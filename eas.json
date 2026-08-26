@@ -1,0 +1,49 @@
+{
+  "cli": {
+    "version": ">= 10.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyB8PV8ae3c4gQJVz739gq6cDBooWmKGTSg",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_TKAlCfvaAMmniz",
+        "EXPO_PUBLIC_RAZORPAY_SECRET_KEY": "FFB5MshZRKp6qayvE7ZsKV3y"
+      }
+    },
+    "preview": {
+      "channel": "preview",
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease",
+        "resourceClass": "medium"
+      },
+      "env": {
+        "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyB8PV8ae3c4gQJVz739gq6cDBooWmKGTSg",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_TKAlCfvaAMmniz",
+        "EXPO_PUBLIC_RAZORPAY_SECRET_KEY": "FFB5MshZRKp6qayvE7ZsKV3y"
+      }
+    },
+    "production": {
+      "channel": "production",
+      "android": {
+        "buildType": "apk",
+        "gradleCommand": ":app:assembleRelease"
+      },
+      "env": {
+        "EXPO_PUBLIC_GEMINI_API_KEY": "AIzaSyB8PV8ae3c4gQJVz739gq6cDBooWmKGTSg",
+        "EXPO_PUBLIC_RAZORPAY_KEY_ID": "rzp_live_TKAlCfvaAMmniz",
+        "EXPO_PUBLIC_RAZORPAY_SECRET_KEY": "FFB5MshZRKp6qayvE7ZsKV3y"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

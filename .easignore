@@ -1,0 +1,21 @@
+node_modules/
+.expo/
+dist/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+web-build/
+.env
+.env.local
+
+# Android build cache & locked daemon files
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/.cxx/
+android/app/.cxx/
+
