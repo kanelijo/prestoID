@@ -45,7 +45,7 @@ export default function ClaimProfileScreen() {
 
   const handleClaim = async () => {
     const cleanedCode = businessCode.trim().toUpperCase();
-    const cleanedPasscode = passcode.trim();
+    const cleanedPasscode = useAadhaar ? passcode.trim() : passcode.trim().toUpperCase();
 
     if (!cleanedCode || !cleanedPasscode) {
       Alert.alert('Missing Fields', 'Please enter both your Organization ID and Passcode.');
@@ -65,7 +65,7 @@ export default function ClaimProfileScreen() {
         .from('businesses')
         .select('id, organization_id, business_name, business_type')
         .eq('organization_id', cleanedCode)
-        .single();
+        .maybeSingle();
 
       if (businessError || !business) {
         Alert.alert('Not Found', 'No organization found with this ID. Please check and try again.');
@@ -85,7 +85,7 @@ export default function ClaimProfileScreen() {
         query = query.eq('secret_code', cleanedPasscode);
       }
 
-      const { data: studentRecord, error: studentError } = await query.single();
+      const { data: studentRecord, error: studentError } = await query.maybeSingle();
 
       console.log('[DEBUG] claim-profile query result:', studentRecord);
       console.log('[DEBUG] claim-profile query error:', studentError);

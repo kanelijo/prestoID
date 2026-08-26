@@ -223,7 +223,15 @@ ALTER TABLE public.alerts ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Admins can manage students in their business" ON public.students FOR ALL USING (
     business_id IN (SELECT id FROM public.businesses WHERE admin_id = auth.uid())
 );
-CREATE POLICY "Students can view their own record" ON public.students FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Students can view and claim their record" ON public.students FOR SELECT USING (
+    auth.uid() = user_id OR user_id IS NULL
+);
+CREATE POLICY "Students can claim unclaimed record" ON public.students FOR UPDATE USING (
+    user_id IS NULL OR auth.uid() = user_id
+) WITH CHECK (
+    auth.uid() = user_id
+);
+
 
 -- Batches
 CREATE POLICY "Admins can manage batches" ON public.batches FOR ALL USING (
