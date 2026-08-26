@@ -3,14 +3,25 @@ import * as XLSX from 'xlsx';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { supabase } from './supabase';
 
+const GOOGLE_CONFIG = {
+  webClientId: '500087439972-42l1848gjo7lm7du488ui5f44fluup5m.apps.googleusercontent.com',
+  offlineAccess: true,
+  scopes: [
+    'https://www.googleapis.com/auth/drive.appdata',
+    'https://www.googleapis.com/auth/drive.file',
+  ],
+};
+
 async function getValidAccessToken(): Promise<string | null> {
   try {
+    GoogleSignin.configure(GOOGLE_CONFIG);
     await GoogleSignin.hasPlayServices();
     await GoogleSignin.signInSilently();
     const tokens = await GoogleSignin.getTokens();
     return tokens.accessToken;
   } catch (silentError) {
     try {
+      GoogleSignin.configure(GOOGLE_CONFIG);
       await GoogleSignin.signIn();
       const tokens = await GoogleSignin.getTokens();
       return tokens.accessToken;

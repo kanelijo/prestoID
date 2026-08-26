@@ -26,6 +26,10 @@ const { height: screenHeight } = Dimensions.get('window');
 GoogleSignin.configure({
   webClientId: '500087439972-42l1848gjo7lm7du488ui5f44fluup5m.apps.googleusercontent.com',
   offlineAccess: true,
+  scopes: [
+    'https://www.googleapis.com/auth/drive.appdata',
+    'https://www.googleapis.com/auth/drive.file',
+  ],
 });
 
 export default function LoginScreen() {
