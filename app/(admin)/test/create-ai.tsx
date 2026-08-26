@@ -6,6 +6,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
+import { APP_CONFIG } from '@/constants/config';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { scheduleLocalNotification } from '@/lib/notifications';
@@ -570,78 +571,83 @@ You must enforce these specific parameter configurations in the test metadata:
       
       let responseText = "";
 
-      // 1. Try Supabase Edge Function first
-      try {
-        const { data: edgeData, error: edgeError } = await supabase.functions.invoke('zenza-ai-chat', {
-          body: { geminiHistory, groqHistory, groqSupported }
+      // 1. Direct Client Call using Official Google Generative AI SDK (Tested & Verified)
+      const attemptDirectGemini = async (modelName: string) => {
+        const storedKey = await AsyncStorage.getItem('custom_gemini_key');
+        const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY || storedKey || APP_CONFIG.geminiApiKey;
+        if (!geminiKey) throw new Error("Missing Gemini API Key.");
+        const genAI = new GoogleGenerativeAI(geminiKey);
+        const model = genAI.getGenerativeModel({ model: modelName });
+        const result = await model.generateContent({ contents: geminiHistory });
+        return result.response.text();
+      };
+
+      const attemptDirectGroq = async () => {
+        const storedGroqKey = await AsyncStorage.getItem('custom_groq_key');
+        const groqKey = process.env.EXPO_PUBLIC_GROQ_API_KEY || storedGroqKey;
+        if (!groqKey) throw new Error("Missing Groq API Key.");
+        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${groqKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            messages: groqHistory,
+            temperature: 0.4
+          })
         });
-        if (!edgeError && edgeData?.responseText) {
-          responseText = edgeData.responseText;
-        } else if (edgeData?.error) {
-          throw new Error(edgeData.error);
-        } else if (edgeError) {
-          throw edgeError;
-        }
-      } catch (errEdge: any) {
-        console.warn("Edge Function zenza-ai-chat failed, using direct client waterfall:", errEdge?.message || errEdge);
-        
-        // 2. Direct Client Waterfall Fallback using Official GoogleGenerativeAI SDK + Groq
-        const attemptDirectGemini = async (modelName: string) => {
-          const geminiKey = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
-          if (!geminiKey) throw new Error("Missing EXPO_PUBLIC_GEMINI_API_KEY");
-          const genAI = new GoogleGenerativeAI(geminiKey);
-          const model = genAI.getGenerativeModel({ model: modelName });
-          const result = await model.generateContent({ contents: geminiHistory });
-          return result.response.text();
-        };
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "Groq Error");
+        return data.choices[0].message.content;
+      };
 
-        const attemptDirectGroq = async () => {
-          const groqKey = process.env.EXPO_PUBLIC_GROQ_API_KEY;
-          if (!groqKey) throw new Error("Missing EXPO_PUBLIC_GROQ_API_KEY");
-          const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${groqKey}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              model: "llama-3.3-70b-versatile",
-              messages: groqHistory,
-              temperature: 0.4
-            })
+      const modelsToTry = [
+        "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-2.5-pro",
+      ];
+
+      let geminiSuccess = false;
+      let lastGeminiError = "";
+      for (const mName of modelsToTry) {
+        try {
+          console.log(`[AI Waterfall] Generating with Gemini: ${mName}...`);
+          responseText = await attemptDirectGemini(mName);
+          geminiSuccess = true;
+          break;
+        } catch (mErr: any) {
+          lastGeminiError = mErr?.message || String(mErr);
+          console.warn(`[AI Waterfall] ${mName} failed:`, lastGeminiError);
+        }
+      }
+
+      // 2. Fallback to Supabase Edge Function if direct SDK failed
+      if (!geminiSuccess) {
+        try {
+          console.log("[AI Waterfall] Attempting Supabase Edge Function...");
+          const { data: edgeData, error: edgeError } = await supabase.functions.invoke('zenza-ai-chat', {
+            body: { geminiHistory, groqHistory, groqSupported }
           });
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error?.message || "Groq Error");
-          return data.choices[0].message.content;
-        };
-
-        const modelsToTry = [
-          "gemini-3.5-flash",
-          "gemini-3.6-flash",
-          "gemini-3.1-flash-lite",
-          "gemini-3.1-pro"
-        ];
-
-        let geminiSuccess = false;
-        for (const mName of modelsToTry) {
-          try {
-            console.log(`[AI Waterfall] Attempting Gemini model: ${mName}...`);
-            responseText = await attemptDirectGemini(mName);
+          if (!edgeError && edgeData?.responseText) {
+            responseText = edgeData.responseText;
             geminiSuccess = true;
-            break;
-          } catch (mErr: any) {
-            console.warn(`[AI Waterfall] ${mName} failed:`, mErr?.message || mErr);
           }
+        } catch (edgeErr) {
+          console.warn("[AI Waterfall] Edge function fallback failed:", edgeErr);
         }
+      }
 
-        if (!geminiSuccess) {
-          try {
-            console.log("[AI Waterfall] Attempting Groq Llama 3.3 70B...");
-            responseText = await attemptDirectGroq();
-          } catch (groqErr: any) {
-            console.error("[AI Waterfall] All models failed:", groqErr?.message || groqErr);
-            throw new Error("AI service is currently busy. Please try again in a moment.");
-          }
+      // 3. Fallback to Groq if still not resolved
+      if (!geminiSuccess && !responseText) {
+        try {
+          console.log("[AI Waterfall] Attempting Groq Llama 3.3 70B...");
+          responseText = await attemptDirectGroq();
+        } catch (groqErr: any) {
+          console.error("[AI Waterfall] All models failed:", groqErr?.message || groqErr);
+          throw new Error(lastGeminiError || "AI service is currently busy. Please check your connection.");
         }
       }
       
@@ -689,12 +695,13 @@ You must enforce these specific parameter configurations in the test metadata:
       }
 
     } catch (err: any) {
-      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: "Sorry, I encountered an error. Please try again." }]);
+      const errorMsg = err?.message || "Sorry, I encountered an error. Please check your Gemini API key or connection and try again.";
+      setMessages(prev => [...prev, { id: Date.now().toString(), role: 'model', text: `⚠️ ${errorMsg}` }]);
       console.warn(err);
       if (appStateRef.current !== 'active') {
         scheduleLocalNotification(
           "🤖 AI Test Creator",
-          "Sorry, I encountered an error. Please try again."
+          errorMsg
         );
       }
     } finally {
