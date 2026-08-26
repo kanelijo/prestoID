@@ -27,6 +27,7 @@ import { registerForPushNotificationsAsync, sendPushNotification, CHANNELS } fro
 import CachedImage from '@/components/CachedImage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+import * as Print from 'expo-print';
 import BulkStudentImportModal from '@/components/BulkStudentImportModal';
 
 

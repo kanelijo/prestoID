@@ -635,12 +635,12 @@ export default function StudentStudentIDCardScreen() {
       CustomAlert.alert(
         'Profile Linked Successfully! 🎉',
         `Welcome ${updatedRecord.name}! Please review and complete your student profile details.`,
-        [{ text: 'Complete Profile', onPress: () => setIsEditModalVisible(true) }]
+        [{ text: 'Complete Profile', onPress: () => setIsProfileModalVisible(true) }]
       );
       setInviteCodeInput('');
       setClaimVerificationInput('');
       await fetchStudent();
-      setIsEditModalVisible(true);
+      setIsProfileModalVisible(true);
     } catch (err: any) {
       CustomAlert.alert('Claim Failed', err.message || 'Failed to claim profile. Try again.');
     } finally {

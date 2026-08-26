@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
+
 
 let db: any = null;
 let useFallback = false;
@@ -437,6 +438,7 @@ export function savePeerMessageToLocal(msg: { id: string | number; sender_id: st
 
 export function getPeerMessagesFromLocal(userId: string, peerId: string): any[] {
   if (useFallback || !db) return [];
+
   try {
     const rows = db.getAllSync(
       `SELECT * FROM local_peer_messages 
@@ -461,6 +463,9 @@ export function getPeerMessagesFromLocal(userId: string, peerId: string): any[] 
     return [];
   }
 }
+
+export const getLocalMessagesForPeer = getPeerMessagesFromLocal;
+
 
 export function getAllPeerMessagesFromLocal(userId: string): any[] {
   if (useFallback || !db) return [];

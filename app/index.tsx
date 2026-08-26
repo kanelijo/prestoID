@@ -72,7 +72,7 @@ export default function SplashScreen() {
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (session && session.user) {
-          let profile = null;
+          let profile: any = null;
           const { data: profileData, error: profileError } = await supabase
             .from('profiles')
             .select('role, business_id, claimed, avatar_url, is_external')

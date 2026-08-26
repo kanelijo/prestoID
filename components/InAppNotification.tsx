@@ -64,7 +64,7 @@ export default function InAppNotification() {
       <TouchableOpacity activeOpacity={0.9} onPress={handlePress} style={styles.content}>
         <View style={styles.header}>
           {currentPopupNotification.avatarUrl ? (
-            <CachedImage url={currentPopupNotification.avatarUrl} style={styles.avatar} />
+            <CachedImage uri={currentPopupNotification.avatarUrl} style={styles.avatar} />
           ) : (
             <View style={[styles.avatar, styles.placeholderAvatar]} />
           )}
