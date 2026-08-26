@@ -401,96 +401,85 @@ export default function StudentStudentIDCardScreen() {
 
       if (updateError) throw updateError;
 
+      await supabase
+        .from('profiles')
+        .update({ avatar_url: publicUrl })
+        .eq('id', user.id);
+
       await fetchStudent();
-      CustomAlert.alert('Success', 'Profile picture uploaded successfully.');
+      Alert.alert('Success 🎉', 'Profile picture updated successfully.');
     } catch (err: any) {
-      CustomAlert.alert('Upload Failed', err.message || 'Failed to upload photo.');
+      Alert.alert('Upload Failed', err.message || 'Failed to upload photo.');
     } finally {
       setIsUploadingPhoto(false);
     }
   };
 
   const handleChangePhoto = async () => {
-    CustomAlert.alert('Change Profile Picture', 'Select source', [
+    Alert.alert('Profile Picture', 'Choose source', [
       {
         text: 'Camera',
         onPress: async () => {
           try {
-            const result = await ImagePicker.launchCameraAsync({
-              allowsEditing: true,
-              aspect: [1, 1],
-              quality: 0.6,
-            });
-            if (!result.canceled && result.assets[0]) {
-              uploadPhoto(result.assets[0].uri);
-            }
-          } catch (err) {
-            console.warn('Direct launch camera failed, requesting permission:', err);
             const { status } = await ImagePicker.requestCameraPermissionsAsync();
             if (status === 'granted') {
               const result = await ImagePicker.launchCameraAsync({
                 allowsEditing: true,
                 aspect: [1, 1],
-                quality: 0.6,
+                quality: 0.7,
               });
               if (!result.canceled && result.assets[0]) {
                 uploadPhoto(result.assets[0].uri);
               }
             } else {
-              CustomAlert.alert('Permission Denied', 'Camera permissions are required.');
+              Alert.alert('Permission Required', 'Camera permission is required to capture your photo.');
             }
+          } catch (err: any) {
+            console.warn('Camera launch failed:', err);
           }
-        }
+        },
       },
       {
-        text: 'Gallery',
+        text: 'Choose from Gallery',
         onPress: async () => {
           try {
-            const result = await ImagePicker.launchImageLibraryAsync({
-              allowsEditing: true,
-              aspect: [1, 1],
-              quality: 0.6,
-            });
-            if (!result.canceled && result.assets[0]) {
-              uploadPhoto(result.assets[0].uri);
-            }
-          } catch (err) {
-            console.warn('Direct launch library failed, requesting permission:', err);
             const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
             if (status === 'granted') {
               const result = await ImagePicker.launchImageLibraryAsync({
                 allowsEditing: true,
                 aspect: [1, 1],
-                quality: 0.6,
+                quality: 0.7,
               });
               if (!result.canceled && result.assets[0]) {
                 uploadPhoto(result.assets[0].uri);
               }
             } else {
-              CustomAlert.alert('Permission Denied', 'Gallery permissions are required.');
+              Alert.alert('Permission Required', 'Gallery permission is required to select your photo.');
             }
+          } catch (err: any) {
+            console.warn('Gallery launch failed:', err);
           }
-        }
+        },
       },
-      { text: 'Cancel', style: 'cancel' }
+      { text: 'Cancel', style: 'cancel' },
     ]);
   };
 
   const handleSaveProfile = async () => {
-    if (!editName.trim() || !editPhone.trim() || !editParentPhone.trim() || !editAadhaar.trim() || !editDob.trim() || !editAddress.trim()) {
-      CustomAlert.alert('Error', 'Name, Date of Birth, Phone, Parent Phone, Aadhaar, and Address are required.');
+    if (!editName.trim()) {
+      Alert.alert('Missing Name', 'Please enter your full name.');
       return;
     }
-    if (!studentData?.photo_url || studentData.photo_url.includes('placeholder')) {
-      CustomAlert.alert('Photo Required', 'Please upload or capture your profile photo before saving.');
+    if (editPhone.trim() && (editPhone.trim().length !== 10 || isNaN(Number(editPhone.trim())))) {
+      Alert.alert('Invalid Phone', 'Student phone number must be 10 digits.');
       return;
     }
-    if (editPhone.trim().length !== 10 || isNaN(Number(editPhone)) || editParentPhone.trim().length !== 10 || isNaN(Number(editParentPhone))) {
-      CustomAlert.alert('Invalid Phone', 'Phone numbers must be exactly 10 digits.');
+    if (editParentPhone.trim() && (editParentPhone.trim().length !== 10 || isNaN(Number(editParentPhone.trim())))) {
+      Alert.alert('Invalid Phone', 'Parent phone number must be 10 digits.');
       return;
     }
-    if (editAadhaar.trim().length !== 12 || isNaN(Number(editAadhaar.trim()))) {
-      CustomAlert.alert('Invalid Aadhaar', 'Aadhaar number must be exactly 12 digits.');
+    if (editAadhaar.trim() && (editAadhaar.trim().length !== 12 || isNaN(Number(editAadhaar.trim())))) {
+      Alert.alert('Invalid Aadhaar', 'Aadhaar number must be 12 digits.');
       return;
     }
 
@@ -505,7 +494,7 @@ export default function StudentStudentIDCardScreen() {
       if (profileError) throw profileError;
 
       if (!studentData) {
-        CustomAlert.alert('Error', 'No claimed student profile to update.');
+        Alert.alert('Error', 'No claimed student profile found.');
         setIsSavingProfile(false);
         return;
       }
@@ -515,12 +504,12 @@ export default function StudentStudentIDCardScreen() {
         .from('students')
         .update({
           name: editName.trim(),
-          dob: editDob.trim(),
-          phone: editPhone.trim(),
-          whatsapp: editWhatsapp.trim(),
-          address: editAddress.trim(),
-          father_name: editFatherName.trim(),
-          parent_phone: editParentPhone.trim(),
+          dob: editDob.trim() || null,
+          phone: editPhone.trim() || null,
+          whatsapp: editWhatsapp.trim() || null,
+          address: editAddress.trim() || null,
+          father_name: editFatherName.trim() || null,
+          parent_phone: editParentPhone.trim() || null,
           aadhaar_number: editAadhaar.trim() || null,
         })
         .eq('id', studentData.id);
@@ -528,10 +517,10 @@ export default function StudentStudentIDCardScreen() {
       if (studentError) throw studentError;
 
       await fetchStudent();
-      CustomAlert.alert('Success', 'Profile details updated successfully.');
+      Alert.alert('Success ✅', 'Profile details saved successfully.');
       setIsProfileModalVisible(false);
     } catch (err: any) {
-      CustomAlert.alert('Save Failed', err.message || 'Failed to save profile changes.');
+      Alert.alert('Save Failed', err.message || 'Failed to save profile changes.');
     } finally {
       setIsSavingProfile(false);
     }
