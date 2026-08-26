@@ -11,7 +11,8 @@ import {
   ActivityIndicator, 
   TextInput, 
   KeyboardAvoidingView, 
-  Platform 
+  Platform,
+  Alert
 } from 'react-native';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
