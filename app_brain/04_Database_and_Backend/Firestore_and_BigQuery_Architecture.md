@@ -57,13 +57,23 @@ High-resolution granular interaction logs automatically streamed to BigQuery via
   "eventId": "test_uuid_student_uuid_timestamp_hash",
   "testId": "test_uuid",
   "studentId": "student_uuid",
+  "studentName": "Aarav Sharma",
   "batchId": "batch_uuid",
+  "subject": "Physics",
   "eventType": "OPTION_CHANGE",
   "questionId": "q_42",
+  "questionNumber": 14,
   "selectedOptionIndex": 2,
   "previousOptionIndex": 1,
   "timeSpentOnQuestionSeconds": 45,
   "remainingTimeSeconds": 1375,
+  "hesitationTimeMs": 2850,
+  "optionFlipCount": 3,
+  "isRevisit": true,
+  "isEgoTrap": false,
+  "rapidGuessDetected": false,
+  "answerReversalType": "CORRECT_TO_WRONG",
+  "examProgressRatio": 0.72,
   "serverTimestamp": "ServerTimestamp"
 }
 ```

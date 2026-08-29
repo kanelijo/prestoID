@@ -25,13 +25,34 @@ export interface CBTTelemetryEvent {
   eventId: string;
   testId: string;
   studentId: string;
+  studentName?: string;
   batchId?: string;
-  eventType: 'TEST_START' | 'QUESTION_VIEW' | 'OPTION_SELECT' | 'OPTION_CHANGE' | 'QUESTION_FLAG' | 'TEST_SUBMIT' | 'DISCONNECTION';
+  subject?: string;
+  eventType: 
+    | 'TEST_START' 
+    | 'QUESTION_VIEW' 
+    | 'OPTION_SELECT' 
+    | 'OPTION_CHANGE' 
+    | 'QUESTION_FLAG' 
+    | 'QUESTION_CLEAR'
+    | 'TEST_SUBMIT' 
+    | 'DISCONNECTION';
   questionId?: string;
-  selectedOptionIndex?: number;
-  previousOptionIndex?: number;
+  questionNumber?: number;
+  selectedOptionIndex?: number | null;
+  previousOptionIndex?: number | null;
+  
+  // ─── COGNITIVE & PSYCHOLOGICAL SIGNALS ───
   timeSpentOnQuestionSeconds?: number;
   remainingTimeSeconds?: number;
+  hesitationTimeMs?: number;               // Milliseconds elapsed before first touch/interaction
+  optionFlipCount?: number;                // Times student toggled/switched choices on this question
+  isRevisit?: boolean;                     // Did the student come back to review this question?
+  isEgoTrap?: boolean;                     // Flagged if student spent > 3x average question time
+  rapidGuessDetected?: boolean;            // Answered calculation in < 4s (guessing behavior)
+  answerReversalType?: 'NONE' | 'CORRECT_TO_WRONG' | 'WRONG_TO_CORRECT' | 'WRONG_TO_WRONG';
+  examProgressRatio?: number;              // 0.0 (start) to 1.0 (end) to detect stamina/fatigue curve
+  
   timestamp: number;
 }
 
