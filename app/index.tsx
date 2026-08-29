@@ -92,7 +92,7 @@ export default function SplashScreen() {
             if (isExternal) {
               dest = '/(student)/public-tests';
             } else {
-              dest = claimed ? '/(student)/id-card' : '/(auth)/claim-profile';
+              dest = (claimed || studentRecord) ? '/(student)/id-card' : '/(auth)/claim-profile';
             }
           }
 

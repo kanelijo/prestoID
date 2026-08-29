@@ -216,12 +216,22 @@ export default function LoginScreen() {
         .maybeSingle();
 
       const userRole = profile?.role || role;
-      const userBizId = profile?.business_id;
+      let userBizId = profile?.business_id;
       setRole(userRole);
 
       await AsyncStorage.setItem('zenza_role', userRole);
 
       if (userRole === 'admin') {
+        const profileCache = {
+          userId: user.id,
+          email: user.email,
+          phone: phoneIdentifier || user.phone,
+          role: 'admin',
+          businessId: userBizId || null,
+          claimed: true,
+        };
+        await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
+
         if (!userBizId) {
           router.replace('/(auth)/create-institute' as any);
         } else {
@@ -235,6 +245,19 @@ export default function LoginScreen() {
           .maybeSingle();
 
         if (linkedStudent) {
+          userBizId = linkedStudent.business_id;
+          if (!profile?.claimed) {
+            await supabase.from('profiles').update({ claimed: true, business_id: userBizId }).eq('id', user.id);
+          }
+          const profileCache = {
+            userId: user.id,
+            email: user.email,
+            phone: phoneIdentifier || user.phone,
+            role: 'student',
+            businessId: userBizId || null,
+            claimed: true,
+          };
+          await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
           router.replace('/(student)/id-card' as any);
         } else {
           let phoneToMatch = phoneIdentifier || user.phone || user.user_metadata?.phone;
@@ -255,13 +278,32 @@ export default function LoginScreen() {
 
               await supabase
                 .from('profiles')
-                .update({ business_id: matchedStudent.business_id })
+                .update({ business_id: matchedStudent.business_id, claimed: true })
                 .eq('id', user.id);
 
+              const profileCache = {
+                userId: user.id,
+                email: user.email,
+                phone: phoneIdentifier || user.phone,
+                role: 'student',
+                businessId: matchedStudent.business_id,
+                claimed: true,
+              };
+              await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
               router.replace('/(student)/id-card' as any);
               return;
             }
           }
+
+          const profileCache = {
+            userId: user.id,
+            email: user.email,
+            phone: phoneIdentifier || user.phone,
+            role: 'student',
+            businessId: null,
+            claimed: false,
+          };
+          await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
           router.replace('/(auth)/claim-profile' as any);
         }
       }

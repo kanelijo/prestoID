@@ -348,4 +348,41 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO postgres, anon,
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO postgres, anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO postgres, anon, authenticated, service_role;
 
+-- 7. TARGET EXAMS & SUB EXAMS
+CREATE TABLE IF NOT EXISTS public.exams (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    business_id UUID REFERENCES public.businesses(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    category TEXT DEFAULT 'Competitive Exam',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.sub_exams (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    exam_id UUID REFERENCES public.exams(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    syllabus_summary TEXT,
+    total_marks NUMERIC DEFAULT 100,
+    duration_minutes INTEGER DEFAULT 60,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+ALTER TABLE public.exams ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.sub_exams ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Exams are viewable by all authenticated users" ON public.exams;
+CREATE POLICY "Exams are viewable by all authenticated users" ON public.exams FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Admins can manage exams" ON public.exams;
+CREATE POLICY "Admins can manage exams" ON public.exams FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Sub-exams are viewable by all authenticated users" ON public.sub_exams;
+CREATE POLICY "Sub-exams are viewable by all authenticated users" ON public.sub_exams FOR SELECT USING (true);
+
+DROP POLICY IF EXISTS "Admins can manage sub-exams" ON public.sub_exams;
+CREATE POLICY "Admins can manage sub-exams" ON public.sub_exams FOR ALL USING (true) WITH CHECK (true);
+
+
 

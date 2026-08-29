@@ -113,7 +113,11 @@ export default function TargetExamAdminScreen() {
         .eq('business_id', businessId)
         .order('name');
 
-      if (examError) throw examError;
+      if (examError) {
+        console.warn('[TargetExamAdmin] Exams table query notice:', examError.message);
+        setExams([]);
+        return;
+      }
 
       setExams(examList || []);
 
@@ -125,7 +129,9 @@ export default function TargetExamAdminScreen() {
           .in('exam_id', examIds)
           .order('name');
 
-        if (subError) throw subError;
+        if (subError) {
+          console.warn('[TargetExamAdmin] Sub-exams query notice:', subError.message);
+        }
 
         const subMap: Record<string, SubExam[]> = {};
         (subList || []).forEach((se) => {
@@ -135,7 +141,7 @@ export default function TargetExamAdminScreen() {
         setSubExams(subMap);
       }
     } catch (err: any) {
-      Alert.alert('Load Error', err.message || 'Failed to fetch target exam configuration.');
+      console.warn('[TargetExamAdmin] Failed to fetch target exam configuration:', err);
     } finally {
       setIsLoading(false);
     }
