@@ -68,20 +68,19 @@ type TabIconProps = {
 function TabIcon({ name, label, focused }: TabIconProps) {
   return (
     <View style={styles.tabItem}>
-      <Ionicons
-        name={name}
-        size={22}
-        color={focused ? Colors.accent.primary : Colors.text.tertiary}
-      />
+      <View style={[styles.iconWrapper, focused && styles.iconWrapperActive]}>
+        <Ionicons
+          name={name}
+          size={focused ? 21 : 22}
+          color={focused ? '#AF2800' : '#374151'}
+        />
+      </View>
       <Text
         numberOfLines={1}
-        adjustsFontSizeToFit={true}
-        minimumFontScale={0.7}
         style={[styles.tabLabel, focused && styles.tabLabelActive]}
       >
         {label}
       </Text>
-      {focused && <View style={styles.activeIndicator} />}
     </View>
   );
 }
@@ -254,25 +253,30 @@ const styles = StyleSheet.create({
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    width: 72,
+    width: 68,
+  },
+  iconWrapper: {
+    width: 52,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  iconWrapperActive: {
+    backgroundColor: '#FFE2DB',
   },
   tabLabel: {
-    fontSize: 10,
-    color: '#6B7280',
+    fontSize: 11,
+    color: '#374151',
     fontWeight: '600',
     textAlign: 'center',
+    marginTop: 3,
+    letterSpacing: 0.1,
   },
   tabLabelActive: {
-    color: '#AF2800',
-    fontWeight: '700',
-  },
-  activeIndicator: {
-    width: 16,
-    height: 3,
-    borderRadius: 1.5,
-    backgroundColor: '#AF2800',
-    marginTop: 2,
+    color: '#111827',
+    fontWeight: '800',
   },
   trialBanner: {
     flexDirection: 'row',
