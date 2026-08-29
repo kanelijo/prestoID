@@ -21,3 +21,8 @@ modules/**/build/
 modules/**/.gradle/
 .cxx/
 .github/workflows/
+
+# Obsidian workspace UI cache
+app_brain/.obsidian/workspace.json
+app_brain/.obsidian/workspace-mobile.json
+
