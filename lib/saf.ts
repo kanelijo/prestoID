@@ -19,7 +19,7 @@ export const downloadAndOpenSaf = async (downloadUrl: string, fileName: string) 
           throw new Error(`Server returned HTTP status code ${downloadResult.status} (failed to download).`);
         }
 
-        // 2. Call our custom native module to insert it into MediaStore (Downloads/Zenza)
+        // 2. Call our custom native module to insert it into Main Internal Storage (Mocks)
         await PrestostorageModule.saveDocument(localUri, safeName);
         
         return { success: true, uri: localUri };

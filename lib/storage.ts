@@ -1,18 +1,19 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library/legacy';
 import { Platform } from 'react-native';
+import PrestostorageModule from '../modules/prestostorage/src/PrestostorageModule';
 
-export const ZENZA_ROOT = `${FileSystem.documentDirectory}Zenza/`;
+export const MOCKS_ROOT = `${FileSystem.documentDirectory}Mocks/`;
 
 export const DIRS = {
-  root: ZENZA_ROOT,
-  images: `${ZENZA_ROOT}Zenza Images/`,
-  docs: `${ZENZA_ROOT}Zenza Documents/`,
-  backups: `${ZENZA_ROOT}Zenza Backups/`,
+  root: MOCKS_ROOT,
+  images: `${MOCKS_ROOT}Mocks Images/`,
+  docs: `${MOCKS_ROOT}Mocks Documents/`,
+  backups: `${MOCKS_ROOT}Mocks Backups/`,
 };
 
 /**
- * Ensures the structured Zenza folder tree exists in the private app sandbox.
+ * Ensures the structured Mocks folder tree exists in sandbox and triggers creation in main internal storage.
  * Run once on app initialization.
  */
 export async function initializeZenzaStorage() {
@@ -23,15 +24,19 @@ export async function initializeZenzaStorage() {
         await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
       }
     }
+
+    if (Platform.OS === 'android' && PrestostorageModule?.createMocksDirectory) {
+      await PrestostorageModule.createMocksDirectory();
+    }
   } catch (err) {
-    console.warn('Failed to initialize Zenza storage tree:', err);
+    console.log('[Storage] Init notice:', err);
   }
 }
 
 /**
- * Saves a local image file to the public Gallery under a "Zenza Images" album using MediaStore API.
+ * Saves a local image file to the public Gallery under a "Mocks Images" album using MediaStore API.
  */
-export async function saveImageToPublicGallery(localUri: string, albumName: string = 'Zenza Images') {
+export async function saveImageToPublicGallery(localUri: string, albumName: string = 'Mocks Images') {
   try {
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status === 'granted') {

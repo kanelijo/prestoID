@@ -2,6 +2,7 @@ package expo.modules.prestostorage
 
 import android.content.ContentValues
 import android.content.Intent
+import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -15,6 +16,22 @@ import java.io.FileInputStream
 class PrestostorageModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("Prestostorage")
+
+    AsyncFunction("createMocksDirectory") { promise: Promise ->
+      try {
+        val rootMocksDir = File(Environment.getExternalStorageDirectory(), "Mocks")
+        if (!rootMocksDir.exists()) {
+          rootMocksDir.mkdirs()
+        }
+        val docsMocksDir = File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS), "Mocks")
+        if (!docsMocksDir.exists()) {
+          docsMocksDir.mkdirs()
+        }
+        promise.resolve(mapOf("success" to true, "path" to rootMocksDir.absolutePath))
+      } catch (e: Exception) {
+        promise.resolve(mapOf("success" to false, "error" to e.message))
+      }
+    }
 
     AsyncFunction("saveDocument") { localUriString: String, fileName: String, promise: Promise ->
       val context = appContext.reactContext ?: throw Exception("React context not available")
@@ -38,11 +55,35 @@ class PrestostorageModule : Module() {
             else -> "application/octet-stream"
         }
 
-        // Determine destination path based on file type
+        // 1. First priority: Try writing directly to main internal storage root (/storage/emulated/0/Mocks)
+        val rootMocksDir = File(Environment.getExternalStorageDirectory(), "Mocks")
+        val canWriteToRoot = try {
+          if (!rootMocksDir.exists()) {
+            rootMocksDir.mkdirs()
+          }
+          rootMocksDir.exists() && rootMocksDir.canWrite()
+        } catch (e: Exception) {
+          false
+        }
+
+        if (canWriteToRoot) {
+          val destFile = File(rootMocksDir, fileName)
+          sourceFile.copyTo(destFile, overwrite = true)
+          MediaScannerConnection.scanFile(
+            context,
+            arrayOf(destFile.absolutePath),
+            arrayOf(mimeType),
+            null
+          )
+          promise.resolve(mapOf("success" to true, "uri" to destFile.absolutePath, "isRoot" to true))
+          return@AsyncFunction
+        }
+
+        // 2. Second priority (Scoped Storage on Android 10+): Save into Main Internal Storage > Documents / Mocks
         val relativePath = when (ext) {
-            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/KanelFlow/KanelFlow Images"
-            "mp4" -> Environment.DIRECTORY_MOVIES + "/KanelFlow/KanelFlow Videos"
-            else -> Environment.DIRECTORY_DOWNLOADS + "/KanelFlow/KanelFlow Documents"
+            "png", "jpg", "jpeg" -> Environment.DIRECTORY_PICTURES + "/Mocks"
+            "mp4" -> Environment.DIRECTORY_MOVIES + "/Mocks"
+            else -> Environment.DIRECTORY_DOCUMENTS + "/Mocks"
         }
 
         val contentValues = ContentValues().apply {
@@ -58,23 +99,21 @@ class PrestostorageModule : Module() {
           when (ext) {
               "png", "jpg", "jpeg" -> MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
               "mp4" -> MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-              else -> MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+              else -> MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
           }
         } else {
-          // For Android < 10, just write directly to the public directories
+          // Legacy Android (<10)
           val publicDir = when (ext) {
               "png", "jpg", "jpeg" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
               "mp4" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
-              else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+              else -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)
           }
-          val prestoDir = File(publicDir, "KanelFlow")
-          if (!prestoDir.exists()) prestoDir.mkdirs()
+          val mocksDir = File(publicDir, "Mocks")
+          if (!mocksDir.exists()) mocksDir.mkdirs()
           
-          val destFile = File(prestoDir, fileName)
+          val destFile = File(mocksDir, fileName)
           sourceFile.copyTo(destFile, overwrite = true)
-          
-          // Legacy Intent using FileProvider is complex without XML config. 
-          // Since target is modern Android, we'll return the file URI for older devices and let JS handle it.
+          MediaScannerConnection.scanFile(context, arrayOf(destFile.absolutePath), arrayOf(mimeType), null)
           promise.resolve(mapOf("success" to true, "uri" to destFile.absolutePath, "legacy" to true))
           return@AsyncFunction
         }
@@ -86,7 +125,7 @@ class PrestostorageModule : Module() {
             val newFileName = "${nameWithoutExt}_${System.currentTimeMillis()}.$ext"
             contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, newFileName)
             uri = resolver.insert(collection, contentValues)
-                ?: throw Exception("Failed to create MediaStore entry even with unique name")
+                ?: throw Exception("Failed to create MediaStore entry in Mocks")
         }
 
         try {
