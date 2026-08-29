@@ -235,7 +235,7 @@ export default function LoginScreen() {
         if (!userBizId) {
           router.replace('/(auth)/create-institute' as any);
         } else {
-          router.replace('/(admin)/students' as any);
+          router.replace('/(admin)' as any);
         }
       } else {
         const { data: linkedStudent } = await supabase

@@ -89,7 +89,7 @@ export default function SplashScreen() {
           usePrefetchStore.getState().prefetchCriticalData(session.user.id, role || 'student', businessId);
 
           if (role === 'admin') {
-            dest = businessId ? '/(admin)/students' : '/(auth)/create-institute';
+            dest = businessId ? '/(admin)' : '/(auth)/create-institute';
           } else {
             if (isExternal) {
               dest = '/(student)/public-tests';
