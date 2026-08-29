@@ -86,7 +86,7 @@ export default function SplashScreen() {
           }
 
           // Trigger parallel background prefetching
-          usePrefetchStore.getState().prefetchCriticalData(session.user.id, role || 'student', businessId);
+          usePrefetchStore.getState().prefetchAll(session.user.id, role || 'student', businessId);
 
           if (role === 'admin') {
             dest = businessId ? '/(admin)' : '/(auth)/create-institute';

@@ -84,7 +84,7 @@ export default function TestBanksScreen() {
       const activeBanks = (data || []).filter(b => !deletedIds.includes(b.id));
       setBanks(activeBanks);
     } catch (err: any) {
-      console.warn('Failed to fetch test banks:', err);
+      console.log('[TestBanks] Using local mock fallback:', err?.message || err);
       const deletedIdsRaw = await AsyncStorage.getItem(DELETED_BANKS_KEY);
       const deletedIds: string[] = deletedIdsRaw ? JSON.parse(deletedIdsRaw) : [];
       setBanks(INITIAL_MOCK_BANKS.filter(b => !deletedIds.includes(b.id)));

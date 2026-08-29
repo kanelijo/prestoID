@@ -49,6 +49,10 @@ export default function LiveDashboardScreen() {
   };
 
   useEffect(() => {
+    if (!id || id === 'undefined') {
+      setIsLoading(false);
+      return;
+    }
     fetchTestDetails();
 
     let isMounted = true;
@@ -104,6 +108,10 @@ export default function LiveDashboardScreen() {
   }, [id]);
 
   const fetchTestDetails = async () => {
+    if (!id || id === 'undefined') {
+      setIsLoading(false);
+      return;
+    }
     try {
       const { data, error } = await supabase.from('tests').select('*').eq('id', id).single();
       if (error) throw error;

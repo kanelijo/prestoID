@@ -97,7 +97,7 @@ export default function TargetExamAdminScreen() {
         setScrapedExams(examMap);
       }
     } catch (err: any) {
-      console.warn("Failed to fetch scraped data:", err.message);
+      console.log("[TargetExamAdmin] Scraped data notice:", err.message);
     } finally {
       setIsScraping(false);
     }
@@ -114,7 +114,7 @@ export default function TargetExamAdminScreen() {
         .order('name');
 
       if (examError) {
-        console.warn('[TargetExamAdmin] Exams table query notice:', examError.message);
+        console.log('[TargetExamAdmin] Exams table notice:', examError.message);
         setExams([]);
         return;
       }

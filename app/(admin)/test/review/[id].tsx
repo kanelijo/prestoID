@@ -77,7 +77,7 @@ export default function TestReviewScreen() {
   const fetchTestDetails = async () => {
     setIsLoading(true);
     try {
-      if (!verified || id === 'demo-test-id') {
+      if (!id || id === 'undefined' || !verified || id === 'demo-test-id') {
         setTestDetails({ title: 'AI Generated Mock Test', duration_minutes: 60, status: 'draft' });
         setQuestions(MOCK_QUESTIONS);
         setIsLoading(false);
