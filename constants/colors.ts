@@ -1,52 +1,53 @@
 export const Colors = {
-  // Background layers (Stitch Warm White / Kinetic Ethereal)
+  // Background layers (WhatsApp Pure Clean System)
   bg: {
-    primary: '#FFF8F6',       // Main background (warm off-white)
-    secondary: '#FFFFFF',     // Card background (pure white)
-    tertiary: '#FFF1ED',      // Section background / low surface
-    input: '#FFF1ED',         // Input background
+    primary: '#FFFFFF',       // Pure white main app background
+    secondary: '#FFFFFF',     // Pure white card background
+    tertiary: '#F8F9FA',      // Subtle off-white section background
+    input: '#F0F2F5',         // Crisp WhatsApp input surface
   },
 
-  // Text (Deep warm browns)
+  // Text (High Contrast Dark Charcoal)
   text: {
-    primary: '#281713',       // Main headers and labels
-    secondary: '#5C4039',     // Muted description text
-    tertiary: '#916F67',      // Faint placeholder / border text
+    primary: '#111827',       // Crisp main headers and labels
+    secondary: '#4B5563',     // Clean readable secondary text
+    tertiary: '#9CA3AF',      // Faint placeholder / border text
     inverse: '#FFFFFF',       // Text on primary buttons
   },
 
-  // Brand accents (Warm coral-red)
+  // Brand accents (Replacing WhatsApp Green with Brand Color)
   accent: {
-    primary: '#AF2800',       // Core brand color (Stitch primary)
-    secondary: '#A43C22',     // Secondary brand color
-    container: '#DC3400',     // Elevated primary color
-    gradient: ['#AF2800', '#FD7E5E'] as const,
-    glow: 'rgba(175, 40, 0, 0.1)',
+    primary: '#AF2800',       // Core brand color
+    secondary: '#8E2000',     // Dark brand color
+    container: '#FFF1ED',     // Subtle brand surface tint
+    gradient: ['#AF2800', '#D34515'] as const,
+    glow: 'rgba(175, 40, 0, 0.08)',
   },
 
   // Semantic status colors
   status: {
-    success: '#34C759',       // Green (paid, present)
-    danger: '#FF3B30',        // Red (absent, overdue)
-    warning: '#FF9500',       // Amber (late, upcoming)
-    info: '#007AFF',          // Blue
+    success: '#10B981',       // Crisp emerald green
+    danger: '#EF4444',        // Red
+    warning: '#F59E0B',       // Amber
+    info: '#3B82F6',          // Blue
   },
 
-  // Card styling
+  // Card & Divider styling (Subtle 1px WhatsApp Dividers)
   card: {
-    border: '#E6BEB4',        // Outline variant
-    glass: 'rgba(255, 255, 255, 0.85)',
-    highlight: '#FFE9E4',
+    border: '#E5E7EB',        // Crisp 1px subtle divider
+    divider: '#F1F5F9',       // Ultralight separator
+    glass: 'rgba(255, 255, 255, 0.95)',
+    highlight: '#FFF1ED',
   },
 
-  // Custom Stitch Specific Color Tokens
+  // Stitch & Modern Tokens
   stitch: {
-    primaryFixed: '#FFDAD2',
-    primaryFixedDim: '#FFB4A2',
-    surfaceContainerHigh: '#FFE2DB',
-    surfaceContainerHighest: '#FBDCD4',
-    tertiaryNeutral: '#5B5C5C',
-    tertiaryNeutralContainer: '#737575',
+    primaryFixed: '#FFE2DB',
+    primaryFixedDim: '#FFC4B5',
+    surfaceContainerHigh: '#F8F9FA',
+    surfaceContainerHighest: '#F0F2F5',
+    tertiaryNeutral: '#64748B',
+    tertiaryNeutralContainer: '#94A3B8',
   },
 
   white: '#FFFFFF',
@@ -55,29 +56,29 @@ export const Colors = {
 };
 
 export const Gradients = {
-  primary: ['#AF2800', '#FD7E5E'],
-  card: ['rgba(255, 255, 255, 0.9)', 'rgba(255, 255, 255, 0.7)'],
-  success: ['#34C759', '#28A745'],
-  danger: ['#FF3B30', '#DC3545'],
-  dark: ['#FFF8F6', '#FFF1ED'],
-  idCardFront: ['#FFFFFF', '#FFF8F6'],
-  idCardBack: ['#FFFFFF', '#FFF1ED'],
+  primary: ['#AF2800', '#D34515'],
+  card: ['#FFFFFF', '#FFFFFF'],
+  success: ['#10B981', '#059669'],
+  danger: ['#EF4444', '#DC2626'],
+  dark: ['#FFFFFF', '#F8F9FA'],
+  idCardFront: ['#FFFFFF', '#FFFFFF'],
+  idCardBack: ['#FFFFFF', '#F8F9FA'],
 };
 
 export const Shadows = {
   sm: {
-    shadowColor: '#281713',
+    shadowColor: '#000000',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.04,
     shadowRadius: 2,
     elevation: 1,
   },
   md: {
-    shadowColor: '#281713',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
   lg: {
     shadowColor: '#AF2800',

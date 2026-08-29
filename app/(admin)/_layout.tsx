@@ -139,16 +139,22 @@ export default function AdminLayout() {
       <Tabs
         backBehavior="initialRoute"
         screenOptions={{
-        headerShown: false,
-        tabBarStyle: [
-          styles.tabBar,
-          {
-            height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
-            paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
-          },
-        ],
-        tabBarShowLabel: false,
-      }}
+          lazy: false,
+          headerShown: false,
+          tabBarStyle: [
+            styles.tabBar,
+            {
+              backgroundColor: '#FFFFFF',
+              borderTopColor: '#E5E7EB',
+              borderTopWidth: 1,
+              elevation: 0,
+              shadowOpacity: 0,
+              height: Platform.OS === 'android' ? 62 : 62 + insets.bottom,
+              paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
+            },
+          ],
+          tabBarShowLabel: false,
+        }}
     >
       <Tabs.Screen
         name="students"
@@ -237,37 +243,34 @@ export default function AdminLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    backgroundColor: Colors.bg.secondary,
-    borderTopColor: Colors.card.border,
+    backgroundColor: '#FFFFFF',
+    borderTopColor: '#E5E7EB',
     borderTopWidth: 1,
-    paddingTop: 8,
-    elevation: 4,
-    shadowColor: Colors.text.primary,
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 10,
+    paddingTop: 6,
+    elevation: 0,
+    shadowOpacity: 0,
   },
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
+    gap: 3,
     width: 72,
   },
   tabLabel: {
-    fontSize: 9,
-    color: Colors.text.tertiary,
-    fontWeight: '500',
+    fontSize: 10,
+    color: '#6B7280',
+    fontWeight: '600',
     textAlign: 'center',
   },
   tabLabelActive: {
-    color: Colors.accent.primary,
+    color: '#AF2800',
     fontWeight: '700',
   },
   activeIndicator: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.accent.primary,
+    width: 16,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#AF2800',
     marginTop: 2,
   },
   trialBanner: {

@@ -90,17 +90,13 @@ export default function LiveTestCard({ test, index, onPress }: LiveTestCardProps
 const styles = StyleSheet.create({
   card: {
     backgroundColor: '#FFF',
-    borderRadius: 16,
+    borderRadius: 12,
     padding: 16,
     width: 260,
-    marginRight: 16,
+    marginRight: 12,
     borderWidth: 1,
-    borderColor: Colors.card?.border || '#E5E5E5',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    elevation: 3,
+    borderColor: '#E5E7EB',
+    elevation: 1,
   },
   headerRow: {
     flexDirection: 'row',

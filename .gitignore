@@ -26,3 +26,7 @@ modules/**/.gradle/
 app_brain/.obsidian/workspace.json
 app_brain/.obsidian/workspace-mobile.json
 
+# Generated local bundles
+android/app/src/main/assets/index.android.bundle
+android/app/src/main/assets/*.bundle
+
