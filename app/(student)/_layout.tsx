@@ -204,6 +204,7 @@ export default function StudentLayout() {
       <InAppNotification />
       <Tabs
         backBehavior="initialRoute"
+        initialRouteName={isPublicEnv ? "public-tests" : "id-card"}
         screenOptions={{
           lazy: false,
           headerShown: false,

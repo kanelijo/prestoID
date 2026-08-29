@@ -41,7 +41,7 @@ export default function StudentStudentIDCardScreen() {
   const router = useRouter();
   const { isFeatureActive } = useFeatureFlags();
   const [showFullQR, setShowFullQR] = useState(false);
-  const { user, session, businessName, studentData, setStudentData } = useAuthStore();
+  const { user, session, businessName, studentData, setStudentData, activeEnvironment } = useAuthStore();
   const [isLoading, setIsLoading] = useState(!studentData);
   const [isProfileModalVisible, setIsProfileModalVisible] = useState(false);
   const [imageViewUrl, setImageViewUrl] = useState<string | null>(null);
@@ -50,10 +50,14 @@ export default function StudentStudentIDCardScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (activeEnvironment === 'public') {
+        router.replace('/(student)/public-tests');
+        return;
+      }
       if (user?.id) {
         useNotificationStore.getState().fetchStudentUnreadCounts(user.id);
       }
-    }, [user])
+    }, [user, activeEnvironment])
   );
 
   // Claim Profile Form States

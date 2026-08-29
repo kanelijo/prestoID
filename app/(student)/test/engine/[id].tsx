@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState, ActivityIndicator, Dimensions, FlatList, Modal, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState, ActivityIndicator, Dimensions, FlatList, Modal, Platform, BackHandler } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -161,7 +161,27 @@ export default function ZenZaTestEngineScreen() {
         }
       };
     }
-  }, [id, user?.id]);
+  }, [isStarted, user?.id]);
+
+  // Handle Android Hardware Back Button
+  useEffect(() => {
+    const onBackPress = () => {
+      if (!isStarted) {
+        if (useAuthStore.getState().activeEnvironment === 'public') {
+          router.replace('/(student)/public-tests');
+        } else {
+          router.replace('/(student)/test');
+        }
+        return true;
+      } else {
+        setShowSubmitConfirm(true);
+        return true;
+      }
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [isStarted]);
 
   // Re-track presence when isStarted changes to update status to 'writing'
   useEffect(() => {
@@ -831,7 +851,13 @@ export default function ZenZaTestEngineScreen() {
           
           <TouchableOpacity 
             style={{ paddingVertical: 10, alignItems: 'center' }}
-            onPress={() => router.push('/(student)/test')}
+            onPress={() => {
+              if (useAuthStore.getState().activeEnvironment === 'public') {
+                router.replace('/(student)/public-tests');
+              } else {
+                router.replace('/(student)/test');
+              }
+            }}
           >
             <Text style={{ color: Colors.text.secondary, fontSize: 14, fontWeight: '600' }}>Cancel</Text>
           </TouchableOpacity>

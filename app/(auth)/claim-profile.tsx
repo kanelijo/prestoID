@@ -12,7 +12,7 @@ import {
   Dimensions,
   ScrollView,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,10 +25,13 @@ const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function ClaimProfileScreen() {
   const router = useRouter();
+  const { directMode } = useLocalSearchParams<{ directMode?: string }>();
   const { user, setRole, setBusiness } = useAuthStore();
 
   // Mode: 'select' (choose between coaching ID vs public test) | 'credentials' (enter coaching credentials)
-  const [mode, setMode] = useState<'select' | 'credentials'>('select');
+  const [mode, setMode] = useState<'select' | 'credentials'>(
+    directMode === 'credentials' ? 'credentials' : 'select'
+  );
 
   const [businessCode, setBusinessCode] = useState('');
   const [passcode, setPasscode] = useState('');

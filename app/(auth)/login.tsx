@@ -295,6 +295,34 @@ export default function LoginScreen() {
             }
           }
 
+          // Check if user is already an established Public Student
+          let isExistingPublic = profile?.is_external === true || profile?.claimed === true;
+          if (!isExistingPublic) {
+            const { data: pubStudent } = await supabase
+              .from('public_students')
+              .select('id')
+              .eq('user_id', user.id)
+              .maybeSingle();
+            if (pubStudent) isExistingPublic = true;
+          }
+
+          if (isExistingPublic) {
+            useAuthStore.getState().setOnboarded(true);
+            useAuthStore.getState().setActiveEnvironment('public');
+            const profileCache = {
+              userId: user.id,
+              email: user.email,
+              phone: phoneIdentifier || user.phone,
+              role: 'student',
+              businessId: null,
+              claimed: true,
+              is_external: true,
+            };
+            await AsyncStorage.setItem('@user_profile', JSON.stringify(profileCache));
+            router.replace('/(student)/public-tests' as any);
+            return;
+          }
+
           const profileCache = {
             userId: user.id,
             email: user.email,

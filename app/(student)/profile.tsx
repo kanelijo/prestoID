@@ -51,7 +51,7 @@ const INDIAN_STATES = [
 
 export default function StudentProfileScreen() {
   const router = useRouter();
-  const { user, reset, activeEnvironment, setActiveEnvironment } = useAuthStore();
+  const { user, reset, activeEnvironment, setActiveEnvironment, businessId, businessName } = useAuthStore();
 
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -61,6 +61,8 @@ export default function StudentProfileScreen() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [isExternal, setIsExternal] = useState(true);
+  const [hasCoachingLinked, setHasCoachingLinked] = useState(false);
+  const [coachingTitle, setCoachingTitle] = useState('My Coaching');
 
   // Gate of Target Exam Settings
   const [targetExam, setTargetExam] = useState('MPPSC');
@@ -78,6 +80,23 @@ export default function StudentProfileScreen() {
     if (!user?.id) return;
     try {
       setIsLoading(true);
+
+      // Check if student has a linked coaching profile
+      const { data: linkedStudent } = await supabase
+        .from('students')
+        .select('id, business_id, businesses(business_name)')
+        .eq('user_id', user.id)
+        .maybeSingle();
+
+      if (linkedStudent && linkedStudent.business_id) {
+        setHasCoachingLinked(true);
+        setCoachingTitle((linkedStudent.businesses as any)?.business_name || businessName || 'My Coaching');
+      } else if (businessId) {
+        setHasCoachingLinked(true);
+        setCoachingTitle(businessName || 'My Coaching');
+      } else {
+        setHasCoachingLinked(false);
+      }
 
       // Check public_students table first
       const { data: pubData } = await supabase
@@ -116,7 +135,7 @@ export default function StudentProfileScreen() {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [user]);
+  }, [user, businessId, businessName]);
 
   useEffect(() => {
     loadProfile();
@@ -334,12 +353,64 @@ export default function StudentProfileScreen() {
           </View>
         </View>
 
-        {/* Coaching ID Switch (for Public Students) */}
-        {isExternal ? (
+        {/* Workspace Switcher Card */}
+        {hasCoachingLinked ? (
+          <TouchableOpacity
+            style={[
+              styles.coachingSwitchCard,
+              { borderColor: activeEnvironment === 'enrolled' ? '#C7D2FE' : '#FEE2E2' },
+            ]}
+            activeOpacity={0.85}
+            onPress={() => {
+              if (activeEnvironment === 'enrolled') {
+                setActiveEnvironment('public');
+                router.replace('/(student)/public-tests');
+              } else {
+                setActiveEnvironment('enrolled');
+                router.replace('/(student)/id-card');
+              }
+            }}
+          >
+            <View
+              style={[
+                styles.coachingIconWrap,
+                { backgroundColor: activeEnvironment === 'enrolled' ? '#EEF2FF' : '#FFF1F2' },
+              ]}
+            >
+              <Ionicons
+                name={activeEnvironment === 'enrolled' ? 'rocket' : 'business'}
+                size={22}
+                color={activeEnvironment === 'enrolled' ? '#4F46E5' : '#AF2800'}
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.coachingCardTitle}>
+                {activeEnvironment === 'enrolled'
+                  ? 'Switch to Public Test Practice 🎯'
+                  : `Switch to ${coachingTitle} 🏛️`}
+              </Text>
+              <Text style={styles.coachingCardDesc}>
+                {activeEnvironment === 'enrolled'
+                  ? 'Access All-India open mocks, nationwide leaderboards & vacancy feed.'
+                  : 'Return to your Virtual ID Card, batch tests, attendance & coaching notes.'}
+              </Text>
+            </View>
+            <Ionicons
+              name="swap-horizontal"
+              size={20}
+              color={activeEnvironment === 'enrolled' ? '#4F46E5' : '#AF2800'}
+            />
+          </TouchableOpacity>
+        ) : (
           <TouchableOpacity
             style={styles.coachingSwitchCard}
-            activeOpacity={0.8}
-            onPress={() => router.push('/(auth)/claim-profile')}
+            activeOpacity={0.85}
+            onPress={() =>
+              router.push({
+                pathname: '/(auth)/claim-profile',
+                params: { directMode: 'credentials' },
+              })
+            }
           >
             <View style={styles.coachingIconWrap}>
               <Ionicons name="business" size={22} color="#AF2800" />
@@ -347,12 +418,12 @@ export default function StudentProfileScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.coachingCardTitle}>Joined a Coaching Institute?</Text>
               <Text style={styles.coachingCardDesc}>
-                Enter your Institute Code to unlock your Virtual Digital ID Card & Batch Tests.
+                Enter your Organization Code & Passcode to link your Institute ID Card & batch tests.
               </Text>
             </View>
             <Ionicons name="arrow-forward" size={18} color="#AF2800" />
           </TouchableOpacity>
-        ) : null}
+        )}
 
         {/* Sign Out Button */}
         <TouchableOpacity style={styles.signOutBtn} activeOpacity={0.8} onPress={handleLogout}>
