@@ -1660,7 +1660,7 @@ const styles = StyleSheet.create({
   // FAB Speed Dial
   fabContainer: {
     position: 'absolute',
-    bottom: 74,
+    bottom: 18,
     right: 20,
     alignItems: 'flex-end',
     ...Shadows.lg,
