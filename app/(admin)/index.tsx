@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Platform, BackHandler } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PagerView from 'react-native-pager-view';
@@ -31,6 +31,17 @@ export default function AdminIndex() {
   const { adminUnreadCount } = useNotificationStore();
   const { user, businessId } = useAuthStore();
   const params = useLocalSearchParams<{ tab?: string }>();
+
+  // Instant real-time page scroll tracking (zero lag mid-swipe!)
+  const handlePageScroll = useCallback((e: any) => {
+    const { position, offset } = e.nativeEvent;
+    const target = Math.round(position + offset);
+    setActiveTab((prev) => (prev !== target ? target : prev));
+  }, []);
+
+  const handlePageSelected = useCallback((e: any) => {
+    setActiveTab(e.nativeEvent.position);
+  }, []);
 
   // Sync tab if navigated with ?tab=test, etc.
   useEffect(() => {
@@ -99,7 +110,8 @@ export default function AdminIndex() {
         ref={pagerRef}
         style={styles.pager}
         initialPage={0}
-        onPageSelected={(e) => setActiveTab(e.nativeEvent.position)}
+        onPageScroll={handlePageScroll}
+        onPageSelected={handlePageSelected}
         offscreenPageLimit={1}
       >
         <View key="students" style={styles.page}>
@@ -135,8 +147,8 @@ export default function AdminIndex() {
             <TouchableOpacity
               key={tab.key}
               onPress={() => {
-                pagerRef.current?.setPage(idx);
                 setActiveTab(idx);
+                pagerRef.current?.setPage(idx);
               }}
               activeOpacity={0.7}
               style={styles.tabItem}
@@ -201,9 +213,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'transparent',
+    overflow: 'hidden',
   },
   iconWrapperActive: {
     backgroundColor: '#FFE2DB',
+    borderRadius: 14,
+    overflow: 'hidden',
   },
   tabLabel: {
     fontSize: 11,
