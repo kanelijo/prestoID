@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -149,9 +149,36 @@ export default function PublicTestsScreen() {
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  const userTargetExam = profile?.target_exam || 'MPPSC';
+
+  const dynamicChips = useMemo(() => {
+    const list = ['ALL', userTargetExam];
+    const defaults = ['MPPSC', 'MP Police (SI/Constable)', 'SSC CGL', 'Railway', 'Banking', 'UPSC', 'JEE Main', 'NEET UG'];
+    defaults.forEach((d) => {
+      if (!list.includes(d)) list.push(d);
+    });
+    return list;
+  }, [userTargetExam]);
+
+  const featuredMock = useMemo(() => {
+    const matching = testsList.find((t) => t.exam_category?.toLowerCase().includes(userTargetExam.toLowerCase()));
+    if (matching) return matching;
+    return {
+      id: 'pub-mock-target',
+      title: `${userTargetExam} — Full Length Master Mock 2026`,
+      description: `Complete bilingual mock examination specifically tailored for ${userTargetExam} aspirants according to latest syllabus.`,
+      exam_category: userTargetExam,
+      duration_minutes: 120,
+      total_marks: 200,
+      questions_count: 100,
+    };
+  }, [testsList, userTargetExam]);
 
   const handleStartTest = async (item: any) => {
     await cacheTestForOffline(item.id, item);
@@ -189,7 +216,9 @@ export default function PublicTestsScreen() {
 
         <View style={styles.headerTitleWrap}>
           <Text style={styles.headerTitle}>Public Test Hub</Text>
-          <Text style={styles.headerSubtitle}>All-India Open Mock Tests & Drills</Text>
+          <Text style={styles.headerSubtitle}>
+            Target: <Text style={{ color: '#AF2800', fontWeight: '800' }}>{userTargetExam}</Text>
+          </Text>
         </View>
 
         <View style={styles.badgeOpenAccess}>
@@ -209,10 +238,10 @@ export default function PublicTestsScreen() {
         }
         contentContainerStyle={styles.scrollBody}
       >
-        {/* Featured Live Test Banner */}
+        {/* Featured Live Test Banner Tailored for Target Exam */}
         <TouchableOpacity
           activeOpacity={0.9}
-          onPress={() => handleStartTest(INITIAL_PUBLIC_TESTS[0])}
+          onPress={() => handleStartTest(featuredMock)}
           style={styles.featuredCard}
         >
           <LinearGradient
@@ -224,44 +253,47 @@ export default function PublicTestsScreen() {
             <View style={styles.featuredBadgeRow}>
               <View style={styles.liveIndicatorPill}>
                 <View style={styles.liveDot} />
-                <Text style={styles.liveText}>FEATURED MOCK</Text>
+                <Text style={styles.liveText}>{userTargetExam.toUpperCase()} FEATURED MOCK</Text>
               </View>
-              <Text style={styles.featuredMarks}>🎯 200 Marks • 120 Mins</Text>
+              <Text style={styles.featuredMarks}>
+                🎯 {featuredMock.total_marks || 200} Marks • {featuredMock.duration_minutes || 120} Mins
+              </Text>
             </View>
 
-            <Text style={styles.featuredTitle}>MPPSC Prelims Paper 1 — Full Length Mock 2026</Text>
+            <Text style={styles.featuredTitle}>{featuredMock.title}</Text>
             <Text style={styles.featuredSubtitle}>
-              Bilingual (Hindi/English) • Complete MP GK, Polity & History Syllabus
+              {featuredMock.description}
             </Text>
 
             <View style={styles.featuredBtnRow}>
               <View style={styles.featuredAttemptBtn}>
                 <Ionicons name="play" size={16} color="#AF2800" style={{ marginRight: 6 }} />
-                <Text style={styles.featuredAttemptText}>Attempt Live Mock</Text>
+                <Text style={styles.featuredAttemptText}>Attempt {userTargetExam} Mock</Text>
               </View>
             </View>
           </LinearGradient>
         </TouchableOpacity>
 
-        {/* Exam Category Filter Chips */}
+        {/* Exam Category Filter Chips Tailored for Target Exam */}
         <View style={styles.chipSection}>
-          <Text style={styles.sectionHeading}>TARGET EXAM</Text>
+          <Text style={styles.sectionHeading}>TARGET EXAMS</Text>
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.chipScroll}
           >
-            {EXAM_CHIPS.map((chip) => {
+            {dynamicChips.map((chip) => {
               const isSelected = selectedExam === chip;
+              const isUserGoal = chip === userTargetExam && chip !== 'ALL';
               return (
                 <TouchableOpacity
                   key={chip}
                   onPress={() => setSelectedExam(chip)}
                   activeOpacity={0.7}
-                  style={[styles.chip, isSelected && styles.chipActive]}
+                  style={[styles.chip, isSelected && styles.chipActive, isUserGoal && styles.chipGoal]}
                 >
-                  <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
-                    {chip}
+                  <Text style={[styles.chipText, isSelected && styles.chipTextActive, isUserGoal && styles.chipTextGoal]}>
+                    {chip}{isUserGoal ? ' ★' : ''}
                   </Text>
                 </TouchableOpacity>
               );
@@ -510,12 +542,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE2DB',
     borderColor: '#AF2800',
   },
+  chipGoal: {
+    borderColor: '#AF2800',
+    backgroundColor: '#FFF1F2',
+  },
   chipText: {
     fontSize: 12,
     color: '#4B5563',
     fontWeight: '600',
   },
   chipTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+  chipTextGoal: {
     color: '#AF2800',
     fontWeight: '800',
   },

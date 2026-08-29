@@ -10,12 +10,16 @@ import {
   Platform,
   Alert,
   RefreshControl,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
+import { APP_CONFIG } from '@/constants/config';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { supabase } from '@/lib/supabase';
@@ -60,6 +64,7 @@ export default function StudentProfileScreen() {
   const [studentName, setStudentName] = useState('Public Aspirant');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isExternal, setIsExternal] = useState(true);
   const [hasCoachingLinked, setHasCoachingLinked] = useState(false);
   const [coachingTitle, setCoachingTitle] = useState('My Coaching');
@@ -111,6 +116,7 @@ export default function StudentProfileScreen() {
         setPhone(pubData.phone || '');
         setTargetExam(pubData.target_exam || 'MPPSC');
         setSelectedState(pubData.state || 'Madhya Pradesh');
+        if (pubData.avatar_url) setAvatarUrl(pubData.avatar_url);
         setIsExternal(true);
       } else {
         // Fallback to profiles table
@@ -126,6 +132,7 @@ export default function StudentProfileScreen() {
           setPhone(prof.phone || '');
           setTargetExam(prof.target_exam || 'MPPSC');
           setSelectedState(prof.address || 'Madhya Pradesh');
+          if (prof.avatar_url) setAvatarUrl(prof.avatar_url);
           setIsExternal(prof.is_external === true || !prof.business_id);
         }
       }
@@ -136,6 +143,83 @@ export default function StudentProfileScreen() {
       setRefreshing(false);
     }
   }, [user, businessId, businessName]);
+
+  const handlePickProfilePhoto = async () => {
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Gallery access is needed to select a profile picture.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
+
+      if (!result.canceled && result.assets[0]?.uri) {
+        const localUri = result.assets[0].uri;
+        // 1. INSTANT OPTIMISTIC UI: User sees their picture change immediately!
+        setAvatarUrl(localUri);
+        useAuthStore.getState().setAvatarUrl(localUri);
+        Alert.alert('Upload Successful 🎉', 'Your profile picture has been updated.');
+
+        // 2. Background async upload to Supabase Storage & DB sync
+        (async () => {
+          try {
+            let fileExt = 'jpg';
+            const cleanUri = localUri.split('?')[0].split('#')[0];
+            const parts = cleanUri.split('.');
+            if (parts.length > 1) {
+              const ext = parts.pop()?.toLowerCase() || 'jpg';
+              if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) fileExt = ext;
+            }
+            const fileName = `student-${user?.id || 'temp'}-${Date.now()}.${fileExt}`;
+            const token = useAuthStore.getState().session?.access_token || APP_CONFIG.supabaseAnonKey;
+
+            const uploadRes = await FileSystem.uploadAsync(
+              `${APP_CONFIG.supabaseUrl}/storage/v1/object/avatars/${fileName}`,
+              localUri,
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  apikey: APP_CONFIG.supabaseAnonKey,
+                  'Content-Type': `image/${fileExt === 'png' ? 'png' : 'jpeg'}`,
+                },
+                httpMethod: 'POST',
+                uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+              }
+            );
+
+            if (uploadRes.status >= 200 && uploadRes.status < 300 && user?.id) {
+              const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
+              if (publicUrl) {
+                setAvatarUrl(publicUrl);
+                useAuthStore.getState().setAvatarUrl(publicUrl);
+
+                // Sync across all tables
+                await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
+                await supabase.from('public_students').upsert({ user_id: user.id, avatar_url: publicUrl, name: studentName }, { onConflict: 'user_id' });
+                await supabase.from('students').update({ photo_url: publicUrl }).eq('user_id', user.id);
+
+                const cache = await AsyncStorage.getItem('@user_profile');
+                if (cache) {
+                  const parsed = JSON.parse(cache);
+                  parsed.avatarUrl = publicUrl;
+                  await AsyncStorage.setItem('@user_profile', JSON.stringify(parsed));
+                }
+              }
+            }
+          } catch (bgErr) {
+            console.log('[ProfilePhoto] Background upload sync notice:', bgErr);
+          }
+        })();
+      }
+    } catch (err: any) {
+      console.warn('Image picker notice:', err);
+    }
+  };
 
   useEffect(() => {
     loadProfile();
@@ -233,16 +317,27 @@ export default function StudentProfileScreen() {
       >
         {/* Profile Hero Card */}
         <View style={styles.heroCard}>
-          <View style={styles.avatarWrap}>
-            <LinearGradient
-              colors={['#AF2800', '#D9480F']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.avatarGradient}
-            >
-              <Text style={styles.avatarLetter}>{studentName.charAt(0).toUpperCase()}</Text>
-            </LinearGradient>
-          </View>
+          <TouchableOpacity
+            style={styles.avatarWrap}
+            activeOpacity={0.85}
+            onPress={handlePickProfilePhoto}
+          >
+            {avatarUrl ? (
+              <Image source={{ uri: avatarUrl }} style={styles.heroAvatarImage} />
+            ) : (
+              <LinearGradient
+                colors={['#AF2800', '#D9480F']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.avatarGradient}
+              >
+                <Text style={styles.avatarLetter}>{studentName.charAt(0).toUpperCase()}</Text>
+              </LinearGradient>
+            )}
+            <View style={styles.cameraIconBadge}>
+              <Ionicons name="camera" size={12} color="#FFFFFF" />
+            </View>
+          </TouchableOpacity>
 
           <View style={styles.heroInfo}>
             <Text style={styles.heroName}>{studentName}</Text>
@@ -626,6 +721,25 @@ const styles = StyleSheet.create({
   },
   avatarWrap: {
     marginRight: 14,
+    position: 'relative',
+  },
+  heroAvatarImage: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+  },
+  cameraIconBadge: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#AF2800',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   avatarGradient: {
     width: 58,

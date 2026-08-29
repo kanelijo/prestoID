@@ -830,7 +830,17 @@ export default function StudentStudentIDCardScreen() {
             )}
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Zenza</Text>
-          <View style={{ width: 42 }} />
+          <TouchableOpacity
+            style={styles.publicSwitchHeaderBtn}
+            activeOpacity={0.8}
+            onPress={() => {
+              useAuthStore.getState().setActiveEnvironment('public');
+              router.replace('/(student)/public-tests');
+            }}
+          >
+            <Ionicons name="rocket" size={13} color="#AF2800" style={{ marginRight: 4 }} />
+            <Text style={styles.publicSwitchHeaderText}>Public Mode</Text>
+          </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -1329,6 +1339,19 @@ const styles = StyleSheet.create({
     paddingTop: 12,
     paddingBottom: 8,
     backgroundColor: Colors.bg.primary,
+  },
+  publicSwitchHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  publicSwitchHeaderText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#AF2800',
   },
   avatarWrapper: {
     width: 40,
