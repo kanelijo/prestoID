@@ -13,6 +13,7 @@ import { getTestFromLocal, saveTestToLocal, saveTestProgressToLocal } from '@/li
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { CustomAlert } from '@/components/CustomAlert';
+import { sendExamHeartbeat, logCBTTelemetryForBigQuery } from '@/lib/firestore';
 
 const { width: windowWidth } = Dimensions.get('window');
 
@@ -233,6 +234,32 @@ export default function ZenZaTestEngineScreen() {
       sub.remove();
     };
   }, [isStarted]);
+
+  // ─── LIVE PROCTORING HEARTBEAT (FIRESTORE) ───────────
+  useEffect(() => {
+    if (!isStarted || hasSubmitted.current || !id || id === 'demo') return;
+
+    const interval = setInterval(() => {
+      const activeStudent = studentId || useAuthStore.getState().studentData?.id || user?.id;
+      if (!activeStudent) return;
+
+      const answeredCount = Object.keys(useQuizStore.getState().answers).length;
+
+      sendExamHeartbeat({
+        testId: String(id),
+        studentId: activeStudent,
+        studentName: useAuthStore.getState().studentData?.name || user?.email?.split('@')[0] || 'Student',
+        currentQuestionIndex: currentQIndex,
+        totalAnswered: answeredCount,
+        timeRemainingSeconds: timeLeft,
+        networkStatus: 'online',
+        lastHeartbeat: Date.now(),
+        isCompleted: false,
+      }).catch(_ => {});
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [isStarted, id, studentId, currentQIndex, timeLeft]);
 
   const exitLogsRef = useRef<any[]>([]);
   const exitTimerRef = useRef<any>(null);
@@ -473,6 +500,9 @@ export default function ZenZaTestEngineScreen() {
   const handleSelectOption = (qId: string, index: number) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+    const now = Date.now();
+    const elapsedMs = now - lastTimeRef.current;
+
     // Track answer change (hesitation indicator)
     const previousAns = answers[qId];
     if (previousAns !== undefined && previousAns !== null && previousAns !== index) {
@@ -481,6 +511,35 @@ export default function ZenZaTestEngineScreen() {
 
     setAnswer(qId, index);
     submitToLocal(id);
+
+    // ─── STREAM COGNITIVE TELEMETRY TO BIGQUERY ───────────
+    if (id && id !== 'demo') {
+      const activeStudent = studentId || useAuthStore.getState().studentData?.id || user?.id || 'guest';
+      const totalDurationSec = (testDetails?.duration_minutes || 60) * 60;
+      const progressRatio = totalDurationSec > 0 ? Math.min(1.0, Math.max(0, 1 - (timeLeft / totalDurationSec))) : 0;
+
+      logCBTTelemetryForBigQuery({
+        eventId: `${id}_${activeStudent}_${qId}_${now}`,
+        testId: String(id),
+        studentId: activeStudent,
+        studentName: useAuthStore.getState().studentData?.name || user?.email?.split('@')[0] || 'Student',
+        subject: testDetails?.subject || 'General',
+        eventType: previousAns !== undefined ? 'OPTION_CHANGE' : 'OPTION_SELECT',
+        questionId: qId,
+        questionNumber: currentQIndex + 1,
+        selectedOptionIndex: index,
+        previousOptionIndex: previousAns ?? null,
+        timeSpentOnQuestionSeconds: Math.round(((timeLogsRef.current[qId] || 0) + elapsedMs) / 1000),
+        remainingTimeSeconds: timeLeft,
+        hesitationTimeMs: elapsedMs,
+        optionFlipCount: changesRef.current[qId] || 0,
+        isRevisit: (revisitsRef.current[qId] || 1) > 1,
+        isEgoTrap: ((timeLogsRef.current[qId] || 0) + elapsedMs) > 240000,
+        rapidGuessDetected: elapsedMs < 3500,
+        examProgressRatio: Number(progressRatio.toFixed(2)),
+        timestamp: now,
+      }).catch(_ => {});
+    }
     
     // Clear any pending auto-advance to prevent jumping multiple pages on fast clicks
     if (autoAdvanceTimeoutRef.current) {
@@ -525,6 +584,24 @@ export default function ZenZaTestEngineScreen() {
     };
 
     const latestAnswers = useQuizStore.getState().answers;
+
+    // Send final completion heartbeat to Firestore
+    if (id && id !== 'demo') {
+      const activeStudent = studentId || useAuthStore.getState().studentData?.id || user?.id;
+      if (activeStudent) {
+        sendExamHeartbeat({
+          testId: String(id),
+          studentId: activeStudent,
+          studentName: useAuthStore.getState().studentData?.name || user?.email?.split('@')[0] || 'Student',
+          currentQuestionIndex: currentQIndex,
+          totalAnswered: Object.keys(latestAnswers).length,
+          timeRemainingSeconds: 0,
+          networkStatus: 'online',
+          lastHeartbeat: Date.now(),
+          isCompleted: true,
+        }).catch(_ => {});
+      }
+    }
 
     if (id === 'demo') {
       clearAnswers();
