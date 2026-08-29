@@ -112,21 +112,9 @@ export default function PublicLeaderboardScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTopRow}>
-          <TouchableOpacity
-            style={styles.profileAvatarBtn}
-            onPress={() => router.push('/(student)/profile')}
-            activeOpacity={0.8}
-          >
-            <View style={styles.avatarPill}>
-              <Ionicons name="person" size={16} color="#AF2800" />
-            </View>
-          </TouchableOpacity>
-
-          <View style={{ flex: 1 }}>
-            <Text style={styles.headerTitle}>All-India Leaderboard</Text>
-            <Text style={styles.headerSubtitle}>Live competitive rankings across aspirants</Text>
-          </View>
+        <View style={{ marginBottom: 12 }}>
+          <Text style={styles.headerTitle}>All-India Leaderboard</Text>
+          <Text style={styles.headerSubtitle}>Live competitive rankings across aspirants</Text>
         </View>
 
         {/* Filter Pills */}

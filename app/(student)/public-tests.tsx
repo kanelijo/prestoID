@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Platform,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -176,9 +177,13 @@ export default function PublicTestsScreen() {
           activeOpacity={0.8}
         >
           <View style={styles.avatarPill}>
-            <Text style={styles.avatarLetter}>
-              {profile?.name ? profile.name.charAt(0).toUpperCase() : 'P'}
-            </Text>
+            {profile?.avatar_url ? (
+              <Image source={{ uri: profile.avatar_url }} style={styles.avatarImage} />
+            ) : (
+              <Text style={styles.avatarLetter}>
+                {profile?.name ? profile.name.charAt(0).toUpperCase() : 'P'}
+              </Text>
+            )}
           </View>
         </TouchableOpacity>
 
@@ -361,6 +366,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE2DB',
     justifyContent: 'center',
     alignItems: 'center',
+    overflow: 'hidden',
+  },
+  avatarImage: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
   },
   avatarLetter: {
     color: '#AF2800',
