@@ -1,6 +1,6 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library/legacy';
-import { Platform } from 'react-native';
+import { Platform, PermissionsAndroid } from 'react-native';
 import PrestostorageModule from '../modules/prestostorage/src/PrestostorageModule';
 
 export const MOCKS_ROOT = `${FileSystem.documentDirectory}Mocks/`;
@@ -13,8 +13,8 @@ export const DIRS = {
 };
 
 /**
- * Ensures the structured Mocks folder tree exists in sandbox and triggers creation in main internal storage.
- * Run once on app initialization.
+ * Ensures the structured Mocks folder tree exists in sandbox and triggers creation in main storage.
+ * Asks for Storage Permission if not already granted.
  */
 export async function initializeZenzaStorage() {
   try {
@@ -25,8 +25,30 @@ export async function initializeZenzaStorage() {
       }
     }
 
-    if (Platform.OS === 'android' && PrestostorageModule?.createMocksDirectory) {
-      await PrestostorageModule.createMocksDirectory();
+    if (Platform.OS === 'android') {
+      try {
+        // 1. Request permission if not already granted
+        const hasPerm = await PrestostorageModule.hasStoragePermission();
+        if (!hasPerm) {
+          await PrestostorageModule.requestStoragePermission();
+        }
+
+        // 2. Also request standard runtime permissions
+        try {
+          await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+            PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+          ]);
+        } catch (pErr) {
+          // ignore
+        }
+
+        // 3. Create the Mocks directory directly in main internal storage
+        const res = await PrestostorageModule.createMocksDirectory();
+        console.log('[Storage] Mocks folder initialized in main storage:', res);
+      } catch (nativeErr) {
+        console.log('[Storage] Native storage init notice:', nativeErr);
+      }
     }
   } catch (err) {
     console.log('[Storage] Init notice:', err);
