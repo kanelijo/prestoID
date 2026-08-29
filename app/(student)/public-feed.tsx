@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 
@@ -56,6 +57,7 @@ const INITIAL_FEED_ITEMS = [
 ];
 
 export default function PublicFeedScreen() {
+  const router = useRouter();
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [feedItems, setFeedItems] = useState<any[]>(INITIAL_FEED_ITEMS);
   const [isLoading, setIsLoading] = useState(false);
@@ -114,9 +116,21 @@ export default function PublicFeedScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>Exam Feed & Updates</Text>
-          <Text style={styles.headerSubtitle}>Recruitment notices, study strategies & state updates</Text>
+        <View style={styles.headerTopRow}>
+          <TouchableOpacity
+            style={styles.profileAvatarBtn}
+            onPress={() => router.push('/(student)/profile')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.avatarPill}>
+              <Ionicons name="person" size={16} color="#AF2800" />
+            </View>
+          </TouchableOpacity>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>Exam Feed & Updates</Text>
+            <Text style={styles.headerSubtitle}>Recruitment notices, study strategies & state updates</Text>
+          </View>
         </View>
 
         {/* Category Filter Pills */}
@@ -232,6 +246,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  profileAvatarBtn: {
+    marginRight: 12,
+  },
+  avatarPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFE2DB',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 18,

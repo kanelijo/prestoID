@@ -100,13 +100,17 @@ export default function PublicTestsScreen() {
 
         if (pubStudent) {
           setProfile(pubStudent);
+          if (pubStudent.target_exam) setSelectedExam(pubStudent.target_exam);
         } else {
           const { data: prof } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', user.id)
             .maybeSingle();
-          if (prof) setProfile(prof);
+          if (prof) {
+            setProfile(prof);
+            if (prof.target_exam) setSelectedExam(prof.target_exam);
+          }
         }
       }
 
@@ -168,7 +172,7 @@ export default function PublicTestsScreen() {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.profileAvatarBtn}
-          onPress={() => setProfileModalVisible(true)}
+          onPress={() => router.push('/(student)/profile')}
           activeOpacity={0.8}
         >
           <View style={styles.avatarPill}>

@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -28,6 +29,7 @@ const SAMPLE_LEADERBOARD = [
 ];
 
 export default function PublicLeaderboardScreen() {
+  const router = useRouter();
   const { user } = useAuthStore();
   const [selectedExam, setSelectedExam] = useState('ALL');
   const [leaderboardData, setLeaderboardData] = useState<any[]>(SAMPLE_LEADERBOARD);
@@ -110,9 +112,21 @@ export default function PublicLeaderboardScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.headerTitle}>All-India Leaderboard</Text>
-          <Text style={styles.headerSubtitle}>Live competitive rankings across aspirants</Text>
+        <View style={styles.headerTopRow}>
+          <TouchableOpacity
+            style={styles.profileAvatarBtn}
+            onPress={() => router.push('/(student)/profile')}
+            activeOpacity={0.8}
+          >
+            <View style={styles.avatarPill}>
+              <Ionicons name="person" size={16} color="#AF2800" />
+            </View>
+          </TouchableOpacity>
+
+          <View style={{ flex: 1 }}>
+            <Text style={styles.headerTitle}>All-India Leaderboard</Text>
+            <Text style={styles.headerSubtitle}>Live competitive rankings across aspirants</Text>
+          </View>
         </View>
 
         {/* Filter Pills */}
@@ -249,6 +263,22 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  profileAvatarBtn: {
+    marginRight: 12,
+  },
+  avatarPill: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFE2DB',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 18,
