@@ -298,15 +298,15 @@ export default function StudentLayout() {
           }}
         />
 
-        {/* Public / External Student Tabs */}
+        {/* Public / External Student Tabs (Exact 3 tabs: Test, Leaderboard, Feed) */}
         <Tabs.Screen
           name="public-tests"
           options={{
             href: isPublicEnv ? undefined : null,
             tabBarIcon: ({ focused }) => (
               <TabIcon
-                name={focused ? 'library' : 'library-outline'}
-                label="Open Tests"
+                name={focused ? 'document-text' : 'document-text-outline'}
+                label="Test"
                 focused={focused}
               />
             ),
@@ -318,21 +318,8 @@ export default function StudentLayout() {
             href: isPublicEnv ? undefined : null,
             tabBarIcon: ({ focused }) => (
               <TabIcon
-                name={focused ? 'trophy' : 'trophy-outline'}
-                label="Rankings"
-                focused={focused}
-              />
-            ),
-          }}
-        />
-        <Tabs.Screen
-          name="target-exam-info"
-          options={{
-            href: isPublicEnv ? undefined : null,
-            tabBarIcon: ({ focused }) => (
-              <TabIcon
-                name={focused ? 'compass' : 'compass-outline'}
-                label="Target Hub"
+                name={focused ? 'podium' : 'podium-outline'}
+                label="Leaderboard"
                 focused={focused}
               />
             ),
@@ -351,12 +338,19 @@ export default function StudentLayout() {
             ),
           }}
         />
+        <Tabs.Screen
+          name="target-exam-info"
+          options={{
+            href: null,
+            tabBarStyle: { display: 'none' },
+          }}
+        />
 
         {/* Shared Profile Tab */}
         <Tabs.Screen
           name="profile"
           options={{
-            href: undefined,
+            href: isPublicEnv ? null : undefined,
             tabBarIcon: ({ focused }) => (
               <TabIcon
                 name={focused ? 'person' : 'person-outline'}

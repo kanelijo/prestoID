@@ -35,12 +35,12 @@ export default function GoogleAuthCallbackScreen() {
             if (profile && profile.role) {
               setRole(profile.role);
               if (profile.role === 'admin') {
-                router.replace('/(admin)/students');
+                router.replace('/(admin)');
               } else {
                 router.replace('/(student)/id-card');
               }
             } else {
-              router.replace('/(auth)/role-select');
+              router.replace('/onboarding');
             }
           }
         } catch (err) {
