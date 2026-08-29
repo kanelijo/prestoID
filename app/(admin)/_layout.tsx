@@ -1,13 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Tabs, Redirect } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useState, useEffect } from 'react';
+import { Redirect } from 'expo-router';
+import { View, Text, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 import { supabase } from '@/lib/supabase';
+import { CustomAlert } from '@/components/CustomAlert';
+import { MaterialTopTabs } from '@/components/MaterialTopTabs';
+import { AdminWhatsAppBottomTabBar } from '@/components/AdminWhatsAppBottomTabBar';
 
 function TrialBanner() {
   const { user } = useAuthStore();
@@ -51,50 +53,18 @@ function TrialBanner() {
         {isExpired ? "Trial Expired. Paid features locked." : `Free Trial: ${daysLeft} days left`}
       </Text>
       {!isExpired && (
-        <TouchableOpacity style={styles.upgradeBtn}>
-          <Text style={styles.upgradeBtnText}>Upgrade</Text>
-        </TouchableOpacity>
+        <Ionicons name="sparkles" size={14} color="#FFF" style={{ marginLeft: 6 }} />
       )}
     </View>
   );
 }
 
-type TabIconProps = {
-  name: keyof typeof Ionicons.glyphMap;
-  label: string;
-  focused: boolean;
-};
-
-function TabIcon({ name, label, focused }: TabIconProps) {
-  return (
-    <View style={styles.tabItem}>
-      <View style={[styles.iconWrapper, focused && styles.iconWrapperActive]}>
-        <Ionicons
-          name={name}
-          size={focused ? 21 : 22}
-          color={focused ? '#AF2800' : '#374151'}
-        />
-      </View>
-      <Text
-        numberOfLines={1}
-        style={[styles.tabLabel, focused && styles.tabLabelActive]}
-      >
-        {label}
-      </Text>
-    </View>
-  );
-}
-
-import { CustomAlert } from '@/components/CustomAlert';
-
 export default function AdminLayout() {
-  const insets = useSafeAreaInsets();
   const { user, businessId, role } = useAuthStore();
 
   if (role && role !== 'admin') {
     return <Redirect href="/(student)/id-card" />;
   }
-  const { adminUnreadCount } = useNotificationStore();
 
   useEffect(() => {
     if (user?.id && businessId) {
@@ -135,184 +105,64 @@ export default function AdminLayout() {
     <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
       {/* <TrialBanner /> */}
       <OfflineBanner />
-      <Tabs
-        backBehavior="initialRoute"
+      <MaterialTopTabs
+        tabBarPosition="bottom"
+        tabBar={(props) => <AdminWhatsAppBottomTabBar {...props} />}
         screenOptions={{
           lazy: false,
-          headerShown: false,
-          tabBarButton: (props) => (
-            <TouchableOpacity
-              {...props}
-              activeOpacity={0.7}
-            />
-          ),
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              backgroundColor: '#FFFFFF',
-              borderTopColor: '#E5E7EB',
-              borderTopWidth: 1,
-              elevation: 0,
-              shadowOpacity: 0,
-              height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
-              paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
-            },
-          ],
-          tabBarShowLabel: false,
+          swipeEnabled: true,
+          animationEnabled: true,
         }}
-    >
-      <Tabs.Screen
-        name="students"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'people' : 'people-outline'}
-              label="Students"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="community"
-        options={{
-          href: null,
-          tabBarStyle: { display: 'none' },
-        }}
-      />
-      <Tabs.Screen
-        name="test"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'document-text' : 'document-text-outline'}
-              label="Test"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="leaderboard"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'podium' : 'podium-outline'}
-              label="Leaderboard"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="notifications"
-        options={{
-          tabBarBadge: adminUnreadCount > 0 ? adminUnreadCount : undefined,
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'notifications' : 'notifications-outline'}
-              label="Alerts"
-              focused={focused}
-            />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          tabBarIcon: ({ focused }) => (
-            <TabIcon
-              name={focused ? 'person' : 'person-outline'}
-              label="Profile"
-              focused={focused}
-            />
-          ),
-          }}
+      >
+        <MaterialTopTabs.Screen
+          name="students"
+          options={{ title: 'Students' }}
         />
-      <Tabs.Screen name="index" options={{ href: null }} />
-      <Tabs.Screen name="test/create-ai" options={{ href: null }} />
-      <Tabs.Screen name="test/create-manual" options={{ href: null }} />
-      <Tabs.Screen name="test/target-exam-admin" options={{ href: null }} />
-      <Tabs.Screen name="test/banks" options={{ href: null }} />
-      <Tabs.Screen name="test/review/[id]" options={{ href: null }} />
-      <Tabs.Screen name="test/live-dashboard/[id]" options={{ href: null }} />
-      <Tabs.Screen name="test/zenza-review" options={{ href: null }} />
-      <Tabs.Screen name="test/analytics/[id]" options={{ href: null }} />
-      <Tabs.Screen name="notebank" options={{ href: null }} />
-      <Tabs.Screen name="pdf-viewer" options={{ href: null }} />
-      <Tabs.Screen name="lab" options={{ href: null }} />
-      <Tabs.Screen name="coaching-profile" options={{ href: null }} />
-      </Tabs>
+        <MaterialTopTabs.Screen
+          name="test"
+          options={{ title: 'Test' }}
+        />
+        <MaterialTopTabs.Screen
+          name="leaderboard"
+          options={{ title: 'Leaderboard' }}
+        />
+        <MaterialTopTabs.Screen
+          name="notifications"
+          options={{ title: 'Alerts' }}
+        />
+        <MaterialTopTabs.Screen
+          name="profile"
+          options={{ title: 'Profile' }}
+        />
+        <MaterialTopTabs.Screen name="index" options={{ swipeEnabled: false }} />
+        <MaterialTopTabs.Screen name="community" options={{ swipeEnabled: false }} />
+        <MaterialTopTabs.Screen name="notebank" options={{ swipeEnabled: false }} />
+        <MaterialTopTabs.Screen name="pdf-viewer" options={{ swipeEnabled: false }} />
+        <MaterialTopTabs.Screen name="lab" options={{ swipeEnabled: false }} />
+        <MaterialTopTabs.Screen name="coaching-profile" options={{ swipeEnabled: false }} />
+      </MaterialTopTabs>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: '#FFFFFF',
-    borderTopColor: '#E5E7EB',
-    borderTopWidth: 1,
-    paddingTop: 6,
-    elevation: 0,
-    shadowOpacity: 0,
-  },
-  tabItem: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 68,
-  },
-  iconWrapper: {
-    width: 52,
-    height: 28,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'transparent',
-  },
-  iconWrapperActive: {
-    backgroundColor: '#FFE2DB',
-  },
-  tabLabel: {
-    fontSize: 11,
-    color: '#374151',
-    fontWeight: '600',
-    textAlign: 'center',
-    marginTop: 3,
-    letterSpacing: 0.1,
-  },
-  tabLabelActive: {
-    color: '#111827',
-    fontWeight: '800',
-  },
   trialBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    gap: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
   },
   trialActive: {
-    backgroundColor: Colors.status.warning,
+    backgroundColor: Colors.accent.primary,
   },
   trialExpired: {
-    backgroundColor: Colors.status.danger,
+    backgroundColor: '#EF4444',
   },
   trialText: {
     color: '#FFF',
     fontSize: 12,
     fontWeight: '700',
-    flex: 1,
-  },
-  upgradeBtn: {
-    backgroundColor: '#FFF',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  upgradeBtnText: {
-    color: Colors.status.warning,
-    fontSize: 10,
-    fontWeight: '800',
+    marginLeft: 6,
   },
 });
