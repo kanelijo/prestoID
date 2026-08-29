@@ -224,6 +224,7 @@ export default function AdminLayout() {
           ),
           }}
         />
+      <Tabs.Screen name="index" options={{ href: null }} />
       <Tabs.Screen name="test/create-ai" options={{ href: null }} />
       <Tabs.Screen name="test/create-manual" options={{ href: null }} />
       <Tabs.Screen name="test/target-exam-admin" options={{ href: null }} />

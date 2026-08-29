@@ -363,6 +363,7 @@ export default function StudentLayout() {
         />
 
         {/* Sub-screens with hidden tab bar */}
+        <Tabs.Screen name="index" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/engine/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/result/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/target-exam-student" options={{ href: null, tabBarStyle: { display: 'none' } }} />

@@ -223,9 +223,9 @@ export default function LoginScreen() {
 
       if (userRole === 'admin') {
         if (!userBizId) {
-          router.replace('/create-institute' as any);
+          router.replace('/(auth)/create-institute' as any);
         } else {
-          router.replace('/(admin)' as any);
+          router.replace('/(admin)/students' as any);
         }
       } else {
         const { data: linkedStudent } = await supabase
@@ -235,7 +235,7 @@ export default function LoginScreen() {
           .maybeSingle();
 
         if (linkedStudent) {
-          router.replace('/(student)' as any);
+          router.replace('/(student)/id-card' as any);
         } else {
           let phoneToMatch = phoneIdentifier || user.phone || user.user_metadata?.phone;
           if (phoneToMatch) {
@@ -258,16 +258,16 @@ export default function LoginScreen() {
                 .update({ business_id: matchedStudent.business_id })
                 .eq('id', user.id);
 
-              router.replace('/(student)' as any);
+              router.replace('/(student)/id-card' as any);
               return;
             }
           }
-          router.replace('/claim-profile' as any);
+          router.replace('/(auth)/claim-profile' as any);
         }
       }
     } catch (e: any) {
       console.error('Auth processing error:', e);
-      router.replace('/claim-profile' as any);
+      router.replace('/(auth)/claim-profile' as any);
     }
   };
 
