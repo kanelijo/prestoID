@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Tabs, Redirect } from 'expo-router';
+import { Tabs, Redirect, useRouter, usePathname } from 'expo-router';
 import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -8,6 +8,17 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 import { supabase } from '@/lib/supabase';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
+
+const ADMIN_MAIN_TABS = [
+  '/(admin)/students',
+  '/(admin)/test',
+  '/(admin)/leaderboard',
+  '/(admin)/notifications',
+  '/(admin)/profile',
+];
 
 function TrialBanner() {
   const { user } = useAuthStore();
@@ -90,6 +101,35 @@ import { CustomAlert } from '@/components/CustomAlert';
 export default function AdminLayout() {
   const insets = useSafeAreaInsets();
   const { user, businessId, role } = useAuthStore();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const handleSwipeTab = (direction: 'next' | 'prev') => {
+    const currentIndex = ADMIN_MAIN_TABS.findIndex(tab => pathname?.startsWith(tab));
+    if (currentIndex === -1) return;
+
+    if (direction === 'next' && currentIndex < ADMIN_MAIN_TABS.length - 1) {
+      Haptics.selectionAsync();
+      router.replace(ADMIN_MAIN_TABS[currentIndex + 1] as any);
+    } else if (direction === 'prev' && currentIndex > 0) {
+      Haptics.selectionAsync();
+      router.replace(ADMIN_MAIN_TABS[currentIndex - 1] as any);
+    }
+  };
+
+  const panGesture = Gesture.Pan()
+    .activeOffsetX([-35, 35])
+    .failOffsetY([-25, 25])
+    .onEnd((e) => {
+      'worklet';
+      if (Math.abs(e.translationX) > 60 || Math.abs(e.velocityX) > 500) {
+        if (e.translationX < 0) {
+          runOnJS(handleSwipeTab)('next');
+        } else {
+          runOnJS(handleSwipeTab)('prev');
+        }
+      }
+    });
 
   if (role && role !== 'admin') {
     return <Redirect href="/(student)/id-card" />;
@@ -132,14 +172,17 @@ export default function AdminLayout() {
   }, [user, businessId]);
 
   return (
-    <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
-      {/* <TrialBanner /> */}
-      <OfflineBanner />
+    <GestureDetector gesture={panGesture}>
+      <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
+        {/* <TrialBanner /> */}
+        <OfflineBanner />
       <Tabs
         backBehavior="initialRoute"
         screenOptions={{
           lazy: false,
           headerShown: false,
+          tabBarPressColor: 'transparent',
+          tabBarPressOpacity: 0.7,
           tabBarStyle: [
             styles.tabBar,
             {
@@ -148,7 +191,7 @@ export default function AdminLayout() {
               borderTopWidth: 1,
               elevation: 0,
               shadowOpacity: 0,
-              height: Platform.OS === 'android' ? 62 : 62 + insets.bottom,
+              height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
               paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
             },
           ],
@@ -238,6 +281,7 @@ export default function AdminLayout() {
       <Tabs.Screen name="coaching-profile" options={{ href: null }} />
       </Tabs>
     </View>
+    </GestureDetector>
   );
 }
 

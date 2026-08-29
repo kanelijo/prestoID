@@ -207,6 +207,8 @@ export default function StudentLayout() {
         screenOptions={{
           lazy: false,
           headerShown: false,
+          tabBarPressColor: 'transparent',
+          tabBarPressOpacity: 0.7,
           tabBarStyle: [
             styles.tabBar,
             {
@@ -215,7 +217,7 @@ export default function StudentLayout() {
               borderTopWidth: 1,
               elevation: 0,
               shadowOpacity: 0,
-              height: Platform.OS === 'android' ? 62 : 62 + insets.bottom,
+              height: Platform.OS === 'android' ? 64 : 64 + insets.bottom,
               paddingBottom: Platform.OS === 'android' ? 8 : (insets.bottom > 0 ? insets.bottom - 4 : 8),
             },
           ],
