@@ -77,6 +77,7 @@ Welcome to the central nervous system of **MockS** (powered by **Minii AI**). Ev
 - [[Table_conversations_and_messages]] — `conversations`, `conversation_participants`, `messages`.
 - [[Table_community_posts]] — `posts`, `comments`, `likes`, `attachments`.
 - [[Security_RLS_Matrix]] — Row Level Security policies, admin grants, student boundaries.
+- [[Firestore_and_BigQuery_Architecture]] — Tri-Database strategy, real-time proctoring telemetry, BigQuery streaming.
 
 ---
 
