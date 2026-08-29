@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Tabs, Redirect, useRouter, usePathname } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, PanResponder } from 'react-native';
+import { useState, useEffect, useCallback } from 'react';
+import { Tabs, Redirect } from 'expo-router';
+import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
@@ -8,15 +8,6 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 import { supabase } from '@/lib/supabase';
-import * as Haptics from 'expo-haptics';
-
-const ADMIN_MAIN_TABS = [
-  '/(admin)/students',
-  '/(admin)/test',
-  '/(admin)/leaderboard',
-  '/(admin)/notifications',
-  '/(admin)/profile',
-];
 
 function TrialBanner() {
   const { user } = useAuthStore();
@@ -99,61 +90,6 @@ import { CustomAlert } from '@/components/CustomAlert';
 export default function AdminLayout() {
   const insets = useSafeAreaInsets();
   const { user, businessId, role } = useAuthStore();
-  const router = useRouter();
-  const pathname = usePathname();
-
-  const handleSwipeTab = useCallback((direction: 'next' | 'prev') => {
-    const cleanPath = (pathname || '').toLowerCase();
-    // Don't swipe if user is editing or in creation flow
-    if (
-      cleanPath.includes('create') ||
-      cleanPath.includes('review') ||
-      cleanPath.includes('analytics') ||
-      cleanPath.includes('live-dashboard') ||
-      cleanPath.includes('banks') ||
-      cleanPath.includes('add')
-    ) {
-      return;
-    }
-
-    let currentIndex = -1;
-    if (cleanPath.includes('students')) currentIndex = 0;
-    else if (cleanPath.includes('test')) currentIndex = 1;
-    else if (cleanPath.includes('leaderboard')) currentIndex = 2;
-    else if (cleanPath.includes('notifications')) currentIndex = 3;
-    else if (cleanPath.includes('profile')) currentIndex = 4;
-
-    if (currentIndex === -1) return;
-
-    if (direction === 'next' && currentIndex < ADMIN_MAIN_TABS.length - 1) {
-      Haptics.selectionAsync();
-      router.replace(ADMIN_MAIN_TABS[currentIndex + 1] as any);
-    } else if (direction === 'prev' && currentIndex > 0) {
-      Haptics.selectionAsync();
-      router.replace(ADMIN_MAIN_TABS[currentIndex - 1] as any);
-    }
-  }, [pathname, router]);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, gestureState) => {
-        // Only trigger on clear horizontal swipe (dx dominates dy)
-        return (
-          Math.abs(gestureState.dx) > 30 &&
-          Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.4
-        );
-      },
-      onPanResponderRelease: (_, gestureState) => {
-        if (Math.abs(gestureState.dx) > 40 || Math.abs(gestureState.vx) > 0.3) {
-          if (gestureState.dx < 0) {
-            handleSwipeTab('next');
-          } else {
-            handleSwipeTab('prev');
-          }
-        }
-      },
-    })
-  ).current;
 
   if (role && role !== 'admin') {
     return <Redirect href="/(student)/id-card" />;
@@ -196,11 +132,7 @@ export default function AdminLayout() {
   }, [user, businessId]);
 
   return (
-    <View
-      style={{ flex: 1 }}
-      key={businessId || 'admin-root'}
-      {...panResponder.panHandlers}
-    >
+    <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
       {/* <TrialBanner /> */}
       <OfflineBanner />
       <Tabs
