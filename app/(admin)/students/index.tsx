@@ -49,7 +49,15 @@ export default function StudentsListScreen() {
   const [viewMode, setViewMode] = useState<'students' | 'fees'>('students');
   const [search, setSearch] = useState('');
   const [selectedBatch, setSelectedBatch] = useState('All');
-  const [batches, setBatches] = useState<string[]>(['All']);
+  const [batches, setBatches] = useState<string[]>([
+    'All',
+    'MPPSC',
+    'SSC',
+    'VYAPAM',
+    'Railway',
+    'Banking',
+    'UPSC',
+  ]);
   const [feeFilter, setFeeFilter] = useState<'All' | 'Paid' | 'Unpaid' | 'Overdue'>('All');
   const prefetch = usePrefetchStore.getState();
   const [students, setStudents] = useState<any[]>(prefetch.adminStudents || []);
@@ -197,7 +205,12 @@ export default function StudentsListScreen() {
       setStats(newStats);
       AsyncStorage.setItem('@admin_cached_stats', JSON.stringify(newStats)).catch(() => {});
 
-      // 4. Fetch batches list — scoped to this business only
+      // 4. Fetch batches list — extract from students roster + batches table
+      const batchSet = new Set<string>();
+      (list || []).forEach((s: any) => {
+        if (s.batch_name && s.batch_name.trim()) batchSet.add(s.batch_name.trim());
+      });
+
       if (businessId) {
         const { data: batchesList, error: batchesError } = await supabase
           .from('batches')
@@ -206,14 +219,20 @@ export default function StudentsListScreen() {
           .order('name');
         
         if (!batchesError && batchesList) {
-          const names = ['All', ...batchesList.map(b => b.name)];
-          setBatches(names);
-        } else {
-          setBatches(['All']);
+          batchesList.forEach((b: any) => {
+            if (b.name && b.name.trim()) batchSet.add(b.name.trim());
+          });
         }
-      } else {
-        setBatches(['All']);
       }
+
+      let finalBatches = ['All'];
+      if (batchSet.size > 0) {
+        finalBatches = ['All', ...Array.from(batchSet)];
+      } else {
+        finalBatches = ['All', 'MPPSC', 'SSC', 'VYAPAM', 'Railway', 'Banking', 'UPSC'];
+      }
+      setBatches(finalBatches);
+      AsyncStorage.setItem('@admin_cached_batches', JSON.stringify(finalBatches)).catch(() => {});
     } catch (err) {
       console.warn('Failed to load admin students roster:', err);
     } finally {
@@ -232,6 +251,7 @@ export default function StudentsListScreen() {
       try {
         const cachedRaw = await AsyncStorage.getItem('@admin_cached_students');
         const statsRaw = await AsyncStorage.getItem('@admin_cached_stats');
+        const batchesRaw = await AsyncStorage.getItem('@admin_cached_batches');
         if (cachedRaw) {
           const list = JSON.parse(cachedRaw);
           if (Array.isArray(list) && list.length > 0) {
@@ -241,6 +261,12 @@ export default function StudentsListScreen() {
         }
         if (statsRaw) {
           setStats(JSON.parse(statsRaw));
+        }
+        if (batchesRaw) {
+          const bList = JSON.parse(batchesRaw);
+          if (Array.isArray(bList) && bList.length > 1) {
+            setBatches(bList);
+          }
         }
       } catch (e) {
         // ignore
@@ -1634,7 +1660,7 @@ const styles = StyleSheet.create({
   // FAB Speed Dial
   fabContainer: {
     position: 'absolute',
-    bottom: 90,
+    bottom: 74,
     right: 20,
     alignItems: 'flex-end',
     ...Shadows.lg,
