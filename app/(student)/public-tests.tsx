@@ -5,10 +5,8 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  FlatList,
   ActivityIndicator,
   RefreshControl,
-  ImageBackground,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,51 +17,62 @@ import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import PublicHeaderProfileModal from '@/components/PublicHeaderProfileModal';
-
 import { cacheTestForOffline } from '@/lib/offlineTestStorage';
 
-const CATEGORIES = [
-  { id: 'Govt', name: 'Government Recruitment', icon: 'ribbon-outline' },
-  { id: 'Eng', name: 'Engineering Entrance', icon: 'hardware-chip-outline' },
-  { id: 'Med', name: 'Medical Entrance', icon: 'pulse-outline' },
-  { id: 'Central', name: 'Central Entrance Exams', icon: 'school-outline' },
+const EXAM_CHIPS = [
+  'ALL',
+  'MPPSC',
+  'MP Police (SI/Constable)',
+  'SSC CGL',
+  'Railway',
+  'Banking',
+  'UPSC',
 ];
 
-const EXAM_CHIPS: Record<string, string[]> = {
-  Govt: ['ALL', 'MP PSC', 'MP Police (SI/Constable)', 'MP Patwari', 'MP TET', 'UPSC Civil Services', 'SSC CGL / CHSL', 'IBPS PO / Clerk', 'RRB NTPC / ALP'],
-  Eng: ['ALL', 'JEE Main', 'JEE Advanced', 'GATE', 'BITSAT', 'VITEEE'],
-  Med: ['ALL', 'NEET UG', 'NEET PG', 'INI-CET', 'FMGE'],
-  Central: ['ALL', 'CUET (UG/PG)', 'CAT', 'CLAT', 'NIFT Entrance', 'UGC NET'],
-};
-
-const SUBJECT_WALLPAPERS = [
+const INITIAL_PUBLIC_TESTS = [
   {
-    title: 'Quantitative Aptitude',
-    sub: 'For SSC, IBPS, RRB',
-    tests: '32 Speed Drills',
-    colors: Gradients.primary,
-    formulaOverlay: 'a²+b²=c² • log_b(x) • dy/dx • lim x→0 • πr² • √x',
+    id: 'pub-mock-1',
+    title: 'MPPSC Prelims Paper 1 — Full Length Mock 2026',
+    description: 'Comprehensive 100 question mock test covering MP GK, Indian Polity, History, and Geography.',
+    exam_category: 'MPPSC',
+    subject_name: 'General Studies',
+    duration_minutes: 120,
+    total_marks: 200,
+    questions_count: 100,
+    difficulty_level: 'Medium',
   },
   {
-    title: 'MP State GK & Current Affairs',
-    sub: 'For MP PSC, MP Police',
-    tests: '24 Practice Tests',
-    colors: Gradients.primary,
-    formulaOverlay: '∫(x²+y²)dx • ∑(a_n) • E=mc² • λ=h/p • sin²θ+cos²θ=1',
+    id: 'pub-mock-2',
+    title: 'MP Police SI & Constable — Reasoning & Math Speed Drill',
+    description: 'High-yield numerical ability, non-verbal reasoning, and state aptitude practice.',
+    exam_category: 'MP Police (SI/Constable)',
+    subject_name: 'Aptitude & Reasoning',
+    duration_minutes: 45,
+    total_marks: 50,
+    questions_count: 50,
+    difficulty_level: 'Easy',
   },
   {
-    title: 'Physics & Chemistry',
-    sub: 'For JEE & NEET',
-    tests: '18 Topic Tests',
-    colors: Gradients.primary,
-    formulaOverlay: 'F=ma • PV=nRT • E=mc² • ΔG=ΔH-TΔS • λ=h/p',
+    id: 'pub-mock-3',
+    title: 'SSC CGL Tier-1 — General Awareness Master Drill',
+    description: 'Curated MCQs on Indian Economy, History, Science & Current Affairs.',
+    exam_category: 'SSC CGL',
+    subject_name: 'General Awareness',
+    duration_minutes: 30,
+    total_marks: 50,
+    questions_count: 25,
+    difficulty_level: 'Hard',
   },
   {
-    title: 'Logical Reasoning',
-    sub: 'For CLAT, CAT, CUET',
-    tests: '15 Practice Drills',
-    colors: Gradients.primary,
-    formulaOverlay: 'P(A|B) • A∩B=∅ • x≡y(mod n) • ∀x∈R • p⇒q',
+    id: 'pub-mock-4',
+    title: 'Railway NTPC & Group D — General Science Practice',
+    description: 'High-frequency Physics, Chemistry, and Biology questions with bilingual explanations.',
+    exam_category: 'Railway',
+    subject_name: 'General Science',
+    duration_minutes: 40,
+    total_marks: 60,
+    questions_count: 40,
+    difficulty_level: 'Medium',
   },
 ];
 
@@ -73,44 +82,67 @@ export default function PublicTestsScreen() {
   const [profile, setProfile] = useState<any>(null);
   const [profileModalVisible, setProfileModalVisible] = useState(false);
 
-  const [selectedCategory, setSelectedCategory] = useState('Govt');
   const [selectedExam, setSelectedExam] = useState('ALL');
-  const [selectedSubject, setSelectedSubject] = useState<string | null>(null);
-  const [testsList, setTestsList] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [testsList, setTestsList] = useState<any[]>(INITIAL_PUBLIC_TESTS);
+  const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
       setIsLoading(true);
       if (user?.id) {
-        const { data: prof } = await supabase
-          .from('profiles')
+        // Try public_students first, fallback to profiles
+        const { data: pubStudent } = await supabase
+          .from('public_students')
           .select('*')
-          .eq('id', user.id)
-          .single();
-        if (prof) setProfile(prof);
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        if (pubStudent) {
+          setProfile(pubStudent);
+        } else {
+          const { data: prof } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', user.id)
+            .maybeSingle();
+          if (prof) setProfile(prof);
+        }
       }
 
-      let query = supabase.from('tests').select('*').order('created_at', { ascending: false });
+      // Try fetching from public_tests table first
+      let { data: pubTests, error: pubErr } = await supabase
+        .from('public_tests')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false });
 
-      if (selectedExam !== 'ALL') {
-        query = query.eq('exam_category', selectedExam);
+      if (pubErr || !pubTests || pubTests.length === 0) {
+        // Fallback to tests table with is_public = true or null business_id
+        const { data: fallbackTests } = await supabase
+          .from('tests')
+          .select('*')
+          .or('is_public.eq.true,business_id.is.null')
+          .order('created_at', { ascending: false });
+
+        if (fallbackTests && fallbackTests.length > 0) {
+          pubTests = fallbackTests;
+        }
       }
 
-      if (selectedSubject) {
-        query = query.eq('subject_name', selectedSubject);
+      if (pubTests && pubTests.length > 0) {
+        setTestsList(pubTests);
+      } else {
+        setTestsList(INITIAL_PUBLIC_TESTS);
       }
-
-      const { data: testsData } = await query;
-      setTestsList(testsData || []);
     } catch (e) {
-      console.warn('Failed to load public tests', e);
+      console.log('[PublicTests] Using local mock fallback:', e);
+      setTestsList(INITIAL_PUBLIC_TESTS);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id, selectedExam, selectedSubject]);
+  }, [user?.id]);
 
   useEffect(() => {
     loadData();
@@ -121,43 +153,9 @@ export default function PublicTestsScreen() {
     router.push({ pathname: '/(student)/test/engine/[id]', params: { id: item.id } });
   };
 
-  const renderTestCard = ({ item }: { item: any }) => (
-    <TouchableOpacity
-      style={styles.testCard}
-      activeOpacity={0.9}
-      onPress={() => handleStartTest(item)}
-    >
-      <View style={styles.testHeaderRow}>
-        <View style={styles.examTag}>
-          <Text style={styles.examTagText}>{item.exam_category || 'General Practice'}</Text>
-        </View>
-        <Text style={styles.testMarks}>
-          ⏱️ {item.time_limit_mins || 60}m • 🎯 {item.total_marks || 100} Marks
-        </Text>
-      </View>
-
-      <Text style={styles.testTitle}>{item.title}</Text>
-      <Text style={styles.testMeta}>
-        📚 {item.subject_name || 'General Studies'} • ❓ {item.questions_count || 100} Questions
-      </Text>
-
-      <TouchableOpacity
-        style={styles.startBtn}
-        onPress={() => handleStartTest(item)}
-        activeOpacity={0.85}
-      >
-        <LinearGradient
-          colors={Gradients.primary as [string, string]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.startGradient}
-        >
-          <Ionicons name="play" size={16} color={Colors.text.inverse} />
-          <Text style={styles.startBtnText}>Attempt Open Test</Text>
-        </LinearGradient>
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
+  const filteredTests = selectedExam === 'ALL'
+    ? testsList
+    : testsList.filter((t) => t.exam_category?.toLowerCase().includes(selectedExam.toLowerCase()));
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -173,132 +171,163 @@ export default function PublicTestsScreen() {
           onPress={() => setProfileModalVisible(true)}
           activeOpacity={0.8}
         >
-          <LinearGradient colors={Gradients.primary as [string, string]} style={styles.avatarGradient}>
+          <View style={styles.avatarPill}>
             <Text style={styles.avatarLetter}>
-              {profile?.full_name ? profile.full_name.charAt(0).toUpperCase() : 'S'}
+              {profile?.name ? profile.name.charAt(0).toUpperCase() : 'P'}
             </Text>
-          </LinearGradient>
-          <View style={styles.onlineBadge} />
+          </View>
         </TouchableOpacity>
 
         <View style={styles.headerTitleWrap}>
-          <Text style={styles.headerTitle}>Open Practice Hub</Text>
-          <Text style={styles.headerSubtitle}>
-            Target: <Text style={{ color: Colors.accent.primary, fontWeight: 'bold' }}>{profile?.target_exam || 'MPPSC'}</Text>
-          </Text>
+          <Text style={styles.headerTitle}>Public Test Hub</Text>
+          <Text style={styles.headerSubtitle}>All-India Open Mock Tests & Drills</Text>
         </View>
 
-        <TouchableOpacity style={styles.iconBtn} onPress={() => setProfileModalVisible(true)}>
-          <Ionicons name="options-outline" size={22} color={Colors.accent.primary} />
-        </TouchableOpacity>
+        <View style={styles.badgeOpenAccess}>
+          <Ionicons name="sparkles" size={13} color="#AF2800" />
+          <Text style={styles.badgeOpenAccessText}>Open Access</Text>
+        </View>
       </View>
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent.primary} />}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={Colors.accent.primary}
+          />
+        }
+        contentContainerStyle={styles.scrollBody}
       >
-        {/* Category Selector Tabs */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.catScroll}>
-          {CATEGORIES.map((cat) => (
-            <TouchableOpacity
-              key={cat.id}
-              style={[styles.catTab, selectedCategory === cat.id && styles.catTabActive]}
-              onPress={() => {
-                setSelectedCategory(cat.id);
-                setSelectedExam('ALL');
-              }}
-            >
-              <Ionicons
-                name={cat.icon as any}
-                size={16}
-                color={selectedCategory === cat.id ? Colors.text.inverse : Colors.text.tertiary}
-              />
-              <Text style={[styles.catTabText, selectedCategory === cat.id && styles.catTabTextActive]}>
-                {cat.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+        {/* Featured Live Test Banner */}
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={() => handleStartTest(INITIAL_PUBLIC_TESTS[0])}
+          style={styles.featuredCard}
+        >
+          <LinearGradient
+            colors={['#AF2800', '#D9480F']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.featuredGradient}
+          >
+            <View style={styles.featuredBadgeRow}>
+              <View style={styles.liveIndicatorPill}>
+                <View style={styles.liveDot} />
+                <Text style={styles.liveText}>FEATURED MOCK</Text>
+              </View>
+              <Text style={styles.featuredMarks}>🎯 200 Marks • 120 Mins</Text>
+            </View>
 
-        {/* Sub-exam Chips */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.examScroll}>
-          {(EXAM_CHIPS[selectedCategory] || ['ALL']).map((exam) => (
-            <TouchableOpacity
-              key={exam}
-              style={[styles.examChip, selectedExam === exam && styles.examChipActive]}
-              onPress={() => setSelectedExam(exam)}
-            >
-              <Text style={[styles.examChipText, selectedExam === exam && styles.examChipTextActive]}>
-                {exam}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+            <Text style={styles.featuredTitle}>MPPSC Prelims Paper 1 — Full Length Mock 2026</Text>
+            <Text style={styles.featuredSubtitle}>
+              Bilingual (Hindi/English) • Complete MP GK, Polity & History Syllabus
+            </Text>
 
-        {/* Subject Formula Wallpaper Cards */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.wallpaperScroll}>
-          {SUBJECT_WALLPAPERS.map((sub, index) => {
-            const isSelected = selectedSubject === sub.title;
-            return (
-              <TouchableOpacity
-                key={index}
-                activeOpacity={0.95}
-                style={[styles.wallpaperCardContainer, isSelected && { borderWidth: 2, borderColor: Colors.accent.primary }]}
-                onPress={() => setSelectedSubject(isSelected ? null : sub.title)}
-              >
-                <LinearGradient colors={sub.colors as [string, string]} style={styles.wallpaperCard}>
-                  {/* Mathematical Formula Watermark Overlay */}
-                  <Text style={styles.wallpaperFormulaOverlay} numberOfLines={3}>
-                    {sub.formulaOverlay}
+            <View style={styles.featuredBtnRow}>
+              <View style={styles.featuredAttemptBtn}>
+                <Ionicons name="play" size={16} color="#AF2800" style={{ marginRight: 6 }} />
+                <Text style={styles.featuredAttemptText}>Attempt Live Mock</Text>
+              </View>
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+
+        {/* Exam Category Filter Chips */}
+        <View style={styles.chipSection}>
+          <Text style={styles.sectionHeading}>TARGET EXAM</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chipScroll}
+          >
+            {EXAM_CHIPS.map((chip) => {
+              const isSelected = selectedExam === chip;
+              return (
+                <TouchableOpacity
+                  key={chip}
+                  onPress={() => setSelectedExam(chip)}
+                  activeOpacity={0.7}
+                  style={[styles.chip, isSelected && styles.chipActive]}
+                >
+                  <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                    {chip}
                   </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
 
-                  <View style={styles.wallpaperBadge}>
-                    <Text style={styles.wallpaperBadgeText}>{isSelected ? '✓ Active Filter' : sub.tests}</Text>
-                  </View>
+        {/* Tests List Header */}
+        <View style={styles.listHeaderRow}>
+          <Text style={styles.sectionHeading}>AVAILABLE TESTS ({filteredTests.length})</Text>
+        </View>
 
-                  <View style={styles.wallpaperTextWrap}>
-                    <Text style={styles.wallpaperTitle}>{sub.title}</Text>
-                    <Text style={styles.wallpaperSub}>{sub.sub}</Text>
-                  </View>
-                </LinearGradient>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-
-        {/* Full Open Tests List */}
-        <Text style={styles.sectionHeader}>Available Practice Papers ({testsList.length})</Text>
-
+        {/* Tests Cards */}
         {isLoading ? (
-          <View style={{ paddingVertical: 40, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color={Colors.accent.primary} />
-            <Text style={{ color: Colors.text.tertiary, marginTop: 8 }}>Fetching live syllabus-aligned tests...</Text>
-          </View>
-        ) : testsList.length === 0 ? (
-          <View style={{ paddingVertical: 40, alignItems: 'center', paddingHorizontal: 20 }}>
-            <Ionicons name="document-text-outline" size={48} color={Colors.text.tertiary} />
-            <Text style={{ color: Colors.text.primary, fontSize: 16, fontWeight: 'bold', marginTop: 12 }}>
-              No Open Tests Found
-            </Text>
-            <Text style={{ color: Colors.text.tertiary, textAlign: 'center', fontSize: 12, marginTop: 4 }}>
-              Try selecting another category or exam filter above.
-            </Text>
+          <ActivityIndicator size="large" color={Colors.accent.primary} style={{ marginVertical: 30 }} />
+        ) : filteredTests.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Ionicons name="document-text-outline" size={48} color="#D1D5DB" />
+            <Text style={styles.emptyTitle}>No tests found for {selectedExam}</Text>
+            <Text style={styles.emptySubtitle}>Try selecting 'ALL' to see all public exams.</Text>
           </View>
         ) : (
-          <FlatList
-            data={testsList}
-            renderItem={renderTestCard}
-            keyExtractor={(item) => item.id}
-            scrollEnabled={false}
-          />
+          filteredTests.map((item) => (
+            <TouchableOpacity
+              key={item.id}
+              style={styles.testCard}
+              activeOpacity={0.9}
+              onPress={() => handleStartTest(item)}
+            >
+              <View style={styles.testHeaderRow}>
+                <View style={styles.examTag}>
+                  <Text style={styles.examTagText}>{item.exam_category || 'General'}</Text>
+                </View>
+                <Text style={styles.testMarks}>
+                  ⏱️ {item.duration_minutes || 60}m • 🎯 {item.total_marks || 100} M
+                </Text>
+              </View>
+
+              <Text style={styles.testTitle}>{item.title}</Text>
+              <Text style={styles.testDescription} numberOfLines={2}>
+                {item.description || 'High-yield practice test with instant scorecard and analytics.'}
+              </Text>
+
+              <View style={styles.testFooterRow}>
+                <View style={styles.testMetaPill}>
+                  <Ionicons name="help-circle-outline" size={14} color="#6B7280" />
+                  <Text style={styles.testMetaText}>{item.questions_count || 50} Qs</Text>
+                </View>
+
+                <TouchableOpacity
+                  style={styles.startBtn}
+                  onPress={() => handleStartTest(item)}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={['#AF2800', '#D9480F']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.startGradient}
+                  >
+                    <Ionicons name="play" size={14} color="#FFFFFF" style={{ marginRight: 5 }} />
+                    <Text style={styles.startBtnText}>Start Test</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          ))
         )}
       </ScrollView>
 
-      {/* Header Profile Drawer Modal */}
       <PublicHeaderProfileModal
         visible={profileModalVisible}
         onClose={() => setProfileModalVisible(false)}
-        onSaved={loadData}
+        profile={profile}
+        onProfileUpdated={loadData}
       />
     </SafeAreaView>
   );
@@ -307,189 +336,187 @@ export default function PublicTestsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bg.primary,
+    backgroundColor: '#FAFAFA',
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 12,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderColor: Colors.card.border,
-    backgroundColor: Colors.bg.secondary,
+    borderBottomColor: '#E5E7EB',
   },
   profileAvatarBtn: {
-    position: 'relative',
+    marginRight: 12,
   },
-  avatarGradient: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
+  avatarPill: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFE2DB',
     justifyContent: 'center',
+    alignItems: 'center',
   },
   avatarLetter: {
-    color: Colors.text.inverse,
-    fontWeight: 'bold',
-    fontSize: 18,
-  },
-  onlineBadge: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: Colors.status.success,
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    borderWidth: 1.5,
-    borderColor: Colors.bg.secondary,
+    color: '#AF2800',
+    fontSize: 16,
+    fontWeight: '800',
   },
   headerTitleWrap: {
     flex: 1,
-    marginLeft: 12,
   },
   headerTitle: {
-    color: Colors.text.primary,
-    fontSize: 17,
-    fontWeight: 'bold',
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    letterSpacing: 0.2,
   },
   headerSubtitle: {
-    color: Colors.text.tertiary,
-    fontSize: 12,
+    fontSize: 11,
+    color: '#4B5563',
+    fontWeight: '500',
+    marginTop: 1,
   },
-  iconBtn: {
-    padding: 10,
-    backgroundColor: Colors.bg.tertiary,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-  },
-  catScroll: {
-    paddingHorizontal: 16,
-    marginVertical: 14,
-  },
-  catTab: {
+  badgeOpenAccess: {
     flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    gap: 4,
+  },
+  badgeOpenAccessText: {
+    fontSize: 11,
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+  scrollBody: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+
+  // Featured Live Card
+  featuredCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 20,
+    ...Shadows.md,
+  },
+  featuredGradient: {
+    padding: 18,
+  },
+  featuredBadgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  liveIndicatorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 10,
     gap: 6,
-    backgroundColor: Colors.bg.secondary,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 20,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
   },
-  catTabActive: {
-    backgroundColor: Colors.accent.primary,
-    borderColor: Colors.accent.primary,
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#FFFFFF',
   },
-  catTabText: {
-    color: Colors.text.tertiary,
+  liveText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  featuredMarks: {
+    color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '600',
   },
-  catTabTextActive: {
-    color: Colors.text.inverse,
-    fontWeight: 'bold',
+  featuredTitle: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 24,
+    marginBottom: 6,
   },
-  examScroll: {
-    paddingHorizontal: 16,
+  featuredSubtitle: {
+    color: 'rgba(255,255,255,0.9)',
+    fontSize: 12,
+    lineHeight: 17,
     marginBottom: 16,
   },
-  examChip: {
-    backgroundColor: Colors.bg.secondary,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 14,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
+  featuredBtnRow: {
+    flexDirection: 'row',
   },
-  examChipActive: {
-    backgroundColor: Colors.accent.glow,
-    borderWidth: 1.5,
-    borderColor: Colors.accent.primary,
+  featuredAttemptBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 12,
   },
-  examChipText: {
-    color: Colors.text.tertiary,
-    fontSize: 12,
-  },
-  examChipTextActive: {
-    color: Colors.accent.primary,
-    fontWeight: 'bold',
-  },
-  sectionHeader: {
-    color: Colors.text.primary,
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginHorizontal: 16,
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  wallpaperScroll: {
-    paddingLeft: 16,
-    marginBottom: 20,
-  },
-  wallpaperCardContainer: {
-    marginRight: 12,
-    width: 210,
-    height: 124,
-    borderRadius: 16,
-    overflow: 'hidden',
-    ...Shadows.sm,
-  },
-  wallpaperCard: {
-    flex: 1,
-    padding: 12,
-    justifyContent: 'space-between',
-    position: 'relative',
-  },
-  wallpaperFormulaOverlay: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    right: 6,
-    color: 'rgba(255,255,255,0.18)',
+  featuredAttemptText: {
+    color: '#AF2800',
     fontSize: 13,
-    fontWeight: 'bold',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    lineHeight: 18,
+    fontWeight: '800',
   },
-  wallpaperBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.3)',
+
+  // Chips
+  chipSection: {
+    marginBottom: 18,
   },
-  wallpaperBadgeText: {
-    color: Colors.text.inverse,
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-  wallpaperTextWrap: {
-    zIndex: 2,
-  },
-  wallpaperTitle: {
-    color: Colors.text.inverse,
-    fontWeight: 'bold',
-    fontSize: 14,
-  },
-  wallpaperSub: {
-    color: 'rgba(255,255,255,0.9)',
+  sectionHeading: {
     fontSize: 11,
+    fontWeight: '800',
+    color: '#6B7280',
+    letterSpacing: 0.8,
+    marginBottom: 8,
   },
+  chipScroll: {
+    gap: 8,
+  },
+  chip: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  chipActive: {
+    backgroundColor: '#FFE2DB',
+    borderColor: '#AF2800',
+  },
+  chipText: {
+    fontSize: 12,
+    color: '#4B5563',
+    fontWeight: '600',
+  },
+  chipTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+
+  listHeaderRow: {
+    marginBottom: 10,
+  },
+
+  // Test Cards
   testCard: {
-    backgroundColor: Colors.bg.secondary,
-    marginHorizontal: 16,
-    marginBottom: 14,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 16,
-    borderWidth: 1.5,
-    borderColor: Colors.card.border,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
     ...Shadows.sm,
   },
   testHeaderRow: {
@@ -499,57 +526,78 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   examTag: {
-    backgroundColor: Colors.accent.glow,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   examTagText: {
-    color: Colors.accent.primary,
     fontSize: 11,
-    fontWeight: 'bold',
+    fontWeight: '800',
+    color: '#374151',
   },
   testMarks: {
-    color: Colors.text.tertiary,
-    fontSize: 12,
+    fontSize: 11,
+    color: '#6B7280',
+    fontWeight: '600',
   },
   testTitle: {
-    color: Colors.text.primary,
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
     marginBottom: 4,
+    lineHeight: 20,
   },
-  testMeta: {
-    color: Colors.text.tertiary,
+  testDescription: {
     fontSize: 12,
+    color: '#4B5563',
+    lineHeight: 16,
     marginBottom: 14,
   },
+  testFooterRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  testMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  testMetaText: {
+    fontSize: 12,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
   startBtn: {
-    borderRadius: 12,
+    borderRadius: 10,
     overflow: 'hidden',
   },
   startGradient: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
-    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
   },
   startBtnText: {
-    color: Colors.text.inverse,
-    fontWeight: 'bold',
-    backgroundColor: 'transparent',
-    marginHorizontal: 16,
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 40,
   },
   emptyTitle: {
-    color: Colors.text.primary,
-    fontWeight: 'bold',
     fontSize: 15,
-    marginTop: 10,
+    fontWeight: '800',
+    color: '#374151',
+    marginTop: 12,
   },
-  emptySub: {
-    color: Colors.text.tertiary,
+  emptySubtitle: {
     fontSize: 12,
+    color: '#9CA3AF',
     marginTop: 4,
   },
 });
