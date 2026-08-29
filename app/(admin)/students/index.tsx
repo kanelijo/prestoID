@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
   Modal,
   Animated,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -850,7 +851,7 @@ export default function StudentsListScreen() {
         >
           <View style={styles.headerAvatarInner}>
             {logoUrl ? (
-              <CachedImage uri={logoUrl} style={styles.headerAvatarImage} priority="high" />
+              <Image source={{ uri: logoUrl }} style={styles.headerAvatarImage} resizeMode="cover" />
             ) : (
               <Text style={styles.headerAvatarText}>{getInitials(adminName)}</Text>
             )}
@@ -1126,7 +1127,7 @@ export default function StudentsListScreen() {
         extraData={{ onlineUserIds, onlinePresence }}
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
-        ListHeaderComponent={ListHeaderComponent}
+        ListHeaderComponent={<ListHeaderComponent />}
         ListEmptyComponent={
           isLoading && students.length === 0 ? (
             <View style={{ paddingHorizontal: 20, gap: 12, marginTop: 10 }}>

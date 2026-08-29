@@ -97,7 +97,14 @@ export default function CachedImage({
     );
   }
 
-  const [isLoading, setIsLoading] = useState(true);
+const MEMORY_CACHE = new Set<string>();
+
+  const isSmallAvatar = Boolean(
+    (style && typeof (style as any).width === 'number' && (style as any).width <= 60) ||
+    (style && typeof (style as any).height === 'number' && (style as any).height <= 60)
+  );
+
+  const [isLoading, setIsLoading] = useState(!MEMORY_CACHE.has(uri || ''));
 
   if (ExpoImage) {
     return (
@@ -109,8 +116,11 @@ export default function CachedImage({
         cachePolicy="disk"
         placeholder={{ blurhash: PLACEHOLDER_BLURHASH }}
         placeholderContentFit="cover"
-        transition={200}
-        onLoad={() => setIsLoading(false)}
+        transition={0}
+        onLoad={() => {
+          if (uri) MEMORY_CACHE.add(uri);
+          setIsLoading(false);
+        }}
       />
     );
   }
@@ -121,10 +131,15 @@ export default function CachedImage({
         source={{ uri: localUri || uri }}
         style={[StyleSheet.absoluteFill]}
         resizeMode={contentFit === 'contain' ? 'contain' : 'cover'}
-        onLoadStart={() => setIsLoading(true)}
-        onLoadEnd={() => setIsLoading(false)}
+        onLoadStart={() => {
+          if (!MEMORY_CACHE.has(uri || '')) setIsLoading(true);
+        }}
+        onLoadEnd={() => {
+          if (uri) MEMORY_CACHE.add(uri);
+          setIsLoading(false);
+        }}
       />
-      {isLoading && (
+      {isLoading && !isSmallAvatar && (
         <View style={[StyleSheet.absoluteFill, { justifyContent: 'center', alignItems: 'center' }]}>
           <ActivityIndicator size="small" color={Colors.accent.primary} />
         </View>

@@ -21,6 +21,7 @@ import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { signOutAll } from '@/lib/authActions';
 import { useAuthStore } from '@/stores/useAuthStore';
+import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { exportAdminCoachingToDrive } from '@/lib/adminBackupService';
 import { CustomAlert } from '@/components/CustomAlert';
@@ -30,11 +31,106 @@ import { sendAccountDeletionEmail } from '@/lib/resendService';
 
 export default function AdminProfileScreen() {
   const router = useRouter();
-  const { user, businessId, businessName, businessCode, avatarUrl, reset } = useAuthStore();
+  const { user, businessId, businessName, businessCode, avatarUrl, setAvatarUrl, reset } = useAuthStore();
 
   const [adminName, setAdminName] = useState(businessName || 'Admin User');
   const [adminEmail, setAdminEmail] = useState(user?.email || '');
   const [photoUrl, setPhotoUrl] = useState<string | null>(avatarUrl || null);
+
+  useEffect(() => {
+    if (avatarUrl) {
+      setPhotoUrl(avatarUrl);
+    }
+  }, [avatarUrl]);
+
+  const handlePickPhoto = async () => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        CustomAlert.alert('Permission Denied', 'Media library access is required to update profile photo.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const selectedAsset = result.assets[0];
+        const localUri = selectedAsset.uri;
+
+        // 1. OPTIMISTIC UPDATE: Instant 0ms visual change
+        setPhotoUrl(localUri);
+        setAvatarUrl(localUri);
+        playAudioFeedback('success');
+        CustomAlert.alert('Success 🎉', 'Profile photo updated successfully!');
+
+        // 2. BACKGROUND WORK: Upload and sync tables
+        (async () => {
+          try {
+            const fileName = `biz_logo_${user?.id}_${Date.now()}.jpg`;
+            const response = await fetch(localUri);
+            const blob = await response.blob();
+            const arrayBuffer = await new Response(blob).arrayBuffer();
+
+            const { error: uploadError } = await supabase.storage
+              .from('avatars')
+              .upload(fileName, arrayBuffer, {
+                contentType: 'image/jpeg',
+                upsert: true,
+              });
+
+            if (uploadError) {
+              console.warn('[AvatarUpload] Storage upload warning:', uploadError);
+              return;
+            }
+
+            const { data: publicData } = supabase.storage
+              .from('avatars')
+              .getPublicUrl(fileName);
+
+            const publicUrl = publicData.publicUrl;
+
+            // Sync with global store and local state
+            setPhotoUrl(publicUrl);
+            setAvatarUrl(publicUrl);
+
+            // Update in profiles
+            if (user?.id) {
+              await supabase
+                .from('profiles')
+                .update({ avatar_url: publicUrl })
+                .eq('id', user.id);
+            }
+
+            // Update in businesses
+            if (businessId) {
+              await supabase
+                .from('businesses')
+                .update({ logo_url: publicUrl })
+                .eq('id', businessId);
+            }
+
+            // Update AsyncStorage user profile cache
+            const cachedRaw = await AsyncStorage.getItem('@user_profile');
+            if (cachedRaw) {
+              const cachedObj = JSON.parse(cachedRaw);
+              cachedObj.avatarUrl = publicUrl;
+              await AsyncStorage.setItem('@user_profile', JSON.stringify(cachedObj));
+            }
+          } catch (bgErr) {
+            console.warn('[AvatarUpload] Background sync error:', bgErr);
+          }
+        })();
+      }
+    } catch (err: any) {
+      console.error('Failed to pick profile photo:', err);
+      CustomAlert.alert('Error', err.message || 'Could not pick photo. Please try again.');
+    }
+  };
 
   // Notification Settings Switches
   const [autoAbsentAlert, setAutoAbsentAlert] = useState(true);
@@ -316,13 +412,18 @@ export default function AdminProfileScreen() {
         {/* Profile Card */}
         <View style={styles.profileCard}>
           <View style={styles.profileHeaderRow}>
-            {photoUrl ? (
-              <CachedImage uri={photoUrl} style={styles.avatarImage} priority="high" />
-            ) : (
-              <View style={styles.avatarFallback}>
-                <Text style={styles.avatarFallbackText}>{adminName.substring(0, 2).toUpperCase()}</Text>
+            <TouchableOpacity onPress={handlePickPhoto} activeOpacity={0.8} style={{ position: 'relative' }}>
+              {photoUrl ? (
+                <CachedImage uri={photoUrl} style={styles.avatarImage} priority="high" />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarFallbackText}>{adminName.substring(0, 2).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={{ position: 'absolute', bottom: -2, right: 12, backgroundColor: Colors.accent.primary, width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FFF' }}>
+                <Ionicons name="camera" size={11} color="#FFF" />
               </View>
-            )}
+            </TouchableOpacity>
             <View style={{ flex: 1 }}>
               <Text style={styles.adminNameText}>{adminName}</Text>
               <Text style={styles.adminEmailText}>{adminEmail}</Text>

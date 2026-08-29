@@ -23,6 +23,7 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import CachedImage from '@/components/CachedImage';
 import { CustomAlert } from '@/components/CustomAlert';
 import { playAudioFeedback } from '@/lib/audioEffects';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function CoachingProfileScreen() {
   const router = useRouter();
@@ -115,46 +116,75 @@ export default function CoachingProfileScreen() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const selectedAsset = result.assets[0];
-        setIsUploadingLogo(true);
+        const localUri = selectedAsset.uri;
 
-        const fileName = `biz_logo_${user?.id}_${Date.now()}.jpg`;
-        const response = await fetch(selectedAsset.uri);
-        const blob = await response.blob();
-        const arrayBuffer = await new Response(blob).arrayBuffer();
-
-        const { error: uploadError } = await supabase.storage
-          .from('avatars')
-          .upload(fileName, arrayBuffer, {
-            contentType: 'image/jpeg',
-            upsert: true,
-          });
-
-        if (uploadError) throw uploadError;
-
-        const { data: publicData } = supabase.storage
-          .from('avatars')
-          .getPublicUrl(fileName);
-
-        const publicUrl = publicData.publicUrl;
-        setLogoUri(publicUrl);
-        setAvatarUrl(publicUrl);
-
-        // Update profile in database
-        if (user?.id) {
-          await supabase
-            .from('profiles')
-            .update({ avatar_url: publicUrl })
-            .eq('id', user.id);
-        }
-
+        // 1. OPTIMISTIC UPDATE: Instant 0ms visual update
+        setLogoUri(localUri);
+        setAvatarUrl(localUri);
         playAudioFeedback('success');
         CustomAlert.alert('Success 🎉', 'Organization logo updated successfully!');
+
+        // 2. BACKGROUND WORK: Upload to storage and sync tables
+        (async () => {
+          try {
+            const fileName = `biz_logo_${user?.id}_${Date.now()}.jpg`;
+            const response = await fetch(localUri);
+            const blob = await response.blob();
+            const arrayBuffer = await new Response(blob).arrayBuffer();
+
+            const { error: uploadError } = await supabase.storage
+              .from('avatars')
+              .upload(fileName, arrayBuffer, {
+                contentType: 'image/jpeg',
+                upsert: true,
+              });
+
+            if (uploadError) {
+              console.warn('[LogoUpload] Storage upload warning:', uploadError);
+              return;
+            }
+
+            const { data: publicData } = supabase.storage
+              .from('avatars')
+              .getPublicUrl(fileName);
+
+            const publicUrl = publicData.publicUrl;
+
+            // Sync with global store and local state
+            setLogoUri(publicUrl);
+            setAvatarUrl(publicUrl);
+
+            // Update in profiles
+            if (user?.id) {
+              await supabase
+                .from('profiles')
+                .update({ avatar_url: publicUrl })
+                .eq('id', user.id);
+            }
+
+            // Update in businesses
+            if (businessId) {
+              await supabase
+                .from('businesses')
+                .update({ logo_url: publicUrl })
+                .eq('id', businessId);
+            }
+
+            // Update AsyncStorage user profile cache
+            const cachedRaw = await AsyncStorage.getItem('@user_profile');
+            if (cachedRaw) {
+              const cachedObj = JSON.parse(cachedRaw);
+              cachedObj.avatarUrl = publicUrl;
+              await AsyncStorage.setItem('@user_profile', JSON.stringify(cachedObj));
+            }
+          } catch (bgErr) {
+            console.warn('[LogoUpload] Background sync error:', bgErr);
+          }
+        })();
       }
     } catch (err: any) {
-      console.error('Failed to upload organization logo:', err);
-      CustomAlert.alert('Upload Failed', err.message || 'Could not upload logo. Please try again.');
-    } finally {
-      setIsUploadingLogo(false);
+      console.error('Failed to pick organization logo:', err);
+      CustomAlert.alert('Error', err.message || 'Could not pick logo. Please try again.');
     }
   };
 
