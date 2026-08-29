@@ -95,7 +95,7 @@ export default function StudentsListScreen() {
   }, [isLoading]);
 
   const fetchStudentsAndStats = async (silent = false) => {
-    if (!silent) setIsLoading(true);
+    if (!silent && studentsLengthRef.current === 0) setIsLoading(true);
     if (!verified) {
       // Test Mode (Sandbox)
       setStudents(DEMO_STUDENTS);
@@ -137,7 +137,11 @@ export default function StudentsListScreen() {
       const { data: list, error: listError } = await query;
 
       if (listError) throw listError;
-      setStudents(list || []);
+      if (list) {
+        setStudents(list);
+        usePrefetchStore.setState({ adminStudents: list });
+        AsyncStorage.setItem('@admin_cached_students', JSON.stringify(list)).catch(() => {});
+      }
 
       // Pre-populate onlinePresence store with last_seen_at from DB
       // This makes last seen visible immediately on restart without waiting for presence sync
@@ -184,11 +188,13 @@ export default function StudentsListScreen() {
         feeCollectedStr = `₹${sumCollected.toLocaleString()}`;
       }
 
-      setStats({
+      const newStats = {
         totalStudents: list?.length || 0,
         presentToday: presentCount || 0,
         feeCollected: feeCollectedStr,
-      });
+      };
+      setStats(newStats);
+      AsyncStorage.setItem('@admin_cached_stats', JSON.stringify(newStats)).catch(() => {});
 
       // 4. Fetch batches list — scoped to this business only
       if (businessId) {
@@ -219,13 +225,37 @@ export default function StudentsListScreen() {
     studentsLengthRef.current = students.length;
   }, [students]);
 
+  // Fast offline cache hydration on component mount
+  useEffect(() => {
+    const hydrateLocalCache = async () => {
+      try {
+        const cachedRaw = await AsyncStorage.getItem('@admin_cached_students');
+        const statsRaw = await AsyncStorage.getItem('@admin_cached_stats');
+        if (cachedRaw) {
+          const list = JSON.parse(cachedRaw);
+          if (Array.isArray(list) && list.length > 0) {
+            setStudents(list);
+            setIsLoading(false);
+          }
+        }
+        if (statsRaw) {
+          setStats(JSON.parse(statsRaw));
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+    hydrateLocalCache();
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       const cached = usePrefetchStore.getState().adminStudents;
-      if (cached && Array.isArray(cached) && cached.length >= 0) {
+      if (cached && Array.isArray(cached) && cached.length > 0) {
         setStudents(cached);
       }
-      fetchStudentsAndStats(false);
+      const hasData = (cached && cached.length > 0) || studentsLengthRef.current > 0;
+      fetchStudentsAndStats(hasData);
       loadQueue().then(() => syncAttendance());
     }, [verified, businessId])
   );
@@ -1087,48 +1117,6 @@ export default function StudentsListScreen() {
     </>
   );
 
-  if (isLoading) {
-    return (
-      <SafeAreaView style={[styles.container, { backgroundColor: Colors.bg.primary }]} edges={['top']}>
-        {/* Skeleton Header */}
-        <View style={{ paddingHorizontal: 20, paddingTop: 15, paddingBottom: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <View style={{ gap: 6 }}>
-            <Animated.View style={{ opacity: skeletonPulse, width: 140, height: 24, borderRadius: 6, backgroundColor: '#E0E0E0' }} />
-            <Animated.View style={{ opacity: skeletonPulse, width: 90, height: 14, borderRadius: 4, backgroundColor: '#E0E0E0' }} />
-          </View>
-          <Animated.View style={{ opacity: skeletonPulse, width: 42, height: 42, borderRadius: 21, backgroundColor: '#E0E0E0' }} />
-        </View>
-
-        {/* Skeleton Stats Grid */}
-        <View style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 20, marginVertical: 12 }}>
-          {[1, 2, 3].map((i) => (
-            <Animated.View key={i} style={{ opacity: skeletonPulse, flex: 1, height: 75, borderRadius: 16, backgroundColor: '#E0E0E0' }} />
-          ))}
-        </View>
-
-        {/* Skeleton Search and Filter */}
-        <View style={{ flexDirection: 'row', gap: 10, paddingHorizontal: 20, marginBottom: 15 }}>
-          <Animated.View style={{ opacity: skeletonPulse, flex: 1, height: 46, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
-          <Animated.View style={{ opacity: skeletonPulse, width: 46, height: 46, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
-        </View>
-
-        {/* Skeleton Student List */}
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, gap: 12 }} showsVerticalScrollIndicator={false}>
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 16, backgroundColor: '#F8F9FA', borderWidth: 1, borderColor: '#F1F3F5', gap: 12 }}>
-              <Animated.View style={{ opacity: skeletonPulse, width: 48, height: 48, borderRadius: 24, backgroundColor: '#E0E0E0' }} />
-              <View style={{ flex: 1, gap: 8 }}>
-                <Animated.View style={{ opacity: skeletonPulse, width: '60%', height: 16, borderRadius: 4, backgroundColor: '#E0E0E0' }} />
-                <Animated.View style={{ opacity: skeletonPulse, width: '40%', height: 12, borderRadius: 3, backgroundColor: '#E0E0E0' }} />
-              </View>
-              <Animated.View style={{ opacity: skeletonPulse, width: 65, height: 24, borderRadius: 12, backgroundColor: '#E0E0E0' }} />
-            </View>
-          ))}
-        </ScrollView>
-      </SafeAreaView>
-    );
-  }
-
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <FlatList
@@ -1140,14 +1128,41 @@ export default function StudentsListScreen() {
         showsVerticalScrollIndicator={false}
         ListHeaderComponent={ListHeaderComponent}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons
-              name="search-outline"
-              size={40}
-              color={Colors.text.tertiary}
-            />
-            <Text style={styles.emptyText}>No students found</Text>
-          </View>
+          isLoading && students.length === 0 ? (
+            <View style={{ paddingHorizontal: 20, gap: 12, marginTop: 10 }}>
+              {[1, 2, 3, 4, 5, 6].map((i) => (
+                <View
+                  key={i}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    padding: 12,
+                    borderRadius: 16,
+                    backgroundColor: '#FFFFFF',
+                    borderWidth: 1,
+                    borderColor: '#E5E7EB',
+                    gap: 12,
+                  }}
+                >
+                  <Animated.View style={{ opacity: skeletonPulse, width: 48, height: 48, borderRadius: 24, backgroundColor: '#E5E7EB' }} />
+                  <View style={{ flex: 1, gap: 8 }}>
+                    <Animated.View style={{ opacity: skeletonPulse, width: '60%', height: 16, borderRadius: 4, backgroundColor: '#E5E7EB' }} />
+                    <Animated.View style={{ opacity: skeletonPulse, width: '40%', height: 12, borderRadius: 3, backgroundColor: '#E5E7EB' }} />
+                  </View>
+                  <Animated.View style={{ opacity: skeletonPulse, width: 65, height: 24, borderRadius: 12, backgroundColor: '#E5E7EB' }} />
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons
+                name="search-outline"
+                size={40}
+                color={Colors.text.tertiary}
+              />
+              <Text style={styles.emptyText}>No students found</Text>
+            </View>
+          )
         }
       />
 
