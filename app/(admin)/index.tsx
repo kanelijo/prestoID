@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, BackHandler, Animated, Dimensions } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, BackHandler } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import PagerView from 'react-native-pager-view';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,11 +16,6 @@ import AdminLeaderboardTab from '@/components/admin/AdminLeaderboardTab';
 import AdminNotificationsTab from '@/components/admin/AdminNotificationsTab';
 import AdminProfileTab from '@/components/admin/AdminProfileTab';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const TAB_WIDTH = SCREEN_WIDTH / 5;
-const PILL_WIDTH = 52;
-const PILL_LEFT = (TAB_WIDTH - PILL_WIDTH) / 2;
-
 const TABS = [
   { key: 'students', label: 'Students', icon: 'people' as const, outlineIcon: 'people-outline' as const },
   { key: 'test', label: 'Test', icon: 'document-text' as const, outlineIcon: 'document-text-outline' as const },
@@ -32,38 +27,29 @@ const TABS = [
 export default function AdminIndex() {
   const insets = useSafeAreaInsets();
   const pagerRef = useRef<PagerView>(null);
-  const scrollX = useRef(new Animated.Value(0)).current;
   const activeTabRef = useRef(0);
   const [activeTab, setActiveTab] = useState(0);
   const { adminUnreadCount } = useNotificationStore();
   const { user, businessId } = useAuthStore();
   const params = useLocalSearchParams<{ tab?: string }>();
 
-  // Continuous 120fps hardware-synced gliding pill (ZERO LAG!)
-  const handlePageScroll = useCallback(
-    (e: any) => {
-      const { position, offset } = e.nativeEvent;
-      const current = position + offset;
-      scrollX.setValue(current);
+  // Instant real-time page scroll sync (updates the exact millisecond you swipe past halfway)
+  const handlePageScroll = useCallback((e: any) => {
+    const { position, offset } = e.nativeEvent;
+    const target = Math.round(position + offset);
+    if (target !== activeTabRef.current && target >= 0 && target < TABS.length) {
+      activeTabRef.current = target;
+      setActiveTab(target);
+    }
+  }, []);
 
-      const target = Math.round(current);
-      if (target !== activeTabRef.current) {
-        activeTabRef.current = target;
-        setActiveTab(target);
-      }
-    },
-    [scrollX]
-  );
-
-  const handlePageSelected = useCallback(
-    (e: any) => {
-      const pos = e.nativeEvent.position;
-      scrollX.setValue(pos);
+  const handlePageSelected = useCallback((e: any) => {
+    const pos = e.nativeEvent.position;
+    if (pos >= 0 && pos < TABS.length) {
       activeTabRef.current = pos;
       setActiveTab(pos);
-    },
-    [scrollX]
-  );
+    }
+  }, []);
 
   // Sync tab if navigated with ?tab=test, etc.
   useEffect(() => {
@@ -72,7 +58,6 @@ export default function AdminIndex() {
       if (idx !== -1 && idx !== activeTab) {
         activeTabRef.current = idx;
         setActiveTab(idx);
-        scrollX.setValue(idx);
         pagerRef.current?.setPage(idx);
       }
     }
@@ -84,7 +69,6 @@ export default function AdminIndex() {
       if (activeTab !== 0) {
         activeTabRef.current = 0;
         setActiveTab(0);
-        scrollX.setValue(0);
         pagerRef.current?.setPage(0);
         return true;
       }
@@ -167,30 +151,6 @@ export default function AdminIndex() {
           },
         ]}
       >
-        {/* Continuous Gliding Pill Indicator (Total 120fps Finger Sync!) */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.slidingPill,
-            {
-              transform: [
-                {
-                  translateX: scrollX.interpolate({
-                    inputRange: [0, 1, 2, 3, 4],
-                    outputRange: [
-                      0 * TAB_WIDTH + PILL_LEFT,
-                      1 * TAB_WIDTH + PILL_LEFT,
-                      2 * TAB_WIDTH + PILL_LEFT,
-                      3 * TAB_WIDTH + PILL_LEFT,
-                      4 * TAB_WIDTH + PILL_LEFT,
-                    ],
-                  }),
-                },
-              ],
-            },
-          ]}
-        />
-
         {TABS.map((tab, idx) => {
           const isFocused = activeTab === idx;
           return (
@@ -199,17 +159,12 @@ export default function AdminIndex() {
               onPress={() => {
                 activeTabRef.current = idx;
                 setActiveTab(idx);
-                Animated.timing(scrollX, {
-                  toValue: idx,
-                  duration: 200,
-                  useNativeDriver: true,
-                }).start();
                 pagerRef.current?.setPage(idx);
               }}
               activeOpacity={0.7}
-              style={[styles.tabItem, { width: TAB_WIDTH }]}
+              style={styles.tabItem}
             >
-              <View style={styles.iconWrapper}>
+              <View style={[styles.iconWrapper, isFocused && styles.iconWrapperActive]}>
                 <Ionicons
                   name={isFocused ? tab.icon : tab.outlineIcon}
                   size={isFocused ? 21 : 22}
@@ -255,18 +210,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     elevation: 0,
     shadowOpacity: 0,
-    position: 'relative',
-  },
-  slidingPill: {
-    position: 'absolute',
-    top: 6,
-    left: 0,
-    width: 52,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FFE2DB',
   },
   tabItem: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -277,6 +223,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'transparent',
+  },
+  iconWrapperActive: {
+    backgroundColor: '#FFE2DB',
+    borderRadius: 14,
   },
   tabLabel: {
     fontSize: 11,
