@@ -72,12 +72,14 @@ export default function SplashScreen() {
           }
 
           // Hydrate student profile data if student
+          let studentRecord: any = null;
           if (role === 'student' || !role) {
-            const { data: studentRecord } = await supabase
+            const { data: stData } = await supabase
               .from('students')
               .select('*')
               .eq('user_id', session.user.id)
               .maybeSingle();
+            studentRecord = stData;
             if (studentRecord) {
               store.setStudentData(studentRecord);
             }
