@@ -207,8 +207,12 @@ export default function StudentLayout() {
         screenOptions={{
           lazy: false,
           headerShown: false,
-          tabBarPressColor: 'transparent',
-          tabBarPressOpacity: 0.7,
+          tabBarButton: (props) => (
+            <TouchableOpacity
+              {...props}
+              activeOpacity={0.7}
+            />
+          ),
           tabBarStyle: [
             styles.tabBar,
             {

@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Tabs, Redirect, useRouter, usePathname } from 'expo-router';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, PanResponder } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '@/constants/colors';
@@ -8,8 +8,6 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useNotificationStore } from '@/stores/useNotificationStore';
 import OfflineBanner from '@/components/OfflineBanner';
 import { supabase } from '@/lib/supabase';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 
 const ADMIN_MAIN_TABS = [
@@ -104,8 +102,27 @@ export default function AdminLayout() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const handleSwipeTab = (direction: 'next' | 'prev') => {
-    const currentIndex = ADMIN_MAIN_TABS.findIndex(tab => pathname?.startsWith(tab));
+  const handleSwipeTab = useCallback((direction: 'next' | 'prev') => {
+    const cleanPath = (pathname || '').toLowerCase();
+    // Don't swipe if user is editing or in creation flow
+    if (
+      cleanPath.includes('create') ||
+      cleanPath.includes('review') ||
+      cleanPath.includes('analytics') ||
+      cleanPath.includes('live-dashboard') ||
+      cleanPath.includes('banks') ||
+      cleanPath.includes('add')
+    ) {
+      return;
+    }
+
+    let currentIndex = -1;
+    if (cleanPath.includes('students')) currentIndex = 0;
+    else if (cleanPath.includes('test')) currentIndex = 1;
+    else if (cleanPath.includes('leaderboard')) currentIndex = 2;
+    else if (cleanPath.includes('notifications')) currentIndex = 3;
+    else if (cleanPath.includes('profile')) currentIndex = 4;
+
     if (currentIndex === -1) return;
 
     if (direction === 'next' && currentIndex < ADMIN_MAIN_TABS.length - 1) {
@@ -115,21 +132,28 @@ export default function AdminLayout() {
       Haptics.selectionAsync();
       router.replace(ADMIN_MAIN_TABS[currentIndex - 1] as any);
     }
-  };
+  }, [pathname, router]);
 
-  const panGesture = Gesture.Pan()
-    .activeOffsetX([-35, 35])
-    .failOffsetY([-25, 25])
-    .onEnd((e) => {
-      'worklet';
-      if (Math.abs(e.translationX) > 60 || Math.abs(e.velocityX) > 500) {
-        if (e.translationX < 0) {
-          runOnJS(handleSwipeTab)('next');
-        } else {
-          runOnJS(handleSwipeTab)('prev');
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only trigger on clear horizontal swipe (dx dominates dy)
+        return (
+          Math.abs(gestureState.dx) > 30 &&
+          Math.abs(gestureState.dx) > Math.abs(gestureState.dy) * 1.4
+        );
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (Math.abs(gestureState.dx) > 40 || Math.abs(gestureState.vx) > 0.3) {
+          if (gestureState.dx < 0) {
+            handleSwipeTab('next');
+          } else {
+            handleSwipeTab('prev');
+          }
         }
-      }
-    });
+      },
+    })
+  ).current;
 
   if (role && role !== 'admin') {
     return <Redirect href="/(student)/id-card" />;
@@ -172,17 +196,24 @@ export default function AdminLayout() {
   }, [user, businessId]);
 
   return (
-    <GestureDetector gesture={panGesture}>
-      <View style={{ flex: 1 }} key={businessId || 'admin-root'}>
-        {/* <TrialBanner /> */}
-        <OfflineBanner />
+    <View
+      style={{ flex: 1 }}
+      key={businessId || 'admin-root'}
+      {...panResponder.panHandlers}
+    >
+      {/* <TrialBanner /> */}
+      <OfflineBanner />
       <Tabs
         backBehavior="initialRoute"
         screenOptions={{
           lazy: false,
           headerShown: false,
-          tabBarPressColor: 'transparent',
-          tabBarPressOpacity: 0.7,
+          tabBarButton: (props) => (
+            <TouchableOpacity
+              {...props}
+              activeOpacity={0.7}
+            />
+          ),
           tabBarStyle: [
             styles.tabBar,
             {
@@ -281,7 +312,6 @@ export default function AdminLayout() {
       <Tabs.Screen name="coaching-profile" options={{ href: null }} />
       </Tabs>
     </View>
-    </GestureDetector>
   );
 }
 
