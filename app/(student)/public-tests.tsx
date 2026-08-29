@@ -19,6 +19,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import PublicHeaderProfileModal from '@/components/PublicHeaderProfileModal';
 import { cacheTestForOffline } from '@/lib/offlineTestStorage';
+import { EXAM_TAXONOMY, getCategoryForExam } from '@/constants/examCategories';
 
 const EXAM_CHIPS = [
   'ALL',
@@ -135,19 +136,24 @@ export default function PublicTestsScreen() {
         }
       }
 
+      const currentCatKey = getCategoryForExam(pubStudent?.target_exam || prof?.target_exam || 'MPPSC');
+      const currentCatConfig = EXAM_TAXONOMY[currentCatKey] || EXAM_TAXONOMY.Government;
+
       if (pubTests && pubTests.length > 0) {
         setTestsList(pubTests);
       } else {
-        setTestsList(INITIAL_PUBLIC_TESTS);
+        setTestsList(currentCatConfig.sampleTests);
       }
     } catch (e) {
       console.log('[PublicTests] Using local mock fallback:', e);
-      setTestsList(INITIAL_PUBLIC_TESTS);
+      const currentCatKey = getCategoryForExam(profile?.target_exam || 'MPPSC');
+      const currentCatConfig = EXAM_TAXONOMY[currentCatKey] || EXAM_TAXONOMY.Government;
+      setTestsList(currentCatConfig.sampleTests);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [user?.id]);
+  }, [user?.id, profile?.target_exam]);
 
   useFocusEffect(
     useCallback(() => {
@@ -156,29 +162,35 @@ export default function PublicTestsScreen() {
   );
 
   const userTargetExam = profile?.target_exam || 'MPPSC';
+  const categoryKey = getCategoryForExam(userTargetExam);
+  const categoryConfig = EXAM_TAXONOMY[categoryKey] || EXAM_TAXONOMY.Government;
 
+  // Filter chips STRICTLY to the active category (Engineering, Medical, Central, Government)
   const dynamicChips = useMemo(() => {
-    const list = ['ALL', userTargetExam];
-    const defaults = ['MPPSC', 'MP Police (SI/Constable)', 'SSC CGL', 'Railway', 'Banking', 'UPSC', 'JEE Main', 'NEET UG'];
-    defaults.forEach((d) => {
-      if (!list.includes(d)) list.push(d);
-    });
-    return list;
-  }, [userTargetExam]);
+    return categoryConfig.exams;
+  }, [categoryConfig]);
+
+  useEffect(() => {
+    if (userTargetExam && (!selectedExam || !categoryConfig.exams.includes(selectedExam))) {
+      setSelectedExam(userTargetExam);
+    }
+  }, [userTargetExam, categoryConfig]);
 
   const featuredMock = useMemo(() => {
     const matching = testsList.find((t) => t.exam_category?.toLowerCase().includes(userTargetExam.toLowerCase()));
     if (matching) return matching;
-    return {
-      id: 'pub-mock-target',
-      title: `${userTargetExam} — Full Length Master Mock 2026`,
-      description: `Complete bilingual mock examination specifically tailored for ${userTargetExam} aspirants according to latest syllabus.`,
-      exam_category: userTargetExam,
-      duration_minutes: 120,
-      total_marks: 200,
-      questions_count: 100,
-    };
-  }, [testsList, userTargetExam]);
+    return (
+      categoryConfig.sampleTests[0] || {
+        id: 'pub-mock-target',
+        title: `${userTargetExam} — Full Length Master Mock 2026`,
+        description: `Complete mock examination specifically tailored for ${userTargetExam} aspirants according to latest syllabus.`,
+        exam_category: userTargetExam,
+        duration_minutes: 120,
+        total_marks: 200,
+        questions_count: 100,
+      }
+    );
+  }, [testsList, userTargetExam, categoryConfig]);
 
   const handleStartTest = async (item: any) => {
     await cacheTestForOffline(item.id, item);

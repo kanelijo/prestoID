@@ -11,34 +11,48 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
-
-const EXAM_TABS = ['ALL', 'MPPSC', 'MP Police', 'SSC CGL', 'Banking', 'Railway'];
-
-const SAMPLE_LEADERBOARD = [
-  { id: '1', rank: 1, name: 'Ananya Sharma', target_exam: 'MPPSC', score: 192, accuracy: '96%', state: 'Bhopal, MP' },
-  { id: '2', rank: 2, name: 'Rohit Verma', target_exam: 'MPPSC', score: 186, accuracy: '93%', state: 'Indore, MP' },
-  { id: '3', rank: 3, name: 'Pooja Tiwari', target_exam: 'SSC CGL', score: 182, accuracy: '91%', state: 'Jabalpur, MP' },
-  { id: '4', rank: 4, name: 'Vikram Singh', target_exam: 'MP Police', score: 178, accuracy: '89%', state: 'Gwalior, MP' },
-  { id: '5', rank: 5, name: 'Deepak Patel', target_exam: 'Railway', score: 174, accuracy: '87%', state: 'Ujjain, MP' },
-  { id: '6', rank: 6, name: 'Sneha Mishra', target_exam: 'Banking', score: 170, accuracy: '85%', state: 'Rewa, MP' },
-  { id: '7', rank: 7, name: 'Manish Soni', target_exam: 'MPPSC', score: 168, accuracy: '84%', state: 'Sagar, MP' },
-];
+import { EXAM_TAXONOMY, getCategoryForExam } from '@/constants/examCategories';
 
 export default function PublicLeaderboardScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
+  const [profile, setProfile] = useState<any>(null);
+  const [userTargetExam, setUserTargetExam] = useState('MPPSC');
   const [selectedExam, setSelectedExam] = useState('ALL');
-  const [leaderboardData, setLeaderboardData] = useState<any[]>(SAMPLE_LEADERBOARD);
+  const [leaderboardData, setLeaderboardData] = useState<any[]>(EXAM_TAXONOMY.Government.sampleLeaderboard);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const categoryKey = getCategoryForExam(userTargetExam);
+  const categoryConfig = EXAM_TAXONOMY[categoryKey] || EXAM_TAXONOMY.Government;
+  const examTabs = categoryConfig.exams;
 
   const fetchLeaderboard = useCallback(async () => {
     try {
       setIsLoading(true);
+
+      // Load user profile to get target_exam
+      if (user?.id) {
+        const { data: pub } = await supabase.from('public_students').select('*').eq('user_id', user.id).maybeSingle();
+        if (pub?.target_exam) {
+          setUserTargetExam(pub.target_exam);
+          setProfile(pub);
+        } else {
+          const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+          if (prof?.target_exam) {
+            setUserTargetExam(prof.target_exam);
+            setProfile(prof);
+          }
+        }
+      }
+
+      const activeCatKey = getCategoryForExam(userTargetExam);
+      const activeConfig = EXAM_TAXONOMY[activeCatKey] || EXAM_TAXONOMY.Government;
+
       // Try querying public_test_submissions first
       let { data: pubSubs, error } = await supabase
         .from('public_test_submissions')
@@ -47,60 +61,49 @@ export default function PublicLeaderboardScreen() {
         .limit(30);
 
       if (error || !pubSubs || pubSubs.length === 0) {
-        // Fallback to test_submissions or sample data
-        const { data: generalSubs } = await supabase
-          .from('test_submissions')
-          .select('*, students(name, state)')
-          .order('score', { ascending: false })
-          .limit(30);
-
-        if (generalSubs && generalSubs.length > 0) {
-          pubSubs = generalSubs.map((sub: any, idx: number) => ({
-            id: sub.id,
-            rank: idx + 1,
-            name: sub.students?.name || 'Public Aspirant',
-            target_exam: 'MPPSC',
-            score: Math.round(sub.score || 0),
-            accuracy: `${Math.round(sub.accuracy_percentage || 85)}%`,
-            state: sub.students?.state || 'Madhya Pradesh',
-          }));
-        }
-      }
-
-      if (pubSubs && pubSubs.length > 0) {
+        setLeaderboardData(activeConfig.sampleLeaderboard);
+      } else {
         const formatted = pubSubs.map((item: any, idx: number) => ({
           id: item.id || `rank-${idx}`,
           rank: idx + 1,
           name: item.student_name || item.name || 'Public Aspirant',
-          target_exam: item.target_exam || 'MPPSC',
+          target_exam: item.target_exam || userTargetExam,
           score: Math.round(item.score || 0),
           accuracy: item.accuracy ? `${item.accuracy}%` : '90%',
           state: item.state || 'Madhya Pradesh',
         }));
         setLeaderboardData(formatted);
-      } else {
-        setLeaderboardData(SAMPLE_LEADERBOARD);
       }
     } catch (e) {
       console.log('[Leaderboard] Using fallback:', e);
-      setLeaderboardData(SAMPLE_LEADERBOARD);
+      const activeCatKey = getCategoryForExam(userTargetExam);
+      const activeConfig = EXAM_TAXONOMY[activeCatKey] || EXAM_TAXONOMY.Government;
+      setLeaderboardData(activeConfig.sampleLeaderboard);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [user?.id, userTargetExam]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchLeaderboard();
+    }, [fetchLeaderboard])
+  );
 
   useEffect(() => {
-    fetchLeaderboard();
-  }, [fetchLeaderboard]);
+    if (userTargetExam && (!selectedExam || !examTabs.includes(selectedExam))) {
+      setSelectedExam(userTargetExam);
+    }
+  }, [userTargetExam, examTabs]);
 
   const filteredData = selectedExam === 'ALL'
     ? leaderboardData
     : leaderboardData.filter((d) => d.target_exam?.toLowerCase().includes(selectedExam.toLowerCase()));
 
-  const top1 = filteredData[0] || SAMPLE_LEADERBOARD[0];
-  const top2 = filteredData[1] || SAMPLE_LEADERBOARD[1];
-  const top3 = filteredData[2] || SAMPLE_LEADERBOARD[2];
+  const top1 = filteredData[0] || categoryConfig.sampleLeaderboard[0];
+  const top2 = filteredData[1] || categoryConfig.sampleLeaderboard[1];
+  const top3 = filteredData[2] || categoryConfig.sampleLeaderboard[2];
   const restList = filteredData.slice(3);
 
   const onRefresh = () => {
@@ -114,7 +117,9 @@ export default function PublicLeaderboardScreen() {
       <View style={styles.header}>
         <View style={{ marginBottom: 12 }}>
           <Text style={styles.headerTitle}>All-India Leaderboard</Text>
-          <Text style={styles.headerSubtitle}>Live competitive rankings across aspirants</Text>
+          <Text style={styles.headerSubtitle}>
+            Category: <Text style={{ color: '#AF2800', fontWeight: '800' }}>{categoryConfig.name}</Text>
+          </Text>
         </View>
 
         {/* Filter Pills */}
@@ -123,8 +128,9 @@ export default function PublicLeaderboardScreen() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.tabScroll}
         >
-          {EXAM_TABS.map((ex) => {
+          {examTabs.map((ex) => {
             const isSelected = selectedExam === ex;
+            const isUserGoal = ex === userTargetExam && ex !== 'ALL';
             return (
               <TouchableOpacity
                 key={ex}
@@ -133,7 +139,7 @@ export default function PublicLeaderboardScreen() {
                 activeOpacity={0.7}
               >
                 <Text style={[styles.tabText, isSelected && styles.tabTextActive]}>
-                  {ex}
+                  {ex}{isUserGoal ? ' ★' : ''}
                 </Text>
               </TouchableOpacity>
             );

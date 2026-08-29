@@ -11,65 +11,159 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { getCategoryForExam } from '@/constants/examCategories';
 
-const FEED_CATEGORIES = ['ALL', 'VACANCIES', 'STRATEGY', 'CURRENT AFFAIRS'];
+const FEED_CATEGORIES = ['ALL', 'EXAM UPDATES', 'STRATEGY', 'CURRENT AFFAIRS'];
 
-const INITIAL_FEED_ITEMS = [
-  {
-    id: 'feed-1',
-    category: 'VACANCIES',
-    title: 'MPPSC State Service Examination 2026 Notification Out',
-    summary: 'Madhya Pradesh Public Service Commission has officially announced 227 administrative posts including Deputy Collector and DSP. Online applications open next week.',
-    target_exam: 'MPPSC',
-    created_at: 'Just now',
-    official_pdf_url: 'https://mppsc.mp.gov.in',
-  },
-  {
-    id: 'feed-2',
-    category: 'STRATEGY',
-    title: 'How to Score 85+ in MP Police SI Aptitude & Reasoning',
-    summary: 'Topic-wise breakdown of numerical ability and analytical reasoning with previous 5 years weightage trend and shortcut methods.',
-    target_exam: 'MP Police (SI/Constable)',
-    created_at: '2 hours ago',
-    official_pdf_url: null,
-  },
-  {
-    id: 'feed-3',
-    category: 'CURRENT AFFAIRS',
-    title: 'MP State Budget & Major Welfare Schemes Capsule',
-    summary: 'Comprehensive monthly current affairs summary covering state budget allocation, Ladli Behna Yojana updates, and industrial corridors.',
-    target_exam: 'ALL',
-    created_at: 'Yesterday',
-    official_pdf_url: 'https://mp.gov.in',
-  },
-  {
-    id: 'feed-4',
-    category: 'VACANCIES',
-    title: 'SSC CGL 2026 Exam Dates & Syllabus Revision Announced',
-    summary: 'Staff Selection Commission has released the official exam calendar for Combined Graduate Level Tier-1 and Tier-2 exams.',
-    target_exam: 'SSC CGL',
-    created_at: '2 days ago',
-    official_pdf_url: 'https://ssc.gov.in',
-  },
-];
+const CATEGORY_FEED_ITEMS: Record<string, any[]> = {
+  Engineering: [
+    {
+      id: 'feed-eng-1',
+      category: 'EXAM UPDATES',
+      title: 'NTA JEE Main 2026 Session 1 Notification & Syllabus Released',
+      summary: 'National Testing Agency has released official dates and registration portal for JEE Main Session 1. Check eligibility and exam center guidelines.',
+      target_exam: 'JEE Main',
+      created_at: 'Just now',
+      official_pdf_url: 'https://jeemain.nta.nic.in',
+    },
+    {
+      id: 'feed-eng-2',
+      category: 'STRATEGY',
+      title: 'Mastering Rotational Motion & Calculus in Last 60 Days',
+      summary: 'Proven problem-solving strategy and high-yield question patterns from IIT top rankers for Physics & Mathematics.',
+      target_exam: 'JEE Main',
+      created_at: '3 hours ago',
+      official_pdf_url: null,
+    },
+    {
+      id: 'feed-eng-3',
+      category: 'EXAM UPDATES',
+      title: 'IIT Roorkee Announces GATE 2026 Paper Pattern & Dates',
+      summary: 'Official brochure published for graduate engineering candidates with revised syllabus for Computer Science and Mechanical.',
+      target_exam: 'GATE',
+      created_at: 'Yesterday',
+      official_pdf_url: 'https://gate2026.iitr.ac.in',
+    },
+  ],
+  Medical: [
+    {
+      id: 'feed-med-1',
+      category: 'EXAM UPDATES',
+      title: 'NEET UG 2026 Information Bulletin Released by NTA',
+      summary: 'Official notification detailing tie-breaker criteria, updated syllabus, and qualifying percentiles for MBBS/BDS admissions.',
+      target_exam: 'NEET UG',
+      created_at: 'Just now',
+      official_pdf_url: 'https://neet.nta.nic.in',
+    },
+    {
+      id: 'feed-med-2',
+      category: 'STRATEGY',
+      title: 'How to Score 350+ in NEET Biology with NCERT Mastery',
+      summary: 'Diagram-based question strategy and line-by-line NCERT highlights compiled by AIIMS faculty.',
+      target_exam: 'NEET UG',
+      created_at: '4 hours ago',
+      official_pdf_url: null,
+    },
+  ],
+  Central: [
+    {
+      id: 'feed-cen-1',
+      category: 'EXAM UPDATES',
+      title: 'CUET UG 2026 Application Process Begins for Central Universities',
+      summary: 'University entrance test dates confirmed for DU, BHU, and JNU admissions. Subject combination guide available.',
+      target_exam: 'CUET (UG/PG)',
+      created_at: 'Just now',
+      official_pdf_url: 'https://cuet.samarth.ac.in',
+    },
+    {
+      id: 'feed-cen-2',
+      category: 'STRATEGY',
+      title: 'CLAT 2026 Legal Reasoning & Speed Reading Techniques',
+      summary: 'Speed reading passage breakdowns and core constitutional law topics for NLUs.',
+      target_exam: 'CLAT',
+      created_at: '5 hours ago',
+      official_pdf_url: null,
+    },
+  ],
+  Government: [
+    {
+      id: 'feed-gov-1',
+      category: 'EXAM UPDATES',
+      title: 'MPPSC State Service Examination 2026 Notification Out',
+      summary: 'Madhya Pradesh Public Service Commission has officially announced 227 administrative posts including Deputy Collector and DSP. Online applications open next week.',
+      target_exam: 'MPPSC',
+      created_at: 'Just now',
+      official_pdf_url: 'https://mppsc.mp.gov.in',
+    },
+    {
+      id: 'feed-gov-2',
+      category: 'STRATEGY',
+      title: 'How to Score 85+ in MP Police SI Aptitude & Reasoning',
+      summary: 'Topic-wise breakdown of numerical ability and analytical reasoning with previous 5 years weightage trend and shortcut methods.',
+      target_exam: 'MP Police (SI/Constable)',
+      created_at: '2 hours ago',
+      official_pdf_url: null,
+    },
+    {
+      id: 'feed-gov-3',
+      category: 'CURRENT AFFAIRS',
+      title: 'MP State Budget & Major Welfare Schemes Capsule',
+      summary: 'Comprehensive monthly current affairs summary covering state budget allocation, Ladli Behna Yojana updates, and industrial corridors.',
+      target_exam: 'ALL',
+      created_at: 'Yesterday',
+      official_pdf_url: 'https://mp.gov.in',
+    },
+    {
+      id: 'feed-gov-4',
+      category: 'EXAM UPDATES',
+      title: 'SSC CGL 2026 Exam Dates & Syllabus Revision Announced',
+      summary: 'Staff Selection Commission has released the official exam calendar for Combined Graduate Level Tier-1 and Tier-2 exams.',
+      target_exam: 'SSC CGL',
+      created_at: '2 days ago',
+      official_pdf_url: 'https://ssc.gov.in',
+    },
+  ],
+};
 
 export default function PublicFeedScreen() {
   const router = useRouter();
+  const { user } = useAuthStore();
+  const [userTargetExam, setUserTargetExam] = useState('MPPSC');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
-  const [feedItems, setFeedItems] = useState<any[]>(INITIAL_FEED_ITEMS);
+  const [feedItems, setFeedItems] = useState<any[]>(CATEGORY_FEED_ITEMS.Government);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchFeed = useCallback(async () => {
     try {
       setIsLoading(true);
+
+      let activeExam = userTargetExam;
+      if (user?.id) {
+        const { data: pub } = await supabase.from('public_students').select('target_exam').eq('user_id', user.id).maybeSingle();
+        if (pub?.target_exam) {
+          activeExam = pub.target_exam;
+          setUserTargetExam(pub.target_exam);
+        } else {
+          const { data: prof } = await supabase.from('profiles').select('target_exam').eq('id', user.id).maybeSingle();
+          if (prof?.target_exam) {
+            activeExam = prof.target_exam;
+            setUserTargetExam(prof.target_exam);
+          }
+        }
+      }
+
+      const activeCatKey = getCategoryForExam(activeExam);
+      const categoryDefaults = CATEGORY_FEED_ITEMS[activeCatKey] || CATEGORY_FEED_ITEMS.Government;
+
       let query = supabase.from('public_feed').select('*').order('created_at', { ascending: false });
 
       if (selectedCategory !== 'ALL') {
-        const catFilter = selectedCategory === 'CURRENT AFFAIRS' ? 'CURRENT_AFFAIRS' : selectedCategory === 'VACANCIES' ? 'VACANCY' : selectedCategory;
+        const catFilter = selectedCategory === 'CURRENT AFFAIRS' ? 'CURRENT_AFFAIRS' : selectedCategory === 'EXAM UPDATES' ? 'EXAM_UPDATES' : selectedCategory;
         query = query.eq('category', catFilter);
       }
 
@@ -77,20 +171,23 @@ export default function PublicFeedScreen() {
       if (!error && data && data.length > 0) {
         setFeedItems(data);
       } else {
-        setFeedItems(INITIAL_FEED_ITEMS);
+        setFeedItems(categoryDefaults);
       }
     } catch (e) {
       console.log('[Feed] Using fallback items');
-      setFeedItems(INITIAL_FEED_ITEMS);
+      const activeCatKey = getCategoryForExam(userTargetExam);
+      setFeedItems(CATEGORY_FEED_ITEMS[activeCatKey] || CATEGORY_FEED_ITEMS.Government);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
     }
-  }, [selectedCategory]);
+  }, [selectedCategory, user?.id, userTargetExam]);
 
-  useEffect(() => {
-    fetchFeed();
-  }, [fetchFeed]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchFeed();
+    }, [fetchFeed])
+  );
 
   const openUrl = (url: string | null) => {
     if (url) {
@@ -101,7 +198,9 @@ export default function PublicFeedScreen() {
   const filteredItems = selectedCategory === 'ALL'
     ? feedItems
     : feedItems.filter((item) => {
-        if (selectedCategory === 'VACANCIES') return item.category?.includes('VACANCY') || item.category === 'VACANCIES';
+        if (selectedCategory === 'EXAM UPDATES' || selectedCategory === 'VACANCIES') {
+          return item.category?.includes('EXAM') || item.category?.includes('VACANCY') || item.category === 'EXAM UPDATES';
+        }
         if (selectedCategory === 'STRATEGY') return item.category?.includes('STRATEGY');
         if (selectedCategory === 'CURRENT AFFAIRS') return item.category?.includes('CURRENT');
         return true;
