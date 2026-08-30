@@ -803,6 +803,19 @@ export default function StudentStudentIDCardScreen() {
                   )}
                 </LinearGradient>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={{ marginTop: 16, alignItems: 'center', paddingVertical: 6 }}
+                onPress={() => {
+                  useAuthStore.getState().setActiveEnvironment('public');
+                  router.replace('/(student)/public-tests');
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={{ fontSize: 13, color: '#6B7280' }}>
+                  Don't have a Coaching ID? <Text style={{ color: '#AF2800', fontWeight: '800' }}>Practice Public Tests</Text>
+                </Text>
+              </TouchableOpacity>
             </View>
           </ScrollView>
         </View>

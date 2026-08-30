@@ -12,16 +12,17 @@ import {
   Dimensions,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors, Gradients, Shadows } from '@/constants/colors';
+import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { sendPushNotification, CHANNELS } from '@/lib/notifications';
 
-const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function ClaimProfileScreen() {
   const router = useRouter();
@@ -85,7 +86,7 @@ export default function ClaimProfileScreen() {
     const cleanedPasscode = useAadhaar ? passcode.trim() : passcode.trim().toUpperCase();
 
     if (!cleanedCode || !cleanedPasscode) {
-      Alert.alert('Missing Fields', 'Please enter both your Coaching ID and Passcode.');
+      Alert.alert('Missing Fields', 'Please enter both your Organization ID and Passcode.');
       return;
     }
 
@@ -98,84 +99,70 @@ export default function ClaimProfileScreen() {
     setIsLoading(true);
     try {
       // Step 1: Find the business by organization_id
-      const { data: business, error: businessError } = await supabase
+      const { data: business, error: bizError } = await supabase
         .from('businesses')
         .select('id, organization_id, business_name, business_type')
         .eq('organization_id', cleanedCode)
         .maybeSingle();
 
-      if (businessError || !business) {
-        Alert.alert('Not Found', 'No coaching institute found with this ID. Please check and try again.');
-        setIsLoading(false);
-        return;
+      if (bizError || !business) {
+        throw new Error('Invalid Organization ID. Please check the code with your coaching institute.');
       }
 
-      // Step 2: Find the student profile in the students table
-      let query = supabase
-        .from('students')
-        .select('id, name, user_id')
-        .eq('business_id', business.id);
+      // Step 2: Query students table for matching passcode or aadhaar_number
+      let studentRecord: any = null;
 
       if (useAadhaar) {
-        query = query.eq('aadhaar_number', cleanedPasscode);
+        const { data: studentsByAadhaar, error: aadhError } = await supabase
+          .from('students')
+          .select('id, name, roll_number, aadhaar_number, user_id')
+          .eq('business_id', business.id)
+          .like('aadhaar_number', `%${cleanedPasscode}`);
+
+        if (aadhError || !studentsByAadhaar || studentsByAadhaar.length === 0) {
+          throw new Error('No student found with these last 4 digits of Aadhaar.');
+        }
+        if (studentsByAadhaar.length > 1) {
+          throw new Error('Multiple students matched. Please verify with your institute admin.');
+        }
+        studentRecord = studentsByAadhaar[0];
       } else {
-        query = query.eq('secret_code', cleanedPasscode);
+        const { data: studentByPasscode, error: studentError } = await supabase
+          .from('students')
+          .select('id, name, roll_number, unique_passcode, user_id')
+          .eq('business_id', business.id)
+          .eq('unique_passcode', cleanedPasscode)
+          .maybeSingle();
+
+        if (studentError || !studentByPasscode) {
+          throw new Error('Invalid Secret Passcode. Please verify with your coaching institute.');
+        }
+        studentRecord = studentByPasscode;
       }
 
-      const { data: studentRecord, error: studentError } = await query.maybeSingle();
-
-      if (studentError || !studentRecord) {
-        Alert.alert(
-          'Student Record Not Found',
-          useAadhaar
-            ? 'No matches found for this Aadhaar number. Please check with your teacher.'
-            : 'No matches found for this passcode. Please check with your teacher.'
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      // Check if student record is already claimed by a different user
+      // Check if already claimed by someone else
       if (studentRecord.user_id && studentRecord.user_id !== user.id) {
-        Alert.alert(
-          'Already Claimed',
-          'This student record has already been linked to a different account. Please contact your teacher.'
-        );
-        setIsLoading(false);
-        return;
+        throw new Error('This student profile has already been claimed by another account.');
       }
 
-      // Get or create persistent device ID
-      let deviceId = await AsyncStorage.getItem('device_id');
-      if (!deviceId) {
-        deviceId = 'dev_' + Math.random().toString(36).substring(2, 15) + '_' + Date.now().toString(36);
-        await AsyncStorage.setItem('device_id', deviceId);
-      }
-
-      // Step 3: Link student record
+      // Step 3: Link the student record to current user
       const { error: updateStudentError } = await supabase
         .from('students')
-        .update({
-          user_id: user.id,
-          is_claimed: true,
-          device_id: deviceId,
-          email: user.email,
-        })
+        .update({ user_id: user.id })
         .eq('id', studentRecord.id);
 
       if (updateStudentError) throw updateStudentError;
 
+      // Update current user profile
       const { error: updateProfileError } = await supabase
         .from('profiles')
-        .upsert({
-          id: user.id,
-          name: studentRecord.name,
-          email: user.email,
-          role: 'student',
+        .update({
           business_id: business.id,
           claimed: true,
           is_external: false,
-        });
+          role: 'student',
+        })
+        .eq('id', user.id);
 
       if (updateProfileError) throw updateProfileError;
 
@@ -241,327 +228,409 @@ export default function ClaimProfileScreen() {
   };
 
   return (
-    <View style={styles.overlay}>
-      <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={handleClose} />
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
+      {/* Top Header Bar */}
+      <View style={styles.headerBar}>
+        {mode === 'credentials' ? (
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={() => setMode('select')}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={22} color="#111827" />
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            onPress={handleClose}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={22} color="#111827" />
+          </TouchableOpacity>
+        )}
+
+        <Text style={styles.headerBrandTitle}>Zenza</Text>
+
+        <TouchableOpacity
+          style={styles.headerIconBtn}
+          onPress={handleClose}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="log-out-outline" size={22} color="#6B7280" />
+        </TouchableOpacity>
+      </View>
 
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.sheetContainer}
+        style={styles.centerWrapper}
       >
-        <View style={styles.sheet}>
-          <View style={styles.handleBar}>
-            <View style={styles.handle} />
-          </View>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.scrollContent}
-          >
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Centered Floating Card — Redesigned same as Login & Screenshot */}
+          <View style={styles.centeredCard}>
             {mode === 'select' ? (
-              // ─── STEP 1: CATEGORIZATION SCREEN (2 BUTTONS) ─────────────────
+              // ─── STEP 1: CATEGORIZATION CHOICE ─────────────────────────────
               <>
-                <View style={styles.headerRow}>
-                  <View style={styles.iconWrap}>
-                    <LinearGradient
-                      colors={Gradients.primary as [string, string]}
-                      style={styles.iconGradient}
-                    >
-                      <Ionicons name="school" size={24} color="#FFFFFF" />
-                    </LinearGradient>
-                  </View>
-                  <View style={styles.headerText}>
-                    <Text style={styles.title}>Student Portal</Text>
-                    <Text style={styles.subtitle}>Choose how you would like to proceed</Text>
-                  </View>
-                  <TouchableOpacity onPress={handleClose} style={styles.closeBtn} activeOpacity={0.7}>
-                    <Ionicons name="close" size={20} color={Colors.text.secondary} />
-                  </TouchableOpacity>
+                <View style={styles.cardIconCircle}>
+                  <Ionicons name="school-outline" size={28} color="#AF2800" />
                 </View>
 
-                {/* Option 1: I Have a Coaching ID */}
+                <Text style={styles.cardTitle}>Choose Student Mode</Text>
+                <Text style={styles.cardSubtitle}>
+                  Are you enrolled in a partner coaching institute, or practicing independently?
+                </Text>
+
+                {/* Option 1: Coaching Student */}
                 <TouchableOpacity
-                  style={styles.selectionCard}
+                  style={styles.choiceCard}
                   activeOpacity={0.85}
                   onPress={() => setMode('credentials')}
                 >
-                  <View style={styles.cardHeader}>
-                    <View style={[styles.badgeContainer, { backgroundColor: '#FEE2E2' }]}>
-                      <Text style={[styles.badgeText, { color: '#B91C1C' }]}>INSTITUTE ENROLLED</Text>
+                  <View style={styles.choiceHeaderRow}>
+                    <View style={[styles.choiceBadge, { backgroundColor: '#FFE2DB' }]}>
+                      <Text style={[styles.choiceBadgeText, { color: '#AF2800' }]}>INSTITUTE ENROLLED</Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color={Colors.accent.primary} />
+                    <Ionicons name="arrow-forward" size={18} color="#AF2800" />
                   </View>
 
-                  <View style={styles.cardBody}>
-                    <View style={styles.cardIconBox}>
-                      <Ionicons name="business" size={26} color={Colors.accent.primary} />
+                  <View style={styles.choiceBodyRow}>
+                    <View style={styles.choiceIconBox}>
+                      <Ionicons name="business" size={24} color="#AF2800" />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.cardTitle}>I have a Coaching ID</Text>
-                      <Text style={styles.cardDesc}>
-                        Link your coaching institute using Organization Code & Passcode.
+                      <Text style={styles.choiceTitle}>I Have a Coaching ID</Text>
+                      <Text style={styles.choiceDesc}>
+                        Link your profile to unlock your Institute Digital ID Card, batch tests, and attendance.
                       </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.featuresList}>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="checkmark-circle" size={15} color="#16A34A" />
-                      <Text style={styles.featureText}>Digital ID Card & Attendance</Text>
-                    </View>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="checkmark-circle" size={15} color="#16A34A" />
-                      <Text style={styles.featureText}>Batch Tests & Teacher Notes</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
 
-                {/* Option 2: Practice Public Tests */}
+                {/* Option 2: Public Practice */}
                 <TouchableOpacity
-                  style={[styles.selectionCard, { borderColor: '#E0E7FF' }]}
+                  style={[styles.choiceCard, { borderColor: '#E0E7FF' }]}
                   activeOpacity={0.85}
                   onPress={handleStartPublicPractice}
                   disabled={isPublicLoading}
                 >
-                  <View style={styles.cardHeader}>
-                    <View style={[styles.badgeContainer, { backgroundColor: '#E0E7FF' }]}>
-                      <Text style={[styles.badgeText, { color: '#4338CA' }]}>FREE OPEN ACCESS</Text>
+                  <View style={styles.choiceHeaderRow}>
+                    <View style={[styles.choiceBadge, { backgroundColor: '#EEF2FF' }]}>
+                      <Text style={[styles.choiceBadgeText, { color: '#4F46E5' }]}>FREE & OPEN ACCESS</Text>
                     </View>
                     {isPublicLoading ? (
-                      <ActivityIndicator size="small" color="#4338CA" />
+                      <ActivityIndicator size="small" color="#4F46E5" />
                     ) : (
-                      <Ionicons name="rocket" size={18} color="#4338CA" />
+                      <Ionicons name="arrow-forward" size={18} color="#4F46E5" />
                     )}
                   </View>
 
-                  <View style={styles.cardBody}>
-                    <View style={[styles.cardIconBox, { backgroundColor: '#EEF2FF' }]}>
-                      <Ionicons name="sparkles" size={26} color="#4F46E5" />
+                  <View style={styles.choiceBodyRow}>
+                    <View style={[styles.choiceIconBox, { backgroundColor: '#EEF2FF' }]}>
+                      <Ionicons name="planet" size={24} color="#4F46E5" />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.cardTitle}>Practice Public Tests</Text>
-                      <Text style={styles.cardDesc}>
-                        No coaching ID needed. Practice free All-India Mock Exams immediately.
+                      <Text style={styles.choiceTitle}>Practice Public Tests</Text>
+                      <Text style={styles.choiceDesc}>
+                        Independent aspirant? Attempt All-India open mocks, view live leaderboards, and read exam feeds.
                       </Text>
-                    </View>
-                  </View>
-
-                  <View style={styles.featuresList}>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="checkmark-circle" size={15} color="#4F46E5" />
-                      <Text style={styles.featureText}>Free Mock Tests & Speed Drills</Text>
-                    </View>
-                    <View style={styles.featureItem}>
-                      <Ionicons name="checkmark-circle" size={15} color="#4F46E5" />
-                      <Text style={styles.featureText}>Live Leaderboard & Exam Feed</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
               </>
             ) : (
-              // ─── STEP 2: COACHING CREDENTIALS FORM ─────────────────────────
+              // ─── STEP 2: CREDENTIAL FILLING WINDOW (CENTERED) ───────────────
               <>
-                <View style={styles.headerRow}>
-                  <TouchableOpacity
-                    onPress={() => setMode('select')}
-                    style={styles.backBtn}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="arrow-back" size={20} color={Colors.text.primary} />
-                  </TouchableOpacity>
-                  <View style={styles.headerText}>
-                    <Text style={styles.title}>Coaching Credentials</Text>
-                    <Text style={styles.subtitle}>Enter your Institute Code and Passcode</Text>
-                  </View>
-                  <TouchableOpacity onPress={handleClose} style={styles.closeBtn} activeOpacity={0.7}>
-                    <Ionicons name="close" size={20} color={Colors.text.secondary} />
-                  </TouchableOpacity>
+                <View style={styles.cardIconCircle}>
+                  <Ionicons name="card-outline" size={28} color="#AF2800" />
                 </View>
 
-                {/* Organization ID */}
-                <View style={styles.inputSection}>
-                  <Text style={styles.inputLabel}>ORGANIZATION / COACHING CODE</Text>
-                  <View style={styles.inputWrapper}>
-                    <Ionicons name="business" size={18} color={Colors.text.tertiary} style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="e.g. ALPHA-101"
-                      placeholderTextColor={Colors.text.tertiary}
-                      value={businessCode}
-                      onChangeText={setBusinessCode}
-                      autoCapitalize="characters"
-                      autoCorrect={false}
-                    />
-                  </View>
-                </View>
+                <Text style={styles.cardTitle}>Claim Your ID Card</Text>
+                <Text style={styles.cardSubtitle}>
+                  Enter your verification passcode or Aadhaar number to link and activate your digital card.
+                </Text>
 
-                {/* Passcode Toggle & Input */}
-                <View style={styles.inputSection}>
-                  <View style={styles.inputLabelRow}>
-                    <Text style={styles.inputLabel}>
-                      {useAadhaar ? 'LAST 4 DIGITS OF AADHAAR' : 'SECRET PASSCODE'}
-                    </Text>
+                {/* Verification Method Segmented Selector */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputFieldLabel}>Verification Method</Text>
+                  <View style={styles.segmentedToggleRow}>
                     <TouchableOpacity
+                      style={[styles.segmentedTab, !useAadhaar && styles.segmentedTabActive]}
                       onPress={() => {
-                        setUseAadhaar(!useAadhaar);
+                        setUseAadhaar(false);
                         setPasscode('');
                       }}
-                      activeOpacity={0.7}
+                      activeOpacity={0.8}
                     >
-                      <Text style={styles.toggleText}>
-                        {useAadhaar ? 'Use Passcode instead' : 'Use Aadhaar instead'}
+                      <Text style={[styles.segmentedTabText, !useAadhaar && styles.segmentedTabTextActive]}>
+                        Secret Code
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.segmentedTab, useAadhaar && styles.segmentedTabActive]}
+                      onPress={() => {
+                        setUseAadhaar(true);
+                        setPasscode('');
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Text style={[styles.segmentedTabText, useAadhaar && styles.segmentedTabTextActive]}>
+                        Aadhaar Card
                       </Text>
                     </TouchableOpacity>
                   </View>
-
-                  <View style={styles.inputWrapper}>
-                    <Ionicons
-                      name={useAadhaar ? 'finger-print' : 'lock-closed'}
-                      size={18}
-                      color={Colors.text.tertiary}
-                      style={styles.inputIcon}
-                    />
-                    <TextInput
-                      style={styles.input}
-                      placeholder={useAadhaar ? 'e.g. 5678' : 'e.g. ALPHA-789X'}
-                      placeholderTextColor={Colors.text.tertiary}
-                      value={passcode}
-                      onChangeText={setPasscode}
-                      autoCapitalize={useAadhaar ? 'none' : 'characters'}
-                      autoCorrect={false}
-                      keyboardType={useAadhaar ? 'number-pad' : 'default'}
-                      maxLength={useAadhaar ? 4 : 20}
-                      secureTextEntry={useAadhaar}
-                    />
-                  </View>
                 </View>
 
-                {/* Claim Button */}
+                {/* Organization ID */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputFieldLabel}>Organization ID</Text>
+                  <TextInput
+                    style={styles.textInputField}
+                    placeholder="e.g. INST-100"
+                    placeholderTextColor="#9CA3AF"
+                    value={businessCode}
+                    onChangeText={setBusinessCode}
+                    autoCapitalize="characters"
+                    autoCorrect={false}
+                  />
+                </View>
+
+                {/* Secret Passcode or Aadhaar */}
+                <View style={styles.inputGroup}>
+                  <Text style={styles.inputFieldLabel}>
+                    {useAadhaar ? 'Last 4 Digits of Aadhaar' : 'Secret Passcode'}
+                  </Text>
+                  <TextInput
+                    style={styles.textInputField}
+                    placeholder={useAadhaar ? 'e.g. 5678' : 'e.g. A3K9ZP'}
+                    placeholderTextColor="#9CA3AF"
+                    value={passcode}
+                    onChangeText={setPasscode}
+                    autoCapitalize={useAadhaar ? 'none' : 'characters'}
+                    keyboardType={useAadhaar ? 'number-pad' : 'default'}
+                    maxLength={useAadhaar ? 4 : 20}
+                    secureTextEntry={useAadhaar}
+                  />
+                </View>
+
+                {/* Primary Button: Get Virtual ID Card */}
                 <TouchableOpacity
+                  style={styles.primaryBtnWrap}
                   onPress={handleClaim}
-                  activeOpacity={0.8}
+                  activeOpacity={0.85}
                   disabled={isLoading}
-                  style={{ marginTop: 8 }}
                 >
                   <LinearGradient
-                    colors={Gradients.primary as [string, string]}
+                    colors={['#AF2800', '#D9480F']}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 0 }}
-                    style={styles.claimButton}
+                    style={styles.primaryBtnGradient}
                   >
                     {isLoading ? (
                       <ActivityIndicator color="#FFFFFF" />
                     ) : (
-                      <>
-                        <Ionicons name="checkmark-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                        <Text style={styles.claimButtonText}>Verify & Link Profile</Text>
-                      </>
+                      <Text style={styles.primaryBtnText}>Get Virtual ID Card</Text>
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* Fallback to Public Practice */}
+                {/* Link to switch to public practice */}
                 <TouchableOpacity
                   onPress={handleStartPublicPractice}
-                  style={styles.switchOptionBtn}
+                  style={styles.secondaryLinkBtn}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.switchOptionText}>
-                    Don't have coaching credentials? <Text style={{ fontWeight: '800', color: Colors.accent.primary }}>Practice Public Tests</Text>
+                  <Text style={styles.secondaryLinkText}>
+                    Don't have coaching credentials?{' '}
+                    <Text style={{ fontWeight: '800', color: '#AF2800' }}>Practice Public Tests</Text>
                   </Text>
                 </TouchableOpacity>
               </>
             )}
-          </ScrollView>
-        </View>
+          </View>
+        </ScrollView>
       </KeyboardAvoidingView>
-    </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  overlay: {
+  container: {
     flex: 1,
-    backgroundColor: 'transparent',
-    justifyContent: 'flex-end',
+    backgroundColor: '#FAFAFA',
   },
-  backdrop: {
-    ...StyleSheet.absoluteFill,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  sheetContainer: {
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: Colors.bg.primary,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: SCREEN_HEIGHT * 0.85,
-    ...Shadows.md,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingBottom: Platform.OS === 'ios' ? 40 : 24,
-  },
-  handleBar: {
-    alignItems: 'center',
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  handle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: Colors.card.border,
-  },
-  headerRow: {
+  headerBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 18,
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
   },
-  iconWrap: {},
-  iconGradient: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+  headerIconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: Colors.bg.secondary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 19,
-    fontWeight: '800',
-    color: Colors.text.primary,
-  },
-  subtitle: {
-    fontSize: 12,
-    color: Colors.text.secondary,
-    marginTop: 2,
-    lineHeight: 16,
-    fontWeight: '500',
-  },
-  closeBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: Colors.bg.secondary,
-    justifyContent: 'center',
-    alignItems: 'center',
+  headerBrandTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#AF2800',
+    letterSpacing: 0.5,
   },
 
-  // Categorization Selection Cards
-  selectionCard: {
+  centerWrapper: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+  },
+
+  // Centered Floating Card
+  centeredCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    width: '100%',
+    maxWidth: 440,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+
+  cardIconCircle: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FFE2DB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  cardTitle: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  cardSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+    paddingHorizontal: 8,
+  },
+
+  // Method Segmented Row
+  inputGroup: {
+    marginBottom: 16,
+    width: '100%',
+  },
+  inputFieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  segmentedToggleRow: {
+    flexDirection: 'row',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  segmentedTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  segmentedTabActive: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#AF2800',
+    ...Shadows.sm,
+  },
+  segmentedTabText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  segmentedTabTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+
+  // Input Field
+  textInputField: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    paddingHorizontal: 14,
+    height: 48,
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#111827',
+  },
+
+  // Primary Button
+  primaryBtnWrap: {
+    marginTop: 8,
+    borderRadius: 14,
+    overflow: 'hidden',
+    shadowColor: '#AF2800',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  primaryBtnGradient: {
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  primaryBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+
+  // Secondary Link
+  secondaryLinkBtn: {
+    marginTop: 18,
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  secondaryLinkText: {
+    fontSize: 12,
+    color: '#6B7280',
+    textAlign: 'center',
+  },
+
+  // Selection Card Styles
+  choiceCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 18,
     borderWidth: 1.5,
@@ -570,124 +639,44 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     ...Shadows.sm,
   },
-  cardHeader: {
+  choiceHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
   },
-  badgeContainer: {
+  choiceBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
   },
-  badgeText: {
+  choiceBadgeText: {
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  cardBody: {
+  choiceBodyRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 12,
   },
-  cardIconBox: {
-    width: 46,
-    height: 46,
+  choiceIconBox: {
+    width: 44,
+    height: 44,
     borderRadius: 14,
     backgroundColor: '#FFF1F2',
     justifyContent: 'center',
     alignItems: 'center',
   },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: Colors.text.primary,
-    marginBottom: 3,
-  },
-  cardDesc: {
-    fontSize: 12,
-    color: Colors.text.secondary,
-    lineHeight: 16,
-  },
-  featuresList: {
-    borderTopWidth: 1,
-    borderTopColor: '#F3F4F6',
-    paddingTop: 10,
-    gap: 6,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-  },
-  featureText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#4B5563',
-  },
-
-  // Inputs
-  inputSection: {
-    marginBottom: 14,
-  },
-  inputLabelRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  inputLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.text.primary,
-    marginBottom: 6,
-    letterSpacing: 0.3,
-  },
-  toggleText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.accent.primary,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.bg.secondary,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
-    paddingHorizontal: 12,
-    height: 48,
-  },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.text.primary,
-    fontWeight: '600',
-  },
-  claimButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    borderRadius: 14,
-    ...Shadows.md,
-  },
-  claimButtonText: {
-    color: '#FFFFFF',
+  choiceTitle: {
     fontSize: 15,
     fontWeight: '800',
+    color: '#111827',
+    marginBottom: 3,
   },
-  switchOptionBtn: {
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  switchOptionText: {
+  choiceDesc: {
     fontSize: 12,
-    color: Colors.text.secondary,
+    color: '#6B7280',
+    lineHeight: 16,
   },
 });
