@@ -331,7 +331,7 @@ export default function StudentStudentIDCardScreen() {
     course: activeStudent.course || 'General',
     enrollmentId: activeStudent.enrollment_id,
     phone: activeStudent.phone || 'Not Set',
-    coachingName: businessName || 'Zenza Coaching',
+    coachingName: businessName || 'MockS Coaching',
     qrValue: `KF-${activeStudent.id}-${activeStudent.enrollment_id}`,
     feeAmount: Number(activeStudent.fee_amount || 0),
     feeStatus: (activeStudent.fee_status || 'unpaid') as 'paid' | 'unpaid' | 'overdue',
@@ -684,7 +684,7 @@ export default function StudentStudentIDCardScreen() {
           {/* Top Header Bar */}
           <View style={styles.header}>
             <View style={{ width: 42 }} />
-            <Text style={styles.headerTitle}>Zenza</Text>
+            <Text style={styles.headerTitle}>MockS</Text>
             <TouchableOpacity 
               style={styles.bellButton} 
               activeOpacity={0.7}
@@ -842,7 +842,7 @@ export default function StudentStudentIDCardScreen() {
               </View>
             )}
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Zenza</Text>
+          <Text style={styles.headerTitle}>MockS</Text>
           <TouchableOpacity
             style={styles.publicSwitchHeaderBtn}
             activeOpacity={0.8}

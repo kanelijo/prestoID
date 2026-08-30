@@ -249,15 +249,9 @@ export default function ClaimProfileScreen() {
           </TouchableOpacity>
         )}
 
-        <Text style={styles.headerBrandTitle}>Zenza</Text>
+        <Text style={styles.headerBrandTitle}>MockS</Text>
 
-        <TouchableOpacity
-          style={styles.headerIconBtn}
-          onPress={handleClose}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="log-out-outline" size={22} color="#6B7280" />
-        </TouchableOpacity>
+        <View style={{ width: 38 }} />
       </View>
 
       <KeyboardAvoidingView

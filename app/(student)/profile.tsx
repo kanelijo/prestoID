@@ -11,6 +11,7 @@ import {
   Alert,
   RefreshControl,
   Image,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -60,6 +61,55 @@ const INDIAN_STATES = [
   'Other State',
 ];
 
+interface VaultItem {
+  id: string;
+  name: string;
+  category: 'FEED DOWNLOAD' | 'MOCK PAPER' | 'STRATEGY NOTES';
+  fileName: string;
+  size: string;
+  date: string;
+  url?: string;
+}
+
+const DEFAULT_VAULT_ITEMS: VaultItem[] = [
+  {
+    id: 'v1',
+    name: 'MPPSC State Service 2026 — Official Notification & Rules',
+    category: 'FEED DOWNLOAD',
+    fileName: 'MPPSC_2026_Official_Gazette.pdf',
+    size: '2.4 MB',
+    date: 'Today, 09:30 AM',
+    url: 'https://mppsc.mp.gov.in',
+  },
+  {
+    id: 'v2',
+    name: 'JEE Main Physics — Mechanics & Rotational Formula Sheet',
+    category: 'STRATEGY NOTES',
+    fileName: 'JEE_Main_Physics_Formulas_2026.pdf',
+    size: '1.8 MB',
+    date: 'Yesterday, 04:15 PM',
+    url: 'https://jeemain.nta.nic.in',
+  },
+  {
+    id: 'v3',
+    name: 'All-India Full Length Mock Test 01 (Solved Offline Paper)',
+    category: 'MOCK PAPER',
+    fileName: 'MockS_Full_Length_Mock_01.pdf',
+    size: '3.1 MB',
+    date: '28 Aug 2026',
+    url: 'https://jeemain.nta.nic.in',
+  },
+  {
+    id: 'v4',
+    name: 'State Budget & Welfare Schemes Monthly Capsule',
+    category: 'FEED DOWNLOAD',
+    fileName: 'Current_Affairs_State_Capsule_Aug26.pdf',
+    size: '1.2 MB',
+    date: '27 Aug 2026',
+    url: 'https://mp.gov.in',
+  },
+];
+
 export default function StudentProfileScreen() {
   const router = useRouter();
   const { user, reset, activeEnvironment, setActiveEnvironment, businessId, businessName } = useAuthStore();
@@ -82,6 +132,11 @@ export default function StudentProfileScreen() {
   const [isExamModalVisible, setIsExamModalVisible] = useState(false);
   const [isStateModalVisible, setIsStateModalVisible] = useState(false);
   const [activeCategory, setActiveCategory] = useState('Govt');
+
+  // Device Storage Vault States
+  const [isVaultModalVisible, setIsVaultModalVisible] = useState(false);
+  const [vaultFilter, setVaultFilter] = useState<'ALL' | 'FEED' | 'MOCK' | 'NOTES'>('ALL');
+  const [vaultItems] = useState<VaultItem[]>(DEFAULT_VAULT_ITEMS);
 
   // Stats
   const [testsAttemptedCount, setTestsAttemptedCount] = useState(4);
@@ -311,10 +366,6 @@ export default function StudentProfileScreen() {
           <Text style={styles.headerTitle}>Student Profile & Goals</Text>
           <Text style={styles.headerSubtitle}>Personal settings & target exam hub</Text>
         </View>
-
-        <TouchableOpacity onPress={handleLogout} style={styles.logoutHeaderBtn} activeOpacity={0.7}>
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -433,18 +484,34 @@ export default function StudentProfileScreen() {
           </View>
         </View>
 
-        {/* Local Storage Info Card (Mocks Folder) */}
+        {/* Local Storage Vault Card (Mocks Folder) */}
         <View style={styles.cardSection}>
-          <Text style={styles.sectionHeading}>DEVICE STORAGE VAULT</Text>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionHeading}>DEVICE STORAGE VAULT</Text>
+            <View style={styles.vaultBadgePill}>
+              <Ionicons name="folder-open" size={11} color="#AF2800" />
+              <Text style={styles.vaultBadgeText}>4 OFFLINE FILES</Text>
+            </View>
+          </View>
 
-          <View style={styles.storageCard}>
+          <TouchableOpacity
+            style={styles.storageCard}
+            activeOpacity={0.85}
+            onPress={() => setIsVaultModalVisible(true)}
+          >
             <View style={styles.storageHeaderRow}>
               <View style={styles.storageIconBox}>
-                <Ionicons name="folder-open" size={20} color="#AF2800" />
+                <Ionicons name="folder-open" size={22} color="#AF2800" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.storageTitle}>Main Internal Storage / Mocks</Text>
-                <Text style={styles.storageSubtitle}>Offline question papers and PDF sheets are saved here.</Text>
+                <Text style={styles.storageSubtitle}>
+                  View all offline mock test papers, feed downloads & strategy notes.
+                </Text>
+              </View>
+              <View style={styles.storageChevronBox}>
+                <Text style={styles.browseVaultText}>Open</Text>
+                <Ionicons name="chevron-forward" size={16} color="#AF2800" />
               </View>
             </View>
 
@@ -452,7 +519,7 @@ export default function StudentProfileScreen() {
               <View style={styles.greenDot} />
               <Text style={styles.statusPillText}>Ready & Indexed by Phone File Manager</Text>
             </View>
-          </View>
+          </TouchableOpacity>
         </View>
 
         {/* Workspace Switcher Card */}
@@ -533,7 +600,7 @@ export default function StudentProfileScreen() {
           <Text style={styles.signOutText}>Sign Out of Account</Text>
         </TouchableOpacity>
 
-        <Text style={styles.appFooterText}>Mocks • Student Experience v3.0</Text>
+        <Text style={styles.appFooterText}>MockS • Student Experience v3.0</Text>
       </ScrollView>
 
       {/* ─── TARGET EXAM PICKER MODAL ────────────────────────────────────── */}
@@ -655,6 +722,155 @@ export default function StudentProfileScreen() {
                   </TouchableOpacity>
                 );
               })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── DEVICE STORAGE VAULT MODAL ─────────────────────────────────── */}
+      <Modal
+        visible={isVaultModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsVaultModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { maxHeight: '88%' }]}>
+            <View style={styles.modalHandleBar}>
+              <View style={styles.modalHandle} />
+            </View>
+
+            {/* Modal Header */}
+            <View style={styles.modalHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                <View style={styles.vaultIconCircle}>
+                  <Ionicons name="folder-open" size={20} color="#AF2800" />
+                </View>
+                <View>
+                  <Text style={styles.modalTitle}>Device Storage Vault</Text>
+                  <Text style={styles.modalSubtitle}>Files saved via MockS to phone internal storage</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setIsVaultModalVisible(false)}
+              >
+                <Ionicons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Location Banner */}
+            <View style={styles.vaultPathBanner}>
+              <Ionicons name="hardware-chip-outline" size={16} color="#AF2800" />
+              <Text style={styles.vaultPathText}>Internal Storage &gt; Mocks</Text>
+              <View style={styles.vaultSyncPill}>
+                <View style={styles.greenDot} />
+                <Text style={styles.vaultSyncText}>Indexed</Text>
+              </View>
+            </View>
+
+            {/* Vault Filter Chips */}
+            <View style={styles.vaultFilterRow}>
+              {[
+                { id: 'ALL', label: 'All Files (4)' },
+                { id: 'FEED', label: 'Feed Downloads' },
+                { id: 'MOCK', label: 'Mock Papers' },
+                { id: 'NOTES', label: 'Strategy Notes' },
+              ].map((f) => {
+                const isActive = vaultFilter === f.id;
+                return (
+                  <TouchableOpacity
+                    key={f.id}
+                    style={[styles.vaultFilterChip, isActive && styles.vaultFilterChipActive]}
+                    onPress={() => setVaultFilter(f.id as any)}
+                  >
+                    <Text style={[styles.vaultFilterText, isActive && styles.vaultFilterTextActive]}>
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* File Items List */}
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+              {vaultItems
+                .filter((item) => {
+                  if (vaultFilter === 'FEED') return item.category === 'FEED DOWNLOAD';
+                  if (vaultFilter === 'MOCK') return item.category === 'MOCK PAPER';
+                  if (vaultFilter === 'NOTES') return item.category === 'STRATEGY NOTES';
+                  return true;
+                })
+                .map((item) => (
+                  <View key={item.id} style={styles.vaultFileCard}>
+                    <View style={styles.vaultFileIconBox}>
+                      <Ionicons
+                        name={
+                          item.category === 'MOCK PAPER'
+                            ? 'document-text'
+                            : item.category === 'STRATEGY NOTES'
+                            ? 'bulb'
+                            : 'newspaper'
+                        }
+                        size={22}
+                        color="#AF2800"
+                      />
+                    </View>
+
+                    <View style={{ flex: 1 }}>
+                      <View style={styles.vaultCategoryRow}>
+                        <View
+                          style={[
+                            styles.vaultCategoryBadge,
+                            item.category === 'MOCK PAPER'
+                              ? { backgroundColor: '#FEE2E2' }
+                              : item.category === 'STRATEGY NOTES'
+                              ? { backgroundColor: '#FEF3C7' }
+                              : { backgroundColor: '#E0E7FF' },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.vaultCategoryBadgeText,
+                              item.category === 'MOCK PAPER'
+                                ? { color: '#B91C1C' }
+                                : item.category === 'STRATEGY NOTES'
+                                ? { color: '#B45309' }
+                                : { color: '#4338CA' },
+                            ]}
+                          >
+                            {item.category}
+                          </Text>
+                        </View>
+                        <Text style={styles.vaultFileSize}>{item.size}</Text>
+                      </View>
+
+                      <Text style={styles.vaultFileName}>{item.name}</Text>
+                      <Text style={styles.vaultFilePhysical}>
+                        {item.fileName} • {item.date}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={styles.vaultOpenBtn}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        if (item.url) Linking.openURL(item.url).catch(() => {});
+                      }}
+                    >
+                      <Ionicons name="eye-outline" size={15} color="#AF2800" />
+                      <Text style={styles.vaultOpenBtnText}>Open</Text>
+                    </TouchableOpacity>
+                  </View>
+                ))}
+
+              <View style={styles.vaultNoticeBox}>
+                <Ionicons name="information-circle-outline" size={18} color="#4B5563" style={{ marginRight: 8 }} />
+                <Text style={styles.vaultNoticeText}>
+                  All downloaded tests, question papers and feed strategy articles are physically stored in the device's main Mocks folder and remain accessible even without an internet connection.
+                </Text>
+              </View>
             </ScrollView>
           </View>
         </View>
@@ -986,6 +1202,190 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#16A34A',
     fontWeight: '700',
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  vaultBadgePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    gap: 4,
+  },
+  vaultBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#AF2800',
+    letterSpacing: 0.4,
+  },
+  storageChevronBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  browseVaultText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#AF2800',
+  },
+
+  // Vault Modal Specific Styles
+  vaultIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#FFE2DB',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  vaultPathBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    marginHorizontal: 16,
+    marginBottom: 12,
+    gap: 6,
+  },
+  vaultPathText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+  },
+  vaultSyncPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    gap: 4,
+  },
+  vaultSyncText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#16A34A',
+  },
+  vaultFilterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    marginBottom: 12,
+    gap: 8,
+  },
+  vaultFilterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  vaultFilterChipActive: {
+    backgroundColor: '#FFE2DB',
+    borderColor: '#AF2800',
+  },
+  vaultFilterText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6B7280',
+  },
+  vaultFilterTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+  vaultFileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    marginHorizontal: 16,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    gap: 12,
+    ...Shadows.sm,
+  },
+  vaultFileIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#FFF1F2',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  vaultCategoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 3,
+  },
+  vaultCategoryBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  vaultCategoryBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  vaultFileSize: {
+    fontSize: 10,
+    color: '#9CA3AF',
+    fontWeight: '600',
+  },
+  vaultFileName: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+    lineHeight: 17,
+    marginBottom: 2,
+  },
+  vaultFilePhysical: {
+    fontSize: 10,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  vaultOpenBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  vaultOpenBtnText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#AF2800',
+  },
+  vaultNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  vaultNoticeText: {
+    flex: 1,
+    fontSize: 11,
+    color: '#6B7280',
+    lineHeight: 16,
   },
 
   // Coaching Switch Card

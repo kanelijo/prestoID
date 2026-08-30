@@ -361,9 +361,9 @@ export default function LoginScreen() {
           {/* Header Branding */}
           <View style={styles.brandingSection}>
             <View style={styles.logoIcon}>
-              <Text style={styles.logoLetter}>Z</Text>
+              <Text style={styles.logoLetter}>M</Text>
             </View>
-            <Text style={styles.brandName}>Zenza</Text>
+            <Text style={styles.brandName}>MockS</Text>
             <Text style={styles.brandTagline}>
               {role === 'admin' ? 'Institute Administration Portal' : 'Student & Learning Portal'}
             </Text>
@@ -493,7 +493,7 @@ export default function LoginScreen() {
 
           {/* Footer */}
           <Text style={styles.footerNote}>
-            By continuing, you agree to Zenza's Terms & Privacy Policy
+            By continuing, you agree to MockS's Terms & Privacy Policy
           </Text>
         </View>
       </LinearGradient>

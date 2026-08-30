@@ -129,9 +129,9 @@ export default function ResetPasswordScreen() {
         {/* Branding */}
         <View style={styles.brandingSection}>
           <View style={styles.logoIcon}>
-            <Text style={styles.logoLetter}>Z</Text>
+            <Text style={styles.logoLetter}>M</Text>
           </View>
-          <Text style={styles.brandName}>Zenza</Text>
+          <Text style={styles.brandName}>MockS</Text>
         </View>
 
         {/* Heading */}

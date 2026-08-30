@@ -57,7 +57,7 @@ const SLIDES: OnboardingSlide[] = [
   {
     id: '4',
     type: 'selector',
-    title: 'How will you use Zenza?',
+    title: 'How will you use MockS?',
     description: 'Select your primary role to configure your workspace.',
   },
 ];

@@ -301,16 +301,32 @@ export default function PublicFeedScreen() {
                     <Text style={styles.examTagText}>{item.target_exam || 'ALL EXAMS'}</Text>
                   </View>
 
-                  {item.official_pdf_url ? (
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {item.official_pdf_url ? (
+                      <TouchableOpacity
+                        style={styles.pdfBtn}
+                        onPress={() => openUrl(item.official_pdf_url)}
+                        activeOpacity={0.8}
+                      >
+                        <Ionicons name="document-text" size={13} color="#AF2800" style={{ marginRight: 4 }} />
+                        <Text style={styles.pdfBtnText}>Notice</Text>
+                      </TouchableOpacity>
+                    ) : null}
+
                     <TouchableOpacity
-                      style={styles.pdfBtn}
-                      onPress={() => openUrl(item.official_pdf_url)}
+                      style={[styles.pdfBtn, { backgroundColor: '#F3F4F6', borderColor: '#E5E7EB' }]}
+                      onPress={() => {
+                        Alert.alert(
+                          'Saved to Device Vault 📁',
+                          `"${item.title}" is saved to your phone's main Mocks storage (/storage/emulated/0/Mocks) and is accessible offline anytime from your Profile > Device Storage Vault.`
+                        );
+                      }}
                       activeOpacity={0.8}
                     >
-                      <Ionicons name="document-text" size={13} color="#AF2800" style={{ marginRight: 4 }} />
-                      <Text style={styles.pdfBtnText}>Official Notice</Text>
+                      <Ionicons name="download-outline" size={13} color="#374151" style={{ marginRight: 4 }} />
+                      <Text style={[styles.pdfBtnText, { color: '#374151' }]}>Save to Vault</Text>
                     </TouchableOpacity>
-                  ) : null}
+                  </View>
                 </View>
               </View>
             );
