@@ -26,18 +26,25 @@ import { supabase } from '@/lib/supabase';
 import { signOutAll } from '@/lib/authActions';
 
 const EXAM_CATEGORIES: Record<string, string[]> = {
-  'Government Recruitment': [
+  'Govt': [
     'MPPSC',
-    'MP Police (SI/Constable)',
-    'MP Patwari',
-    'SSC CGL / CHSL',
-    'Railway (NTPC/Group D)',
-    'Banking (IBPS/SBI)',
-    'UPSC Civil Services',
+    'MP POLICE',
+    'MP PATWARI',
+    'SSC CGL/CHSL',
+    'RAILWAY [NTPC/GROUP D]',
+    'BANKING [IBPS/SBI]',
+    'UPSC',
   ],
-  'Engineering Entrance': ['JEE Main', 'JEE Advanced', 'GATE'],
-  'Medical Entrance': ['NEET UG', 'NEET PG'],
-  'Central & Law': ['CUET (UG/PG)', 'CLAT', 'CAT'],
+  'Engineering Entrance': ['JEE Main', 'JEE Advanced', 'GATE', 'BITSAT'],
+  'Medical Entrance': ['NEET UG', 'NEET PG', 'AIIMS'],
+  'Central & Law': ['CUET [UG/PG]', 'CLAT', 'CAT'],
+  'Boards Exam': [
+    'Class 12th PCM',
+    'Class 12th PCB',
+    'Class 12th Commerce',
+    'Class 12th Arts',
+    'Class 10th Board',
+  ],
 };
 
 const INDIAN_STATES = [
@@ -74,7 +81,7 @@ export default function StudentProfileScreen() {
   const [selectedState, setSelectedState] = useState('Madhya Pradesh');
   const [isExamModalVisible, setIsExamModalVisible] = useState(false);
   const [isStateModalVisible, setIsStateModalVisible] = useState(false);
-  const [activeCategory, setActiveCategory] = useState('Government Recruitment');
+  const [activeCategory, setActiveCategory] = useState('Govt');
 
   // Stats
   const [testsAttemptedCount, setTestsAttemptedCount] = useState(4);

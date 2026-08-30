@@ -23,6 +23,7 @@ import { APP_CONFIG } from '@/constants/config';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { usePrefetchStore } from '@/stores/usePrefetchStore';
+import { BOARD_STREAMS } from '@/constants/examCategories';
 
 type ServiceType = 'Coaching' | 'Library' | 'School' | 'College' | 'Hostel';
 
@@ -46,16 +47,26 @@ export default function CreateInstituteScreen() {
   const [showServiceDropdown, setShowServiceDropdown] = useState(false);
 
   // Dynamic Metadata States
-  // 1. Coaching Center Details
+  // 1. Coaching Center Details - Synchronized with all 3 panels
   const EXAM_CATEGORIES: Record<string, string[]> = {
-    'Government': ['UPSC', 'MPPSC', 'SSC', 'Banking', 'Railway', 'VYAPAM'],
-    'Medical': ['NEET UG', 'NEET PG', 'AIIMS', 'Nursing'],
-    'Engineering': ['JEE Main', 'JEE Advanced', 'BITSAT', 'State CET'],
-    'Board': ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'English', 'Commerce', 'Arts'],
+    'Govt': [
+      'MPPSC',
+      'MP POLICE',
+      'MP PATWARI',
+      'SSC CGL/CHSL',
+      'RAILWAY [NTPC/GROUP D]',
+      'BANKING [IBPS/SBI]',
+      'UPSC',
+    ],
+    'Engineering Entrance': ['JEE Main', 'JEE Advanced', 'GATE', 'BITSAT'],
+    'Medical Entrance': ['NEET UG', 'NEET PG', 'AIIMS'],
+    'Central & Law': ['CUET [UG/PG]', 'CLAT', 'CAT'],
+    'Boards Exam': Object.keys(BOARD_STREAMS),
   };
   const SHIFT_OPTIONS = ['Morning (8 AM - 1 PM)', 'Evening (3 PM - 8 PM)', 'Full Day', 'Flexible Time'];
 
-  const [coachingCategory, setCoachingCategory] = useState('Government');
+  const [coachingCategory, setCoachingCategory] = useState('Govt');
+  const [selectedBoardStream, setSelectedBoardStream] = useState<string>('Class 12th - Science (PCM)');
   const [coachingSubExams, setCoachingSubExams] = useState<string[]>([]);
   const [coachingShifts, setCoachingShifts] = useState<string[]>(['Flexible Time']);
   // 2. Library Details
@@ -486,29 +497,82 @@ export default function CreateInstituteScreen() {
                   </View>
                 </View>
 
-                <View style={[styles.inputContainer, { marginTop: 14 }]}>
-                  <Text style={styles.inputLabel}>Sub-Exams (Select multiple)</Text>
-                  <View style={styles.chipRow}>
-                    {EXAM_CATEGORIES[coachingCategory].map((subExam) => {
-                      const isSelected = coachingSubExams.includes(subExam);
-                      return (
-                        <TouchableOpacity
-                          key={subExam}
-                          style={[styles.chip, isSelected && styles.chipActive]}
-                          onPress={() => {
-                            setCoachingSubExams((prev) => 
-                              isSelected 
-                                ? prev.filter(item => item !== subExam)
-                                : [...prev, subExam]
-                            );
-                          }}
-                        >
-                          <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>{subExam}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+                {coachingCategory === 'Boards Exam' ? (
+                  <>
+                    <View style={[styles.inputContainer, { marginTop: 14 }]}>
+                      <Text style={styles.inputLabel}>Board Stream / Class</Text>
+                      <View style={styles.chipRow}>
+                        {Object.keys(BOARD_STREAMS).map((streamKey) => {
+                          const isSelected = selectedBoardStream === streamKey;
+                          return (
+                            <TouchableOpacity
+                              key={streamKey}
+                              style={[styles.chip, isSelected && styles.chipActive]}
+                              onPress={() => {
+                                setSelectedBoardStream(streamKey);
+                                setCoachingSubExams([]);
+                              }}
+                            >
+                              <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                                {streamKey}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+
+                    <View style={[styles.inputContainer, { marginTop: 14 }]}>
+                      <Text style={styles.inputLabel}>Subjects (Select multiple)</Text>
+                      <View style={styles.chipRow}>
+                        {(BOARD_STREAMS[selectedBoardStream]?.subjects || []).map((subject) => {
+                          const isSelected = coachingSubExams.includes(subject);
+                          return (
+                            <TouchableOpacity
+                              key={subject}
+                              style={[styles.chip, isSelected && styles.chipActive]}
+                              onPress={() => {
+                                setCoachingSubExams((prev) =>
+                                  isSelected
+                                    ? prev.filter((item) => item !== subject)
+                                    : [...prev, subject]
+                                );
+                              }}
+                            >
+                              <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>
+                                {subject}
+                              </Text>
+                            </TouchableOpacity>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <View style={[styles.inputContainer, { marginTop: 14 }]}>
+                    <Text style={styles.inputLabel}>Sub-Exams (Select multiple)</Text>
+                    <View style={styles.chipRow}>
+                      {(EXAM_CATEGORIES[coachingCategory] || []).map((subExam) => {
+                        const isSelected = coachingSubExams.includes(subExam);
+                        return (
+                          <TouchableOpacity
+                            key={subExam}
+                            style={[styles.chip, isSelected && styles.chipActive]}
+                            onPress={() => {
+                              setCoachingSubExams((prev) => 
+                                isSelected 
+                                  ? prev.filter(item => item !== subExam)
+                                  : [...prev, subExam]
+                              );
+                            }}
+                          >
+                            <Text style={[styles.chipText, isSelected && styles.chipTextActive]}>{subExam}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
                   </View>
-                </View>
+                )}
 
                 <View style={[styles.inputContainer, { marginTop: 14 }]}>
                   <Text style={styles.inputLabel}>Coaching Shifts (Select multiple)</Text>
