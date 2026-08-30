@@ -15,7 +15,6 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
-import { scraperSupabase } from '@/lib/scraperSupabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 interface Exam {
@@ -71,7 +70,7 @@ export default function TargetExamAdminScreen() {
   const fetchScrapedData = async () => {
     try {
       setIsScraping(true);
-      const { data: cats, error: catError } = await scraperSupabase
+      const { data: cats, error: catError } = await supabase
         .from('scraped_exam_categories')
         .select('*')
         .order('name');
@@ -81,7 +80,7 @@ export default function TargetExamAdminScreen() {
       
       if (cats && cats.length > 0) {
         const catIds = cats.map((c: any) => c.id);
-        const { data: examsData, error: examError } = await scraperSupabase
+        const { data: examsData, error: examError } = await supabase
           .from('scraped_exams')
           .select('*')
           .in('category_id', catIds)

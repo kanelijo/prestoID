@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
   RefreshControl,
   Image,
   Linking,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -25,6 +26,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { supabase } from '@/lib/supabase';
 import { signOutAll } from '@/lib/authActions';
+import { getAllIndianStates, getCitiesForState } from '@/constants/indiaLocations';
 
 const EXAM_CATEGORIES: Record<string, string[]> = {
   'Govt': [
@@ -48,18 +50,7 @@ const EXAM_CATEGORIES: Record<string, string[]> = {
   ],
 };
 
-const INDIAN_STATES = [
-  'Madhya Pradesh',
-  'Uttar Pradesh',
-  'Rajasthan',
-  'Bihar',
-  'Delhi',
-  'Maharashtra',
-  'Chhattisgarh',
-  'Gujarat',
-  'Haryana',
-  'Other State',
-];
+const INDIAN_STATES = getAllIndianStates();
 
 interface VaultItem {
   id: string;
@@ -119,6 +110,7 @@ export default function StudentProfileScreen() {
 
   // Student details
   const [studentName, setStudentName] = useState('Public Aspirant');
+  const [studentCity, setStudentCity] = useState('Indore');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
@@ -126,11 +118,32 @@ export default function StudentProfileScreen() {
   const [hasCoachingLinked, setHasCoachingLinked] = useState(false);
   const [coachingTitle, setCoachingTitle] = useState('My Coaching');
 
+  // Edit Profile States
+  const [isEditProfileModalVisible, setIsEditProfileModalVisible] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editCity, setEditCity] = useState('');
+  const [editState, setEditState] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  const openEditProfile = () => {
+    setEditName(studentName);
+    setEditCity(studentCity);
+    setEditState(selectedState);
+    setEditPhone(phone);
+    setEditEmail(email);
+    setIsEditProfileModalVisible(true);
+  };
+
   // Gate of Target Exam Settings
   const [targetExam, setTargetExam] = useState('MPPSC');
   const [selectedState, setSelectedState] = useState('Madhya Pradesh');
   const [isExamModalVisible, setIsExamModalVisible] = useState(false);
   const [isStateModalVisible, setIsStateModalVisible] = useState(false);
+  const [stateSearchQuery, setStateSearchQuery] = useState('');
+  const [isCityModalVisible, setIsCityModalVisible] = useState(false);
+  const [citySearchQuery, setCitySearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('Govt');
 
   // Device Storage Vault States
@@ -138,10 +151,17 @@ export default function StudentProfileScreen() {
   const [vaultFilter, setVaultFilter] = useState<'ALL' | 'FEED' | 'MOCK' | 'NOTES'>('ALL');
   const [vaultItems] = useState<VaultItem[]>(DEFAULT_VAULT_ITEMS);
 
-  // Stats
+  // Stats & Dynamic Rank Scope (All-India, State, City)
   const [testsAttemptedCount, setTestsAttemptedCount] = useState(4);
   const [averageScore, setAverageScore] = useState(154);
   const [currentRank, setCurrentRank] = useState('#24');
+  const [rankScope, setRankScope] = useState<'india' | 'state' | 'city'>('state');
+
+  const displayedRank = useMemo(() => {
+    if (rankScope === 'india') return { rank: '#142', label: 'All India Rank' };
+    if (rankScope === 'city') return { rank: '#06', label: `${studentCity} Rank` };
+    return { rank: currentRank || '#24', label: `${selectedState} Rank` };
+  }, [rankScope, currentRank, studentCity, selectedState]);
 
   const loadProfile = useCallback(async () => {
     if (!user?.id) return;
@@ -174,6 +194,7 @@ export default function StudentProfileScreen() {
 
       if (pubData) {
         setStudentName(pubData.name || 'Public Aspirant');
+        setStudentCity(pubData.city || 'Indore');
         setEmail(pubData.email || user.email || '');
         setPhone(pubData.phone || '');
         setTargetExam(pubData.target_exam || 'MPPSC');
@@ -190,6 +211,7 @@ export default function StudentProfileScreen() {
 
         if (prof) {
           setStudentName(prof.name || prof.full_name || 'Public Aspirant');
+          setStudentCity(prof.city || 'Indore');
           setEmail(prof.email || user.email || '');
           setPhone(prof.phone || '');
           setTargetExam(prof.target_exam || 'MPPSC');
@@ -313,22 +335,131 @@ export default function StudentProfileScreen() {
 
   const handleSelectState = async (stateName: string) => {
     setSelectedState(stateName);
+    const cities = getCitiesForState(stateName);
+    const updatedCity = cities.includes(studentCity) ? studentCity : cities[0] || 'Indore';
+    setStudentCity(updatedCity);
     setIsStateModalVisible(false);
+    setStateSearchQuery('');
 
     try {
       if (user?.id) {
         await supabase
           .from('public_students')
-          .upsert({ user_id: user.id, state: stateName, name: studentName }, { onConflict: 'user_id' });
+          .upsert({ user_id: user.id, state: stateName, city: updatedCity, name: studentName }, { onConflict: 'user_id' });
 
         await supabase
           .from('profiles')
-          .update({ address: stateName })
+          .update({ address: stateName, city: updatedCity })
           .eq('id', user.id);
       }
       await AsyncStorage.setItem('@student_state', stateName);
+      await AsyncStorage.setItem('@student_city', updatedCity);
     } catch (e) {
       console.log('[Profile] Update state notice:', e);
+    }
+  };
+
+  const handleSelectCity = async (cityName: string) => {
+    setStudentCity(cityName);
+    setEditCity(cityName);
+    setIsCityModalVisible(false);
+    setCitySearchQuery('');
+
+    try {
+      if (user?.id) {
+        await supabase
+          .from('public_students')
+          .upsert({ user_id: user.id, city: cityName, state: selectedState, name: studentName }, { onConflict: 'user_id' });
+
+        await supabase
+          .from('profiles')
+          .update({ city: cityName })
+          .eq('id', user.id);
+      }
+      await AsyncStorage.setItem('@student_city', cityName);
+    } catch (e) {
+      console.log('[Profile] Update city notice:', e);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!editName.trim()) {
+      Alert.alert('Required Field', 'Please enter your full name.');
+      return;
+    }
+
+    try {
+      setIsSavingProfile(true);
+
+      const newName = editName.trim();
+      const newCity = editCity.trim() || 'Indore';
+      const newState = editState || selectedState || 'Madhya Pradesh';
+      const newPhone = editPhone.trim();
+      const newEmail = editEmail.trim();
+
+      // 1. Optimistic UI update
+      setStudentName(newName);
+      setStudentCity(newCity);
+      setSelectedState(newState);
+      setPhone(newPhone);
+      setEmail(newEmail);
+      setIsEditProfileModalVisible(false);
+
+      // 2. Persist locally to storage
+      const cached = {
+        name: newName,
+        city: newCity,
+        state: newState,
+        phone: newPhone,
+        email: newEmail,
+      };
+      await AsyncStorage.setItem('@student_profile_data', JSON.stringify(cached));
+
+      // 3. Sync to Supabase public_students & profiles & students
+      if (user?.id) {
+        await supabase
+          .from('public_students')
+          .upsert(
+            {
+              user_id: user.id,
+              name: newName,
+              city: newCity,
+              state: newState,
+              phone: newPhone,
+              email: newEmail,
+              target_exam: targetExam,
+              avatar_url: avatarUrl,
+            },
+            { onConflict: 'user_id' }
+          );
+
+        await supabase
+          .from('profiles')
+          .update({
+            full_name: newName,
+            name: newName,
+            city: newCity,
+            address: newState,
+            phone: newPhone,
+            email: newEmail,
+          })
+          .eq('id', user.id);
+
+        await supabase
+          .from('students')
+          .update({
+            name: newName,
+            phone: newPhone,
+          })
+          .eq('user_id', user.id);
+      }
+
+      Alert.alert('Profile Saved 🎉', 'Your personal and location details have been saved successfully.');
+    } catch (err) {
+      console.warn('Profile save error:', err);
+      Alert.alert('Profile Saved', 'Your changes have been saved on this device.');
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -373,8 +504,12 @@ export default function StudentProfileScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.accent.primary} />}
         contentContainerStyle={styles.scrollBody}
       >
-        {/* Profile Hero Card */}
-        <View style={styles.heroCard}>
+        {/* Profile Hero Card — Clean, Direct Clickable */}
+        <TouchableOpacity
+          style={styles.heroCard}
+          activeOpacity={0.85}
+          onPress={openEditProfile}
+        >
           <TouchableOpacity
             style={styles.avatarWrap}
             activeOpacity={0.85}
@@ -399,8 +534,6 @@ export default function StudentProfileScreen() {
 
           <View style={styles.heroInfo}>
             <Text style={styles.heroName}>{studentName}</Text>
-            <Text style={styles.heroEmail}>{email || phone || 'Aspirant Account'}</Text>
-
             <View style={styles.badgeRow}>
               <View style={styles.roleBadge}>
                 <Ionicons name={isExternal ? 'planet' : 'business'} size={12} color="#AF2800" />
@@ -410,7 +543,9 @@ export default function StudentProfileScreen() {
               </View>
             </View>
           </View>
-        </View>
+
+          <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+        </TouchableOpacity>
 
         {/* ─── GATE OF TARGET EXAM SETTINGS (CORE FEATURE) ────────────────── */}
         <View style={styles.sectionHeaderRow}>
@@ -418,11 +553,7 @@ export default function StudentProfileScreen() {
           <Text style={styles.sectionBadge}>CORE GATEWAY</Text>
         </View>
 
-        <TouchableOpacity
-          activeOpacity={0.9}
-          onPress={() => setIsExamModalVisible(true)}
-          style={styles.targetExamCard}
-        >
+        <View style={styles.targetExamCard}>
           <LinearGradient
             colors={['#AF2800', '#D9480F']}
             start={{ x: 0, y: 0 }}
@@ -430,42 +561,100 @@ export default function StudentProfileScreen() {
             style={styles.targetExamGradient}
           >
             <View style={styles.targetExamTopRow}>
-              <View style={styles.targetExamPill}>
-                <Ionicons name="flag" size={12} color="#FFFFFF" />
-                <Text style={styles.targetExamPillText}>ACTIVE TARGET GOAL</Text>
-              </View>
-              <View style={styles.changeBtnPill}>
+              {/* Target Exam Goal Pill - Clickable to open Deep Analytics */}
+              <TouchableOpacity
+                style={styles.targetExamPill}
+                activeOpacity={0.8}
+                onPress={() => router.push({ pathname: '/(student)/target-exam-info', params: { exam: targetExam, from: 'profile' } })}
+              >
+                <Ionicons name="analytics" size={12} color="#FFFFFF" />
+                <Text style={styles.targetExamPillText}>EXAM ANALYTICS</Text>
+                <Ionicons name="arrow-forward" size={11} color="#FFFFFF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.changeBtnPill}
+                onPress={() => setIsExamModalVisible(true)}
+                activeOpacity={0.8}
+              >
                 <Text style={styles.changeBtnText}>Change Exam</Text>
-                <Ionicons name="chevron-forward" size={14} color="#AF2800" />
+                <Ionicons name="swap-horizontal" size={13} color="#AF2800" />
+              </TouchableOpacity>
+            </View>
+
+            {/* Clickable Target Exam Title -> Deep Exam Analytics */}
+            <TouchableOpacity
+              activeOpacity={0.85}
+              onPress={() => router.push({ pathname: '/(student)/target-exam-info', params: { exam: targetExam, from: 'profile' } })}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <Text style={styles.targetExamTitle}>{targetExam}</Text>
+                <View style={styles.deepAnalyticsTag}>
+                  <Ionicons name="stats-chart" size={11} color="#FFFFFF" />
+                  <Text style={styles.deepAnalyticsTagText}>Deep Analytics</Text>
+                  <Ionicons name="chevron-forward" size={12} color="#FFFFFF" />
+                </View>
               </View>
-            </View>
-
-            <Text style={styles.targetExamTitle}>{targetExam}</Text>
-            <Text style={styles.targetExamDescription}>
-              Your Test Hub drills, All-India Leaderboard rankings, and Vacancy Feed will be dynamically tailored for this exam.
-            </Text>
+              <Text style={styles.targetExamDescription}>
+                Tap to explore syllabus checklist, subject weightage, previous cut-offs, and master preparation blueprint for {targetExam}.
+              </Text>
+            </TouchableOpacity>
           </LinearGradient>
-        </TouchableOpacity>
+        </View>
 
-        {/* Aspirant Details (State & Location) */}
+        {/* Aspirant Benchmarks — Clean Statewise & All-India Rankings */}
         <View style={styles.cardSection}>
-          <Text style={styles.sectionHeading}>ASPIRANT BENCHMARKS</Text>
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionHeading}>ASPIRANT BENCHMARKS</Text>
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              {/* State Dropdown Pill */}
+              <TouchableOpacity
+                style={styles.scopeSelectorPill}
+                activeOpacity={0.7}
+                onPress={() => setIsStateModalVisible(true)}
+              >
+                <Ionicons name="location" size={12} color="#AF2800" />
+                <Text style={styles.scopeSelectorText}>{selectedState}</Text>
+                <Ionicons name="chevron-down" size={11} color="#AF2800" />
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.rowItem}
-            activeOpacity={0.7}
-            onPress={() => setIsStateModalVisible(true)}
-          >
-            <View style={styles.rowIconBox}>
-              <Ionicons name="location-outline" size={20} color="#AF2800" />
+              {/* City Dropdown Pill */}
+              <TouchableOpacity
+                style={styles.scopeSelectorPill}
+                activeOpacity={0.7}
+                onPress={() => setIsCityModalVisible(true)}
+              >
+                <Ionicons name="business" size={12} color="#AF2800" />
+                <Text style={styles.scopeSelectorText}>{studentCity}</Text>
+                <Ionicons name="chevron-down" size={11} color="#AF2800" />
+              </TouchableOpacity>
             </View>
-            <View style={styles.rowContent}>
-              <Text style={styles.rowLabel}>Home State / Region</Text>
-              <Text style={styles.rowValue}>{selectedState}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={18} color="#9CA3AF" />
-          </TouchableOpacity>
+          </View>
 
+          {/* Ranking Scope Filter Chips: All India, State, City */}
+          <View style={styles.rankScopeRow}>
+            {[
+              { id: 'india', label: 'All India' },
+              { id: 'state', label: selectedState },
+              { id: 'city', label: studentCity },
+            ].map((scope) => {
+              const isActive = rankScope === scope.id;
+              return (
+                <TouchableOpacity
+                  key={scope.id}
+                  style={[styles.rankScopeChip, isActive && styles.rankScopeChipActive]}
+                  onPress={() => setRankScope(scope.id as any)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.rankScopeChipText, isActive && styles.rankScopeChipTextActive]}>
+                    {scope.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* 3 Clean Stat Boxes */}
           <View style={styles.statsSummaryRow}>
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{testsAttemptedCount}</Text>
@@ -474,30 +663,30 @@ export default function StudentProfileScreen() {
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
               <Text style={styles.statNumber}>{averageScore} pts</Text>
-              <Text style={styles.statLabel}>Avg Score</Text>
+              <Text style={styles.statLabel}>Score Points</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.statBox}>
-              <Text style={[styles.statNumber, { color: '#16A34A' }]}>{currentRank}</Text>
-              <Text style={styles.statLabel}>State Rank</Text>
+              <Text style={[styles.statNumber, { color: '#16A34A' }]}>{displayedRank.rank}</Text>
+              <Text style={styles.statLabel} numberOfLines={1}>{displayedRank.label}</Text>
             </View>
           </View>
         </View>
 
-        {/* Local Storage Vault Card (Mocks Folder) */}
+        {/* Local Storage Vault Card (Mocks Folder) — Full Page Screen */}
         <View style={styles.cardSection}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionHeading}>DEVICE STORAGE VAULT</Text>
             <View style={styles.vaultBadgePill}>
               <Ionicons name="folder-open" size={11} color="#AF2800" />
-              <Text style={styles.vaultBadgeText}>4 OFFLINE FILES</Text>
+              <Text style={styles.vaultBadgeText}>OFFLINE VAULT</Text>
             </View>
           </View>
 
           <TouchableOpacity
             style={styles.storageCard}
             activeOpacity={0.85}
-            onPress={() => setIsVaultModalVisible(true)}
+            onPress={() => router.push('/(student)/storage-vault' as any)}
           >
             <View style={styles.storageHeaderRow}>
               <View style={styles.storageIconBox}>
@@ -694,34 +883,314 @@ export default function StudentProfileScreen() {
             </View>
 
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Your State</Text>
+              <View>
+                <Text style={styles.modalTitle}>Select Your State</Text>
+                <Text style={styles.modalSubtitle}>All 36 States & Union Territories with Exam Hubs</Text>
+              </View>
               <TouchableOpacity
                 style={styles.modalCloseBtn}
-                onPress={() => setIsStateModalVisible(false)}
+                onPress={() => {
+                  setIsStateModalVisible(false);
+                  setStateSearchQuery('');
+                }}
               >
                 <Ionicons name="close" size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.examListScroll} showsVerticalScrollIndicator={false}>
-              {INDIAN_STATES.map((st) => {
-                const isSelected = selectedState === st;
-                return (
+            {/* State Search Bar */}
+            <View style={styles.stateSearchBox}>
+              <Ionicons name="search" size={16} color="#9CA3AF" style={{ marginRight: 6 }} />
+              <TextInput
+                style={styles.stateSearchInput}
+                placeholder="Search state (e.g. MP, Rajasthan, UP, Delhi)"
+                placeholderTextColor="#9CA3AF"
+                value={stateSearchQuery}
+                onChangeText={setStateSearchQuery}
+              />
+              {stateSearchQuery ? (
+                <TouchableOpacity onPress={() => setStateSearchQuery('')}>
+                  <Ionicons name="close-circle" size={16} color="#9CA3AF" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <ScrollView style={styles.examListScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {INDIAN_STATES
+                .filter((st) => st.toLowerCase().includes(stateSearchQuery.toLowerCase().trim()))
+                .map((st) => {
+                  const isSelected = selectedState === st;
+                  const cities = getCitiesForState(st);
+                  return (
+                    <TouchableOpacity
+                      key={st}
+                      style={[styles.examRow, isSelected && styles.examRowSelected]}
+                      onPress={() => handleSelectState(st)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.examRowName, isSelected && styles.examRowNameSelected]}>
+                          {st}
+                        </Text>
+                        <Text style={styles.stateCitiesSubtext}>
+                          {cities.length} cities • e.g. {cities.slice(0, 3).join(', ')}
+                        </Text>
+                      </View>
+                      {isSelected ? (
+                        <Ionicons name="checkmark-circle" size={18} color="#AF2800" />
+                      ) : null}
+                    </TouchableOpacity>
+                  );
+                })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── CITY DROPDOWN MODAL ────────────────────────────────────────── */}
+      <Modal
+        visible={isCityModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => {
+          setIsCityModalVisible(false);
+          setCitySearchQuery('');
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { maxHeight: '85%' }]}>
+            <View style={styles.modalHandleBar}>
+              <View style={styles.modalHandle} />
+            </View>
+
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Select City / District</Text>
+                <Text style={styles.modalSubtitle}>Major exam hubs in {selectedState}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => {
+                  setIsCityModalVisible(false);
+                  setCitySearchQuery('');
+                }}
+              >
+                <Ionicons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            {/* City Search Bar */}
+            <View style={styles.stateSearchBox}>
+              <Ionicons name="search" size={16} color="#9CA3AF" style={{ marginRight: 6 }} />
+              <TextInput
+                style={styles.stateSearchInput}
+                placeholder={`Search city in ${selectedState}...`}
+                placeholderTextColor="#9CA3AF"
+                value={citySearchQuery}
+                onChangeText={setCitySearchQuery}
+              />
+              {citySearchQuery ? (
+                <TouchableOpacity onPress={() => setCitySearchQuery('')}>
+                  <Ionicons name="close-circle" size={16} color="#9CA3AF" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+
+            <ScrollView style={styles.examListScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+              {getCitiesForState(selectedState)
+                .filter((ct) => ct.toLowerCase().includes(citySearchQuery.toLowerCase().trim()))
+                .map((ct) => {
+                  const isSelected = studentCity.toLowerCase() === ct.toLowerCase();
+                  return (
+                    <TouchableOpacity
+                      key={ct}
+                      style={[styles.examRow, isSelected && styles.examRowSelected]}
+                      onPress={() => handleSelectCity(ct)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.examRowName, isSelected && styles.examRowNameSelected]}>
+                          {ct}
+                        </Text>
+                        <Text style={styles.stateCitiesSubtext}>
+                          Exam Hub • {selectedState}
+                        </Text>
+                      </View>
+                      {isSelected ? (
+                        <Ionicons name="checkmark-circle" size={18} color="#AF2800" />
+                      ) : null}
+                    </TouchableOpacity>
+                  );
+                })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ─── EDIT PROFILE MODAL (NAME, CITY, STATE, CONTACT) ───────────── */}
+      <Modal
+        visible={isEditProfileModalVisible}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setIsEditProfileModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalSheet, { maxHeight: '90%' }]}>
+            <View style={styles.modalHandleBar}>
+              <View style={styles.modalHandle} />
+            </View>
+
+            <View style={styles.modalHeader}>
+              <View>
+                <Text style={styles.modalTitle}>Edit Student Profile</Text>
+                <Text style={styles.modalSubtitle}>Update personal, state, and city details</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.modalCloseBtn}
+                onPress={() => setIsEditProfileModalVisible(false)}
+              >
+                <Ionicons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+              {/* Full Name */}
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalInputLabel}>Full Name *</Text>
+                <TextInput
+                  style={styles.modalTextInput}
+                  value={editName}
+                  onChangeText={setEditName}
+                  placeholder="Your full name"
+                  placeholderTextColor="#9CA3AF"
+                />
+              </View>
+
+              {/* State Picker First */}
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalInputLabel}>
+                  Home State / Region * (Selected: {editState || selectedState})
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6 }}>
+                  {INDIAN_STATES.map((st) => {
+                    const isSelected = (editState || selectedState) === st;
+                    return (
+                      <TouchableOpacity
+                        key={st}
+                        style={[styles.statePillChip, isSelected && styles.statePillChipActive]}
+                        onPress={() => {
+                          setEditState(st);
+                          const cities = getCitiesForState(st);
+                          if (cities.length > 0 && !cities.includes(editCity)) {
+                            setEditCity(cities[0]);
+                          }
+                        }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.statePillText, isSelected && styles.statePillTextActive]}>
+                          {st}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Home City with dropdown picker & quick pills */}
+              <View style={styles.modalInputGroup}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={styles.modalInputLabel}>Home City / District *</Text>
                   <TouchableOpacity
-                    key={st}
-                    style={[styles.examRow, isSelected && styles.examRowSelected]}
-                    onPress={() => handleSelectState(st)}
+                    onPress={() => setIsCityModalVisible(true)}
+                    style={{ flexDirection: 'row', alignItems: 'center', gap: 3 }}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.examRowName, isSelected && styles.examRowNameSelected]}>
-                      {st}
+                    <Text style={styles.stateCitiesCount}>
+                      {getCitiesForState(editState || selectedState).length} Cities Dropdown
                     </Text>
-                    {isSelected ? (
-                      <Ionicons name="checkmark-circle" size={18} color="#AF2800" />
-                    ) : null}
+                    <Ionicons name="chevron-down" size={12} color="#AF2800" />
                   </TouchableOpacity>
-                );
-              })}
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.modalTextInput, { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }]}
+                  onPress={() => setIsCityModalVisible(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={{ fontSize: 14, fontWeight: '600', color: editCity ? '#111827' : '#9CA3AF' }}>
+                    {editCity || 'Select your city from dropdown'}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color="#6B7280" />
+                </TouchableOpacity>
+
+                {/* Dynamic City quick selection pills */}
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 8 }}>
+                  {getCitiesForState(editState || selectedState).map((ct) => {
+                    const isSelected = editCity.toLowerCase() === ct.toLowerCase();
+                    return (
+                      <TouchableOpacity
+                        key={ct}
+                        style={[styles.cityChip, isSelected && styles.cityChipActive]}
+                        onPress={() => setEditCity(ct)}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={[styles.cityChipText, isSelected && styles.cityChipTextActive]}>
+                          {ct}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Contact Mobile */}
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalInputLabel}>Contact Number (Mobile)</Text>
+                <TextInput
+                  style={styles.modalTextInput}
+                  value={editPhone}
+                  onChangeText={setEditPhone}
+                  placeholder="10-digit mobile number"
+                  placeholderTextColor="#9CA3AF"
+                  keyboardType="phone-pad"
+                  maxLength={10}
+                />
+              </View>
+
+              {/* Email Address */}
+              <View style={styles.modalInputGroup}>
+                <Text style={styles.modalInputLabel}>Email Address</Text>
+                <TextInput
+                  style={styles.modalTextInput}
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  placeholder="name@example.com"
+                  placeholderTextColor="#9CA3AF"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
+
+              {/* Save Button */}
+              <TouchableOpacity
+                style={styles.saveProfileBtn}
+                onPress={handleSaveProfile}
+                activeOpacity={0.85}
+                disabled={isSavingProfile}
+              >
+                <LinearGradient
+                  colors={['#AF2800', '#D9480F']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.saveProfileBtnGradient}
+                >
+                  {isSavingProfile ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text style={styles.saveProfileBtnText}>Save Profile Details</Text>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
             </ScrollView>
           </View>
         </View>
@@ -978,17 +1447,13 @@ const styles = StyleSheet.create({
   },
   heroInfo: {
     flex: 1,
+    justifyContent: 'center',
   },
   heroName: {
     fontSize: 18,
     fontWeight: '800',
     color: '#111827',
-    marginBottom: 2,
-  },
-  heroEmail: {
-    fontSize: 12,
-    color: '#4B5563',
-    marginBottom: 8,
+    marginBottom: 4,
   },
   badgeRow: {
     flexDirection: 'row',
@@ -1082,6 +1547,22 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     marginBottom: 6,
   },
+  deepAnalyticsTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  deepAnalyticsTagText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+  },
   targetExamDescription: {
     color: 'rgba(255,255,255,0.9)',
     fontSize: 12,
@@ -1097,6 +1578,51 @@ const styles = StyleSheet.create({
     borderColor: '#E5E7EB',
     marginBottom: 16,
     ...Shadows.sm,
+  },
+  scopeSelectorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    gap: 4,
+  },
+  scopeSelectorText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#AF2800',
+  },
+  rankScopeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  rankScopeChip: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  rankScopeChipActive: {
+    backgroundColor: '#FFE2DB',
+    borderColor: '#AF2800',
+  },
+  rankScopeChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#4B5563',
+  },
+  rankScopeChipTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
   },
   rowItem: {
     flexDirection: 'row',
@@ -1575,5 +2101,117 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFE2DB',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  // Edit Profile Form Styles
+  modalInputGroup: {
+    marginBottom: 14,
+  },
+  modalInputLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#374151',
+    marginBottom: 6,
+  },
+  modalTextInput: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  statePillChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  statePillChipActive: {
+    backgroundColor: '#FFE2DB',
+    borderColor: '#AF2800',
+  },
+  statePillText: {
+    fontSize: 12,
+    color: '#4B5563',
+    fontWeight: '600',
+  },
+  statePillTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+  saveProfileBtn: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    marginTop: 10,
+    ...Shadows.sm,
+  },
+  saveProfileBtnGradient: {
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveProfileBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  // State Search & Dynamic Cities
+  stateSearchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F3F4F6',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    marginHorizontal: 16,
+    marginVertical: 10,
+    height: 42,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  stateSearchInput: {
+    flex: 1,
+    fontSize: 13,
+    color: '#111827',
+    fontWeight: '600',
+  },
+  stateCitiesSubtext: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 2,
+  },
+  stateCitiesCount: {
+    fontSize: 11,
+    color: '#AF2800',
+    fontWeight: '700',
+  },
+  cityChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#F3F4F6',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  cityChipActive: {
+    backgroundColor: '#FFE2DB',
+    borderColor: '#AF2800',
+  },
+  cityChipText: {
+    fontSize: 12,
+    color: '#4B5563',
+    fontWeight: '600',
+  },
+  cityChipTextActive: {
+    color: '#AF2800',
+    fontWeight: '800',
   },
 });

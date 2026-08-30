@@ -63,6 +63,18 @@ export interface UserPresence {
   currentScreen?: string;
 }
 
+const getFirestore = () => {
+  try {
+    if (typeof firestore === 'function') {
+      const instance = firestore();
+      if (instance && typeof instance.collection === 'function') {
+        return instance;
+      }
+    }
+  } catch (_) {}
+  return null;
+};
+
 // ─── 1. LIVE EXAM TELEMETRY (For Live Proctoring & Real-time Sync) ───
 
 /**
@@ -70,7 +82,10 @@ export interface UserPresence {
  */
 export async function sendExamHeartbeat(telemetry: LiveExamTelemetry): Promise<void> {
   try {
-    const docRef = firestore()
+    const db = getFirestore();
+    if (!db) return;
+
+    const docRef = db
       .collection('live_exam_sessions')
       .doc(telemetry.testId)
       .collection('examinees')
@@ -79,13 +94,11 @@ export async function sendExamHeartbeat(telemetry: LiveExamTelemetry): Promise<v
     await docRef.set(
       {
         ...telemetry,
-        updatedAt: firestore.FieldValue.serverTimestamp(),
+        updatedAt: firestore.FieldValue ? firestore.FieldValue.serverTimestamp() : new Date(),
       },
       { merge: true }
     );
-  } catch (error) {
-    console.warn('[Firestore] Failed to send exam heartbeat:', error);
-  }
+  } catch (_) {}
 }
 
 /**
@@ -96,26 +109,32 @@ export function subscribeToLiveExaminees(
   onUpdate: (examinees: LiveExamTelemetry[]) => void,
   onError?: (error: Error) => void
 ): () => void {
-  const unsubscribe = firestore()
-    .collection('live_exam_sessions')
-    .doc(testId)
-    .collection('examinees')
-    .onSnapshot(
-      snapshot => {
-        if (!snapshot) return;
-        const examinees: LiveExamTelemetry[] = [];
-        snapshot.forEach(doc => {
-          examinees.push(doc.data() as LiveExamTelemetry);
-        });
-        onUpdate(examinees);
-      },
-      err => {
-        console.warn('[Firestore] Error listening to live examinees:', err);
-        if (onError) onError(err);
-      }
-    );
+  try {
+    const db = getFirestore();
+    if (!db) return () => {};
 
-  return unsubscribe;
+    const unsubscribe = db
+      .collection('live_exam_sessions')
+      .doc(testId)
+      .collection('examinees')
+      .onSnapshot(
+        (snapshot: any) => {
+          if (!snapshot) return;
+          const examinees: LiveExamTelemetry[] = [];
+          snapshot.forEach((doc: any) => {
+            examinees.push(doc.data() as LiveExamTelemetry);
+          });
+          onUpdate(examinees);
+        },
+        (err: any) => {
+          if (onError) onError(err);
+        }
+      );
+
+    return unsubscribe;
+  } catch (_) {
+    return () => {};
+  }
 }
 
 // ─── 2. CBT TELEMETRY EVENTS (Automatically Streamed to BigQuery) ───
@@ -127,17 +146,18 @@ export function subscribeToLiveExaminees(
  */
 export async function logCBTTelemetryForBigQuery(event: CBTTelemetryEvent): Promise<void> {
   try {
+    const db = getFirestore();
+    if (!db) return;
+
     const docId = event.eventId || `${event.testId}_${event.studentId}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-    await firestore()
+    await db
       .collection('cbt_telemetry_events')
       .doc(docId)
       .set({
         ...event,
-        serverTimestamp: firestore.FieldValue.serverTimestamp(),
+        serverTimestamp: firestore.FieldValue ? firestore.FieldValue.serverTimestamp() : new Date(),
       });
-  } catch (error) {
-    console.warn('[Firestore] Failed to log CBT BigQuery event:', error);
-  }
+  } catch (_) {}
 }
 
 // ─── 3. PEER PRESENCE TRACKER ───
@@ -151,7 +171,10 @@ export async function setUserOnlinePresence(
   currentScreen?: string
 ): Promise<void> {
   try {
-    await firestore()
+    const db = getFirestore();
+    if (!db || !userId) return;
+
+    await db
       .collection('user_presence')
       .doc(userId)
       .set(
@@ -160,13 +183,11 @@ export async function setUserOnlinePresence(
           isOnline,
           currentScreen: currentScreen || null,
           lastActive: Date.now(),
-          updatedAt: firestore.FieldValue.serverTimestamp(),
+          updatedAt: firestore.FieldValue ? firestore.FieldValue.serverTimestamp() : new Date(),
         },
         { merge: true }
       );
-  } catch (error) {
-    console.warn('[Firestore] Failed to update presence:', error);
-  }
+  } catch (_) {}
 }
 
 /**
@@ -176,14 +197,21 @@ export function subscribeToUserPresence(
   userId: string,
   onUpdate: (presence: UserPresence | null) => void
 ): () => void {
-  return firestore()
-    .collection('user_presence')
-    .doc(userId)
-    .onSnapshot(doc => {
-      if (doc && doc.exists) {
-        onUpdate(doc.data() as UserPresence);
-      } else {
-        onUpdate(null);
-      }
-    });
+  try {
+    const db = getFirestore();
+    if (!db || !userId) return () => {};
+
+    return db
+      .collection('user_presence')
+      .doc(userId)
+      .onSnapshot((doc: any) => {
+        if (doc && doc.exists) {
+          onUpdate(doc.data() as UserPresence);
+        } else {
+          onUpdate(null);
+        }
+      });
+  } catch (_) {
+    return () => {};
+  }
 }

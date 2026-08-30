@@ -7,78 +7,103 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   RefreshControl,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Colors, Gradients, Shadows } from '@/constants/colors';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Colors, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { EXAM_TAXONOMY, getCategoryForExam } from '@/constants/examCategories';
 
 export default function PublicLeaderboardScreen() {
   const router = useRouter();
-  const { user } = useAuthStore();
+  const { user, studentData } = useAuthStore();
   const [profile, setProfile] = useState<any>(null);
-  const [userTargetExam, setUserTargetExam] = useState('MPPSC');
-  const [selectedExam, setSelectedExam] = useState('ALL');
-  const [leaderboardData, setLeaderboardData] = useState<any[]>(EXAM_TAXONOMY.Government.sampleLeaderboard);
+
+  const initialExam = studentData?.target_exam || user?.user_metadata?.target_exam || 'MPPSC';
+  const [userTargetExam, setUserTargetExam] = useState<string>(initialExam);
+  const [selectedExam, setSelectedExam] = useState<string>('ALL');
+  const [leaderboardData, setLeaderboardData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const categoryKey = getCategoryForExam(userTargetExam);
   const categoryConfig = EXAM_TAXONOMY[categoryKey] || EXAM_TAXONOMY.Government;
-  const examTabs = categoryConfig.exams;
+
+  // Load cached exam & cached leaderboard data on mount
+  useEffect(() => {
+    AsyncStorage.getItem('@student_target_exam').then((stored) => {
+      if (stored && stored !== userTargetExam) {
+        setUserTargetExam(stored);
+      }
+    });
+    AsyncStorage.getItem('@student_leaderboard_data').then((cached) => {
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setLeaderboardData(parsed);
+          }
+        } catch {}
+      }
+    });
+  }, []);
 
   const fetchLeaderboard = useCallback(async () => {
     try {
-      setIsLoading(true);
-
-      // Load user profile to get target_exam
+      if (leaderboardData.length === 0) {
+        setIsLoading(true);
+      }
+      // Refresh user profile to verify target_exam
+      let currentExam = userTargetExam;
       if (user?.id) {
         const { data: pub } = await supabase.from('public_students').select('*').eq('user_id', user.id).maybeSingle();
         if (pub?.target_exam) {
+          currentExam = pub.target_exam;
           setUserTargetExam(pub.target_exam);
           setProfile(pub);
+          await AsyncStorage.setItem('@student_target_exam', pub.target_exam);
         } else {
           const { data: prof } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
           if (prof?.target_exam) {
+            currentExam = prof.target_exam;
             setUserTargetExam(prof.target_exam);
             setProfile(prof);
+            await AsyncStorage.setItem('@student_target_exam', prof.target_exam);
           }
         }
       }
 
-      const activeCatKey = getCategoryForExam(userTargetExam);
-      const activeConfig = EXAM_TAXONOMY[activeCatKey] || EXAM_TAXONOMY.Government;
-
-      // Try querying public_test_submissions first
-      let { data: pubSubs, error } = await supabase
+      // Query real public_test_submissions
+      const { data: pubSubs, error } = await supabase
         .from('public_test_submissions')
         .select('*')
         .order('score', { ascending: false })
-        .limit(30);
+        .limit(50);
 
       if (error || !pubSubs || pubSubs.length === 0) {
-        setLeaderboardData(activeConfig.sampleLeaderboard);
+        setLeaderboardData([]);
+        await AsyncStorage.removeItem('@student_leaderboard_data');
       } else {
         const formatted = pubSubs.map((item: any, idx: number) => ({
           id: item.id || `rank-${idx}`,
           rank: idx + 1,
-          name: item.student_name || item.name || 'Public Aspirant',
-          target_exam: item.target_exam || userTargetExam,
+          name: item.student_name || item.name || 'Aspirant',
+          target_exam: item.target_exam || item.exam_category || currentExam,
           score: Math.round(item.score || 0),
-          accuracy: item.accuracy ? `${item.accuracy}%` : '90%',
+          accuracy: item.accuracy ? (String(item.accuracy).includes('%') ? item.accuracy : `${item.accuracy}%`) : '100%',
           state: item.state || 'Madhya Pradesh',
+          city: item.city || '',
+          avatar_url: item.avatar_url || null,
         }));
         setLeaderboardData(formatted);
+        await AsyncStorage.setItem('@student_leaderboard_data', JSON.stringify(formatted));
       }
     } catch (e) {
-      console.log('[Leaderboard] Using fallback:', e);
-      const activeCatKey = getCategoryForExam(userTargetExam);
-      const activeConfig = EXAM_TAXONOMY[activeCatKey] || EXAM_TAXONOMY.Government;
-      setLeaderboardData(activeConfig.sampleLeaderboard);
+      console.log('[Leaderboard] Fetch error:', e);
     } finally {
       setIsLoading(false);
       setRefreshing(false);
@@ -91,20 +116,25 @@ export default function PublicLeaderboardScreen() {
     }, [fetchLeaderboard])
   );
 
-  useEffect(() => {
-    if (userTargetExam && (!selectedExam || !examTabs.includes(selectedExam))) {
-      setSelectedExam(userTargetExam);
-    }
-  }, [userTargetExam, examTabs]);
+  // Dynamic filter tabs: based on available categories in submissions or categoryConfig
+  const availableExams = Array.from(
+    new Set([
+      'ALL',
+      userTargetExam,
+      ...leaderboardData.map((d) => d.target_exam),
+      ...categoryConfig.exams,
+    ])
+  ).filter(Boolean);
 
   const filteredData = selectedExam === 'ALL'
     ? leaderboardData
-    : leaderboardData.filter((d) => d.target_exam?.toLowerCase().includes(selectedExam.toLowerCase()));
+    : leaderboardData.filter((d) => (d.target_exam || '').toLowerCase().includes(selectedExam.toLowerCase()));
 
-  const top1 = filteredData[0] || categoryConfig.sampleLeaderboard[0];
-  const top2 = filteredData[1] || categoryConfig.sampleLeaderboard[1];
-  const top3 = filteredData[2] || categoryConfig.sampleLeaderboard[2];
-  const restList = filteredData.slice(3);
+  const hasPodium = filteredData.length >= 3;
+  const top1 = hasPodium ? filteredData[0] : null;
+  const top2 = hasPodium ? filteredData[1] : null;
+  const top3 = hasPodium ? filteredData[2] : null;
+  const restList = hasPodium ? filteredData.slice(3) : filteredData;
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -113,134 +143,200 @@ export default function PublicLeaderboardScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={{ marginBottom: 12 }}>
-          <Text style={styles.headerTitle}>All-India Leaderboard</Text>
-          <Text style={styles.headerSubtitle}>
-            Category: <Text style={{ color: '#AF2800', fontWeight: '800' }}>{categoryConfig.name}</Text>
-          </Text>
+      <View style={{ flex: 1 }}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View style={styles.headerTopRow}>
+            <TouchableOpacity
+              style={styles.profileAvatarBtn}
+              onPress={() => router.push('/(student)/profile')}
+              activeOpacity={0.7}
+            >
+              {profile?.avatar_url ? (
+                <Image source={{ uri: profile.avatar_url }} style={styles.headerAvatarImg} />
+              ) : (
+                <View style={styles.avatarPill}>
+                  <Text style={styles.avatarPillText}>
+                    {(profile?.name || user?.email || 'M').charAt(0).toUpperCase()}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+
+            <View style={{ flex: 1, justifyContent: 'center' }}>
+              <Text style={styles.headerTitle}>All-India Leaderboard</Text>
+              <Text style={styles.headerSubtitle}>
+                Target Goal: <Text style={{ color: '#AF2800', fontWeight: '800' }}>{userTargetExam}</Text>
+              </Text>
+            </View>
+          </View>
+
+          {/* Filter Pills */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.tabScroll}
+          >
+            {availableExams.map((ex) => {
+              const isSelected = selectedExam === ex;
+              const isUserGoal = ex === userTargetExam && ex !== 'ALL';
+              return (
+                <TouchableOpacity
+                  key={ex}
+                  style={[styles.tab, isSelected && styles.tabActive]}
+                  onPress={() => setSelectedExam(ex)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.tabText, isSelected && styles.tabTextActive]}>
+                    {ex}{isUserGoal ? ' ★' : ''}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
 
-        {/* Filter Pills */}
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabScroll}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={Colors.accent.primary}
+            />
+          }
+          contentContainerStyle={styles.scrollBody}
         >
-          {examTabs.map((ex) => {
-            const isSelected = selectedExam === ex;
-            const isUserGoal = ex === userTargetExam && ex !== 'ALL';
-            return (
+          {isLoading ? (
+            <ActivityIndicator size="large" color={Colors.accent.primary} style={{ marginVertical: 40 }} />
+          ) : filteredData.length === 0 ? (
+            /* Clean Empty State when no submissions exist */
+            <View style={styles.emptyContainer}>
+              <View style={styles.emptyIconCircle}>
+                <Ionicons name="trophy-outline" size={44} color="#AF2800" />
+              </View>
+              <Text style={styles.emptyTitle}>No Rankings Yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Be the first aspirant to complete a mock test for {selectedExam === 'ALL' ? userTargetExam : selectedExam} and claim <Text style={{ fontWeight: '700', color: '#AF2800' }}>Rank #1</Text> on the leaderboard!
+              </Text>
               <TouchableOpacity
-                key={ex}
-                style={[styles.tab, isSelected && styles.tabActive]}
-                onPress={() => setSelectedExam(ex)}
-                activeOpacity={0.7}
+                style={styles.emptyActionBtn}
+                onPress={() => router.replace('/(student)/public-tests')}
+                activeOpacity={0.8}
               >
-                <Text style={[styles.tabText, isSelected && styles.tabTextActive]}>
-                  {ex}{isUserGoal ? ' ★' : ''}
-                </Text>
+                <Ionicons name="play" size={16} color="#FFFFFF" style={{ marginRight: 6 }} />
+                <Text style={styles.emptyActionBtnText}>Take a Mock Test</Text>
               </TouchableOpacity>
-            );
-          })}
+            </View>
+          ) : (
+            <>
+              {/* Top 3 Podium (Shown only when 3 or more real students have submitted) */}
+              {hasPodium && (
+                <View style={styles.podiumContainer}>
+                  {/* Rank 2 (Silver) */}
+                  <View style={[styles.podiumColumn, { marginTop: 24 }]}>
+                    <View style={[styles.podiumAvatar, styles.silverRing]}>
+                      {top2?.avatar_url ? (
+                        <Image source={{ uri: top2.avatar_url }} style={styles.podiumAvatarImg} />
+                      ) : (
+                        <Text style={styles.avatarText}>{top2?.name?.charAt(0) || '2'}</Text>
+                      )}
+                      <View style={[styles.rankBadgeSmall, { backgroundColor: '#94A3B8' }]}>
+                        <Text style={styles.rankBadgeText}>2</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.podiumName} numberOfLines={1}>{top2?.name || 'Aspirant'}</Text>
+                    <Text style={styles.podiumScore}>{top2?.score || 0} pts</Text>
+                    <View style={[styles.podiumStep, styles.silverStep]}>
+                      <Ionicons name="medal" size={20} color="#64748B" />
+                    </View>
+                  </View>
+
+                  {/* Rank 1 (Gold - Center) */}
+                  <View style={styles.podiumColumn}>
+                    <View style={[styles.podiumAvatar, styles.goldRing]}>
+                      {top1?.avatar_url ? (
+                        <Image source={{ uri: top1.avatar_url }} style={styles.podiumAvatarImg} />
+                      ) : (
+                        <Text style={styles.avatarText}>{top1?.name?.charAt(0) || '1'}</Text>
+                      )}
+                      <View style={[styles.rankBadgeSmall, { backgroundColor: '#EAB308' }]}>
+                        <Ionicons name="trophy" size={10} color="#FFFFFF" />
+                      </View>
+                    </View>
+                    <Text style={styles.podiumName} numberOfLines={1}>{top1?.name || 'Aspirant'}</Text>
+                    <Text style={styles.podiumScoreGold}>{top1?.score || 0} pts</Text>
+                    <View style={[styles.podiumStep, styles.goldStep]}>
+                      <Ionicons name="trophy" size={24} color="#B45309" />
+                    </View>
+                  </View>
+
+                  {/* Rank 3 (Bronze) */}
+                  <View style={[styles.podiumColumn, { marginTop: 32 }]}>
+                    <View style={[styles.podiumAvatar, styles.bronzeRing]}>
+                      {top3?.avatar_url ? (
+                        <Image source={{ uri: top3.avatar_url }} style={styles.podiumAvatarImg} />
+                      ) : (
+                        <Text style={styles.avatarText}>{top3?.name?.charAt(0) || '3'}</Text>
+                      )}
+                      <View style={[styles.rankBadgeSmall, { backgroundColor: '#F97316' }]}>
+                        <Text style={styles.rankBadgeText}>3</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.podiumName} numberOfLines={1}>{top3?.name || 'Aspirant'}</Text>
+                    <Text style={styles.podiumScore}>{top3?.score || 0} pts</Text>
+                    <View style={[styles.podiumStep, styles.bronzeStep]}>
+                      <Ionicons name="medal" size={20} color="#C2410C" />
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Section Title */}
+              <View style={styles.rankListHeader}>
+                <Text style={styles.sectionHeading}>
+                  {hasPodium ? `ALL RANKINGS (${filteredData.length})` : `RANKINGS (${filteredData.length})`}
+                </Text>
+              </View>
+
+              {/* List of ranks */}
+              {restList.map((item) => (
+                <View key={item.id} style={styles.rankCard}>
+                  <View style={styles.rankNumCircle}>
+                    <Text style={styles.rankNumText}>{item.rank}</Text>
+                  </View>
+
+                  {/* Profile Image */}
+                  <View style={styles.rankAvatarContainer}>
+                    {item.avatar_url ? (
+                      <Image source={{ uri: item.avatar_url }} style={styles.rankAvatarImg} />
+                    ) : (
+                      <View style={styles.rankAvatarInitial}>
+                        <Text style={styles.rankAvatarInitialText}>{item.name.charAt(0)}</Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.rankInfoWrap}>
+                    <Text style={styles.rankName}>{item.name}</Text>
+                    <View style={styles.metaRow}>
+                      <Text style={styles.examTagBadge}>{item.target_exam}</Text>
+                      {item.state ? (
+                        <Text style={styles.stateText}>• {item.city ? `${item.city}, ` : ''}{item.state}</Text>
+                      ) : null}
+                    </View>
+                  </View>
+
+                  <View style={styles.scoreWrap}>
+                    <Text style={styles.scoreText}>{item.score} pts</Text>
+                    <Text style={styles.accuracyText}>{item.accuracy} acc</Text>
+                  </View>
+                </View>
+              ))}
+            </>
+          )}
         </ScrollView>
       </View>
-
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={Colors.accent.primary}
-          />
-        }
-        contentContainerStyle={styles.scrollBody}
-      >
-        {/* Top 3 Podium */}
-        <View style={styles.podiumContainer}>
-          {/* Rank 2 (Silver) */}
-          <View style={[styles.podiumColumn, { marginTop: 24 }]}>
-            <View style={[styles.podiumAvatar, styles.silverRing]}>
-              <Text style={styles.avatarText}>{top2?.name?.charAt(0) || '2'}</Text>
-              <View style={[styles.rankBadgeSmall, { backgroundColor: '#94A3B8' }]}>
-                <Text style={styles.rankBadgeText}>2</Text>
-              </View>
-            </View>
-            <Text style={styles.podiumName} numberOfLines={1}>{top2?.name || 'Aspirant'}</Text>
-            <Text style={styles.podiumScore}>{top2?.score || 0} pts</Text>
-            <View style={[styles.podiumStep, styles.silverStep]}>
-              <Ionicons name="medal" size={20} color="#64748B" />
-            </View>
-          </View>
-
-          {/* Rank 1 (Gold - Center) */}
-          <View style={styles.podiumColumn}>
-            <View style={[styles.podiumAvatar, styles.goldRing]}>
-              <Text style={styles.avatarText}>{top1?.name?.charAt(0) || '1'}</Text>
-              <View style={[styles.rankBadgeSmall, { backgroundColor: '#EAB308' }]}>
-                <Ionicons name="trophy" size={10} color="#FFFFFF" />
-              </View>
-            </View>
-            <Text style={styles.podiumName} numberOfLines={1}>{top1?.name || 'Aspirant'}</Text>
-            <Text style={styles.podiumScoreGold}>{top1?.score || 0} pts</Text>
-            <View style={[styles.podiumStep, styles.goldStep]}>
-              <Ionicons name="trophy" size={24} color="#B45309" />
-            </View>
-          </View>
-
-          {/* Rank 3 (Bronze) */}
-          <View style={[styles.podiumColumn, { marginTop: 32 }]}>
-            <View style={[styles.podiumAvatar, styles.bronzeRing]}>
-              <Text style={styles.avatarText}>{top3?.name?.charAt(0) || '3'}</Text>
-              <View style={[styles.rankBadgeSmall, { backgroundColor: '#F97316' }]}>
-                <Text style={styles.rankBadgeText}>3</Text>
-              </View>
-            </View>
-            <Text style={styles.podiumName} numberOfLines={1}>{top3?.name || 'Aspirant'}</Text>
-            <Text style={styles.podiumScore}>{top3?.score || 0} pts</Text>
-            <View style={[styles.podiumStep, styles.bronzeStep]}>
-              <Ionicons name="medal" size={20} color="#C2410C" />
-            </View>
-          </View>
-        </View>
-
-        {/* Section Title */}
-        <View style={styles.rankListHeader}>
-          <Text style={styles.sectionHeading}>RANKINGS ({filteredData.length})</Text>
-        </View>
-
-        {/* List of remaining ranks */}
-        {isLoading ? (
-          <ActivityIndicator size="large" color={Colors.accent.primary} style={{ marginVertical: 30 }} />
-        ) : restList.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>No rankings found for this category yet.</Text>
-          </View>
-        ) : (
-          restList.map((item) => (
-            <View key={item.id} style={styles.rankCard}>
-              <View style={styles.rankNumCircle}>
-                <Text style={styles.rankNumText}>{item.rank}</Text>
-              </View>
-
-              <View style={styles.rankInfoWrap}>
-                <Text style={styles.rankName}>{item.name}</Text>
-                <View style={styles.metaRow}>
-                  <Text style={styles.examTagBadge}>{item.target_exam}</Text>
-                  <Text style={styles.stateText}>• {item.state}</Text>
-                </View>
-              </View>
-
-              <View style={styles.scoreWrap}>
-                <Text style={styles.scoreText}>{item.score} pts</Text>
-                <Text style={styles.accuracyText}>{item.accuracy} acc</Text>
-              </View>
-            </View>
-          ))
-        )}
-      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -261,31 +357,47 @@ const styles = StyleSheet.create({
   headerTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 12,
   },
   profileAvatarBtn: {
     marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   avatarPill: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#FFE2DB',
     justifyContent: 'center',
     alignItems: 'center',
   },
+  headerAvatarImg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    borderWidth: 1.5,
+    borderColor: '#AF2800',
+  },
+  avatarPillText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#AF2800',
+  },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: '#111827',
     letterSpacing: 0.2,
+    lineHeight: 21,
   },
   headerSubtitle: {
     fontSize: 11,
     color: '#4B5563',
     fontWeight: '500',
     marginTop: 2,
-    marginBottom: 12,
+    lineHeight: 15,
+    marginBottom: 0,
   },
   tabScroll: {
     gap: 8,
@@ -316,6 +428,56 @@ const styles = StyleSheet.create({
   scrollBody: {
     padding: 16,
     paddingBottom: 40,
+  },
+
+  // Empty State
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 50,
+    paddingHorizontal: 24,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    marginTop: 10,
+    ...Shadows.sm,
+  },
+  emptyIconCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: '#FFE2DB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  emptyActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#AF2800',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 12,
+    ...Shadows.sm,
+  },
+  emptyActionBtnText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 
   // Podium
@@ -364,106 +526,141 @@ const styles = StyleSheet.create({
     borderColor: '#F97316',
     backgroundColor: '#FFEDD5',
   },
+  podiumAvatarImg: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 29,
+  },
   avatarText: {
     fontSize: 18,
-    fontWeight: '800',
-    color: '#111827',
+    fontWeight: '700',
+    color: '#4B5563',
   },
   rankBadgeSmall: {
     position: 'absolute',
-    bottom: -3,
-    right: -3,
+    bottom: -2,
+    right: -2,
     width: 18,
     height: 18,
     borderRadius: 9,
     justifyContent: 'center',
     alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   rankBadgeText: {
-    fontSize: 10,
     color: '#FFFFFF',
+    fontSize: 10,
     fontWeight: '800',
   },
   podiumName: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#111827',
-    maxWidth: 90,
+    color: '#1F2937',
+    maxWidth: 80,
     textAlign: 'center',
     marginBottom: 2,
   },
   podiumScore: {
     fontSize: 11,
-    color: '#6B7280',
     fontWeight: '600',
+    color: '#6B7280',
     marginBottom: 8,
   },
   podiumScoreGold: {
     fontSize: 12,
-    color: '#AF2800',
     fontWeight: '800',
+    color: '#B45309',
     marginBottom: 8,
   },
   podiumStep: {
-    width: '85%',
-    borderRadius: 10,
+    width: '90%',
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
   },
   goldStep: {
-    height: 52,
+    height: 70,
     backgroundColor: '#FEF08A',
+    borderTopWidth: 2,
+    borderTopColor: '#EAB308',
   },
   silverStep: {
-    height: 38,
+    height: 50,
     backgroundColor: '#E2E8F0',
+    borderTopWidth: 2,
+    borderTopColor: '#94A3B8',
   },
   bronzeStep: {
-    height: 28,
-    backgroundColor: '#FED7AA',
+    height: 35,
+    backgroundColor: '#FFEDD5',
+    borderTopWidth: 2,
+    borderTopColor: '#F97316',
   },
 
+  // Rank List
   rankListHeader: {
     marginBottom: 10,
+    paddingHorizontal: 4,
   },
   sectionHeading: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '800',
     color: '#6B7280',
-    letterSpacing: 0.8,
+    letterSpacing: 0.5,
   },
-
-  // Rank Cards
   rankCard: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
+    padding: 12,
     borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
     marginBottom: 8,
     borderWidth: 1,
     borderColor: '#E5E7EB',
+    ...Shadows.sm,
   },
   rankNumCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
     backgroundColor: '#F3F4F6',
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
+    marginRight: 10,
   },
   rankNumText: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#374151',
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4B5563',
+  },
+  rankAvatarContainer: {
+    marginRight: 10,
+  },
+  rankAvatarImg: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  rankAvatarInitial: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#E0E7FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  rankAvatarInitialText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#4338CA',
   },
   rankInfoWrap: {
     flex: 1,
   },
   rankName: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '700',
     color: '#111827',
     marginBottom: 2,
@@ -475,33 +672,31 @@ const styles = StyleSheet.create({
   },
   examTagBadge: {
     fontSize: 10,
-    color: '#AF2800',
     fontWeight: '700',
+    color: '#AF2800',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
   },
   stateText: {
     fontSize: 10,
     color: '#6B7280',
+    fontWeight: '500',
   },
   scoreWrap: {
     alignItems: 'flex-end',
+    paddingLeft: 6,
   },
   scoreText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '800',
     color: '#111827',
   },
   accuracyText: {
     fontSize: 10,
-    color: '#16A34A',
     fontWeight: '600',
-  },
-
-  emptyContainer: {
-    paddingVertical: 30,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontSize: 13,
-    color: '#9CA3AF',
+    color: '#059669',
+    marginTop: 1,
   },
 });

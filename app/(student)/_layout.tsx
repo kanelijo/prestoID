@@ -14,6 +14,7 @@ import InAppNotification from '@/components/InAppNotification';
 import { supabase } from '@/lib/supabase';
 import { currentActiveScreen, currentActivePeerId } from '@/lib/notifications';
 import { savePeerMessageToLocal, getPeerMessagesFromLocal, markPeerMessagesAsReadInLocal } from '@/lib/localDb';
+import { usePublicTabStore } from '@/stores/usePublicTabStore';
 
 type TabIconProps = {
   name: keyof typeof Ionicons.glyphMap;
@@ -197,6 +198,7 @@ export default function StudentLayout() {
   }, [user?.id, businessId, studentData?.business_id]);
 
   const isPublicEnv = activeEnvironment === 'public' || (activeEnvironment === null && isExternalStudent === true);
+  const publicActiveTab = usePublicTabStore((s) => s.activeTab);
 
   return (
     <View style={{ flex: 1 }} key={`${studentData?.id || 'student'}_${businessId || 'no-biz'}_${isPublicEnv ? 'public' : 'enrolled'}`}>
@@ -302,39 +304,61 @@ export default function StudentLayout() {
         {/* Public / External Student Tabs (Exact 3 tabs: Test, Leaderboard, Feed) */}
         <Tabs.Screen
           name="public-tests"
+          listeners={{
+            tabPress: () => {
+              usePublicTabStore.getState().setTargetPage(0);
+              usePublicTabStore.getState().setActiveTab(0);
+            },
+          }}
           options={{
             href: isPublicEnv ? undefined : null,
-            tabBarIcon: ({ focused }) => (
+            tabBarIcon: () => (
               <TabIcon
-                name={focused ? 'document-text' : 'document-text-outline'}
+                name={publicActiveTab === 0 ? 'document-text' : 'document-text-outline'}
                 label="Test"
-                focused={focused}
+                focused={publicActiveTab === 0}
               />
             ),
           }}
         />
         <Tabs.Screen
           name="public-leaderboard"
+          listeners={({ navigation }) => ({
+            tabPress: (e) => {
+              e.preventDefault();
+              usePublicTabStore.getState().setTargetPage(1);
+              usePublicTabStore.getState().setActiveTab(1);
+              navigation.navigate('public-tests');
+            },
+          })}
           options={{
             href: isPublicEnv ? undefined : null,
-            tabBarIcon: ({ focused }) => (
+            tabBarIcon: () => (
               <TabIcon
-                name={focused ? 'podium' : 'podium-outline'}
+                name={publicActiveTab === 1 ? 'podium' : 'podium-outline'}
                 label="Leaderboard"
-                focused={focused}
+                focused={publicActiveTab === 1}
               />
             ),
           }}
         />
         <Tabs.Screen
           name="public-feed"
+          listeners={({ navigation }) => ({
+            tabPress: (e) => {
+              e.preventDefault();
+              usePublicTabStore.getState().setTargetPage(2);
+              usePublicTabStore.getState().setActiveTab(2);
+              navigation.navigate('public-tests');
+            },
+          })}
           options={{
             href: isPublicEnv ? undefined : null,
-            tabBarIcon: ({ focused }) => (
+            tabBarIcon: () => (
               <TabIcon
-                name={focused ? 'newspaper' : 'newspaper-outline'}
+                name={publicActiveTab === 2 ? 'newspaper' : 'newspaper-outline'}
                 label="Feed"
-                focused={focused}
+                focused={publicActiveTab === 2}
               />
             ),
           }}
@@ -364,6 +388,7 @@ export default function StudentLayout() {
 
         {/* Sub-screens with hidden tab bar */}
         <Tabs.Screen name="index" options={{ href: null, tabBarStyle: { display: 'none' } }} />
+        <Tabs.Screen name="storage-vault" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/engine/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/result/[id]" options={{ href: null, tabBarStyle: { display: 'none' } }} />
         <Tabs.Screen name="test/target-exam-student" options={{ href: null, tabBarStyle: { display: 'none' } }} />

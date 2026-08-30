@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,171 +9,347 @@ import {
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Gradients } from '@/constants/colors';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Colors, Gradients, Shadows } from '@/constants/colors';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
-
-const EXAMS = ['MPPSC', 'MP ESB Patwari', 'MP Police SI', 'SSC CGL', 'Banking PO'];
-
-const SYLLABUS_DATA: Record<string, { subject: string; topics: { id: string; name: string; weight: string }[] }[]> = {};
+import { getExamAnalytics, EXAM_ANALYTICS_MAP } from '@/constants/examAnalyticsData';
 
 export default function TargetExamInfoScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams<{ exam?: string; from?: string }>();
   const { user } = useAuthStore();
-  const [selectedExam, setSelectedExam] = useState('MPPSC');
+
+  const [selectedExam, setSelectedExam] = useState(params.exam || 'MPPSC');
   const [checkedTopics, setCheckedTopics] = useState<Record<string, boolean>>({});
   const [activeSubTab, setActiveSubTab] = useState<'syllabus' | 'pattern' | 'cutoffs' | 'strategy'>('syllabus');
 
-  const toggleTopic = (id: string) => {
-    setCheckedTopics((prev) => ({
-      ...prev,
-      [id]: !prev[id],
-    }));
+  // Reliable Back Navigation — returns directly to previous window
+  const handleBack = useCallback(() => {
+    if (params.from === 'profile') {
+      router.replace('/(student)/profile');
+    } else if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(student)/profile');
+    }
+  }, [params.from, router]);
+
+  // Load Active Student Target Exam from storage & database
+  useEffect(() => {
+    const initTargetExam = async () => {
+      try {
+        if (params.exam) {
+          setSelectedExam(params.exam);
+          return;
+        }
+        const stored = await AsyncStorage.getItem('@student_target_exam');
+        if (stored) {
+          setSelectedExam(stored);
+        }
+      } catch (e) {
+        console.log('[TargetExam] Init notice:', e);
+      }
+    };
+    initTargetExam();
+  }, [params.exam]);
+
+  // Load Saved Topic Checklists for selected exam
+  useEffect(() => {
+    const loadChecklist = async () => {
+      try {
+        const saved = await AsyncStorage.getItem(`@checklist_${selectedExam}`);
+        if (saved) {
+          setCheckedTopics(JSON.parse(saved));
+        } else {
+          setCheckedTopics({});
+        }
+      } catch (e) {
+        console.log('[TargetExam] Load checklist error:', e);
+      }
+    };
+    loadChecklist();
+  }, [selectedExam]);
+
+  // Toggle Topic and Save Immediately
+  const toggleTopic = async (id: string) => {
+    const updated = {
+      ...checkedTopics,
+      [id]: !checkedTopics[id],
+    };
+    setCheckedTopics(updated);
+    try {
+      await AsyncStorage.setItem(`@checklist_${selectedExam}`, JSON.stringify(updated));
+    } catch (e) {
+      console.log('[TargetExam] Save checklist error:', e);
+    }
   };
 
-  const syllabusList = SYLLABUS_DATA[selectedExam] || SYLLABUS_DATA['MPPSC'];
+  // Get Analytics & Readiness calculation
+  const analytics = useMemo(() => getExamAnalytics(selectedExam), [selectedExam]);
+
+  const { totalTopics, completedCount, readinessPct, highYieldCompleted, highYieldTotal } = useMemo(() => {
+    let total = 0;
+    let completed = 0;
+    let hyTotal = 0;
+    let hyCompleted = 0;
+
+    analytics.syllabus.forEach((group) => {
+      group.topics.forEach((t) => {
+        total++;
+        if (t.isHighYield) hyTotal++;
+        if (checkedTopics[t.id]) {
+          completed++;
+          if (t.isHighYield) hyCompleted++;
+        }
+      });
+    });
+
+    const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+    return {
+      totalTopics: total,
+      completedCount: completed,
+      readinessPct: pct,
+      highYieldTotal: hyTotal,
+      highYieldCompleted: hyCompleted,
+    };
+  }, [analytics, checkedTopics]);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
+      {/* ─── HEADER WITH RELIABLE BACK NAVIGATION ────────────────────────── */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Target Exam Hub</Text>
-        <Text style={styles.headerSubtitle}>Syllabus, Cutoffs & Preparation Roadmap</Text>
+        <View style={styles.headerTopRow}>
+          <TouchableOpacity
+            onPress={handleBack}
+            style={styles.backBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="arrow-back" size={20} color="#111827" />
+          </TouchableOpacity>
 
-        {/* Exam Selector */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.examScroll}>
-          {EXAMS.map((ex) => (
-            <TouchableOpacity
-              key={ex}
-              style={[styles.examChip, selectedExam === ex && styles.examChipActive]}
-              onPress={() => setSelectedExam(ex)}
-            >
-              <Text style={[styles.examChipText, selectedExam === ex && styles.examChipTextActive]}>{ex}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}>
+              <Text style={styles.headerTitle}>{selectedExam}</Text>
+              <View style={styles.activeGoalBadge}>
+                <Ionicons name="flag" size={10} color="#AF2800" />
+                <Text style={styles.activeGoalBadgeText}>TARGET GOAL</Text>
+              </View>
+            </View>
+            <Text style={styles.headerSubtitle}>Deep Syllabus, Exam Blueprint & Cutoff Intelligence</Text>
+          </View>
+        </View>
 
         {/* Sub-Navigation Tabs */}
         <View style={styles.subTabRow}>
-          <TouchableOpacity style={[styles.subTab, activeSubTab === 'syllabus' && styles.subTabActive]} onPress={() => setActiveSubTab('syllabus')}>
-            <Text style={[styles.subTabText, activeSubTab === 'syllabus' && styles.subTabTextActive]}>Checklist</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.subTab, activeSubTab === 'pattern' && styles.subTabActive]} onPress={() => setActiveSubTab('pattern')}>
-            <Text style={[styles.subTabText, activeSubTab === 'pattern' && styles.subTabTextActive]}>Pattern</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.subTab, activeSubTab === 'cutoffs' && styles.subTabActive]} onPress={() => setActiveSubTab('cutoffs')}>
-            <Text style={[styles.subTabText, activeSubTab === 'cutoffs' && styles.subTabTextActive]}>Cut-offs</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.subTab, activeSubTab === 'strategy' && styles.subTabActive]} onPress={() => setActiveSubTab('strategy')}>
-            <Text style={[styles.subTabText, activeSubTab === 'strategy' && styles.subTabTextActive]}>Strategy</Text>
-          </TouchableOpacity>
+          {[
+            { id: 'syllabus', label: 'Checklist', icon: 'checkbox-outline' },
+            { id: 'pattern', label: 'Pattern', icon: 'reader-outline' },
+            { id: 'cutoffs', label: 'Cut-offs', icon: 'stats-chart-outline' },
+            { id: 'strategy', label: 'Strategy', icon: 'bulb-outline' },
+          ].map((tab) => {
+            const isActive = activeSubTab === tab.id;
+            return (
+              <TouchableOpacity
+                key={tab.id}
+                style={[styles.subTab, isActive && styles.subTabActive]}
+                onPress={() => setActiveSubTab(tab.id as any)}
+                activeOpacity={0.7}
+              >
+                <Ionicons
+                  name={tab.icon as any}
+                  size={14}
+                  color={isActive ? '#AF2800' : '#6B7280'}
+                  style={{ marginRight: 4 }}
+                />
+                <Text style={[styles.subTabText, isActive && styles.subTabTextActive]}>
+                  {tab.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} style={styles.body}>
+      <ScrollView showsVerticalScrollIndicator={false} style={styles.body} contentContainerStyle={{ paddingBottom: 50 }}>
+        {/* ─── READINESS HERO CARD ───────────────────────────────────────── */}
+        <View style={styles.readinessCard}>
+          <LinearGradient
+            colors={['#AF2800', '#D9480F']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.readinessGradient}
+          >
+            <View style={styles.readinessTopRow}>
+              <View>
+                <Text style={styles.readinessSubtitle}>{analytics.category}</Text>
+                <Text style={styles.readinessTitle}>{analytics.examName}</Text>
+              </View>
+              <View style={styles.readinessScorePill}>
+                <Text style={styles.readinessScoreVal}>{readinessPct}%</Text>
+                <Text style={styles.readinessScoreLbl}>Ready</Text>
+              </View>
+            </View>
+
+            {/* Progress Bar */}
+            <View style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, { width: `${Math.max(readinessPct, 4)}%` }]} />
+            </View>
+
+            {/* Quick Metrics */}
+            <View style={styles.readinessMetricsRow}>
+              <View style={styles.readinessMetricItem}>
+                <Ionicons name="checkmark-done" size={13} color="#FFFFFF" />
+                <Text style={styles.readinessMetricText}>
+                  {completedCount}/{totalTopics} Topics Completed
+                </Text>
+              </View>
+              <View style={styles.readinessMetricItem}>
+                <Ionicons name="flame" size={13} color="#FFD166" />
+                <Text style={styles.readinessMetricText}>
+                  {highYieldCompleted}/{highYieldTotal} High Yield Mastered
+                </Text>
+              </View>
+            </View>
+
+            {/* Target Score Chip */}
+            <View style={styles.targetSafePill}>
+              <Ionicons name="shield-checkmark" size={13} color="#FFFFFF" />
+              <Text style={styles.targetSafeText}>Target Safe Score: {analytics.targetSafeScore}</Text>
+            </View>
+          </LinearGradient>
+        </View>
+
+        {/* ─── 1. SYLLABUS & CHECKLIST TAB ─────────────────────────────────── */}
         {activeSubTab === 'syllabus' && (
           <View style={styles.section}>
-            {syllabusList && syllabusList.length > 0 ? syllabusList.map((block, idx) => (
+            <View style={styles.sectionTitleRow}>
+              <Text style={styles.sectionTitle}>High-Yield Syllabus Checklist</Text>
+              <Text style={styles.sectionCountText}>Tap to mark done</Text>
+            </View>
+
+            {analytics.syllabus.map((block, idx) => (
               <View key={idx} style={styles.subjectBlock}>
-                <Text style={styles.subjectName}>{block.subject}</Text>
-                {block.topics.map((t) => (
-                  <TouchableOpacity
-                    key={t.id}
-                    style={[styles.topicRow, checkedTopics[t.id] && styles.topicRowChecked]}
-                    onPress={() => toggleTopic(t.id)}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons
-                      name={checkedTopics[t.id] ? 'checkbox' : 'square-outline'}
-                      size={20}
-                      color={checkedTopics[t.id] ? Colors.accent.primary : Colors.text.tertiary}
-                    />
-                    <Text style={[styles.topicName, checkedTopics[t.id] && styles.topicNameChecked]}>
-                      {t.name}
-                    </Text>
-                    <View style={styles.weightBadge}>
-                      <Text style={styles.weightText}>{t.weight}</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                <View style={styles.subjectHeaderRow}>
+                  <Ionicons name="book-outline" size={16} color="#AF2800" />
+                  <Text style={styles.subjectName}>{block.subject}</Text>
+                </View>
+
+                {block.topics.map((t) => {
+                  const isChecked = !!checkedTopics[t.id];
+                  return (
+                    <TouchableOpacity
+                      key={t.id}
+                      style={[styles.topicRow, isChecked && styles.topicRowChecked]}
+                      onPress={() => toggleTopic(t.id)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={isChecked ? 'checkbox' : 'square-outline'}
+                        size={21}
+                        color={isChecked ? '#AF2800' : '#9CA3AF'}
+                      />
+                      <Text style={[styles.topicName, isChecked && styles.topicNameChecked]}>
+                        {t.name}
+                      </Text>
+                      <View style={[styles.weightBadge, t.isHighYield && styles.weightBadgeHigh]}>
+                        <Text style={[styles.weightText, t.isHighYield && styles.weightTextHigh]}>
+                          {t.weight}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-            )) : (
-              <Text style={{color: Colors.text.tertiary, textAlign: 'center', marginTop: 20}}>No syllabus available for this exam yet.</Text>
-            )}
+            ))}
           </View>
         )}
 
+        {/* ─── 2. PATTERN & BLUEPRINT TAB ──────────────────────────────────── */}
         {activeSubTab === 'pattern' && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>{selectedExam} Exam Pattern & Eligibility</Text>
+            <Text style={styles.sectionTitle}>{selectedExam} Examination Blueprint</Text>
+
+            {analytics.pattern.map((item, idx) => (
+              <View key={idx} style={styles.infoCard}>
+                <Text style={styles.cardHeader}>⏱️ {item.title}</Text>
+                {item.details.map((det, dIdx) => (
+                  <Text key={dIdx} style={styles.cardText}>• {det}</Text>
+                ))}
+              </View>
+            ))}
 
             <View style={styles.infoCard}>
-              <Text style={styles.cardHeader}>⏱️ Prelims Exam Format</Text>
-              <Text style={styles.cardText}>• Paper I: General Studies (100 Questions / 200 Marks)</Text>
-              <Text style={styles.cardText}>• Paper II: General Aptitude / CSAT (100 Questions / 200 Marks)</Text>
-              <Text style={styles.cardText}>• Negative Marking: None (or as per revised rules)</Text>
+              <Text style={styles.cardHeader}>🎓 Eligibility & Qualifications</Text>
+              {analytics.eligibility.map((el, eIdx) => (
+                <Text key={eIdx} style={styles.cardText}>• {el}</Text>
+              ))}
             </View>
 
             <View style={styles.infoCard}>
-              <Text style={styles.cardHeader}>🎓 Eligibility Criteria</Text>
-              <Text style={styles.cardText}>• Qualification: Bachelor's Degree in any discipline from a recognized University.</Text>
-              <Text style={styles.cardText}>• Age Limit: 21 to 40 Years (Relaxation for SC/ST/OBC/PwD).</Text>
-              <Text style={styles.cardText}>• Domicile: Open to MP & all eligible Indian citizens.</Text>
+              <Text style={styles.cardHeader}>⚠️ Negative Marking Rule</Text>
+              <Text style={[styles.cardText, { color: '#DC2626', fontWeight: '700' }]}>
+                {analytics.negativeMarking}
+              </Text>
             </View>
           </View>
         )}
 
+        {/* ─── 3. CUTOFFS & TRENDS TAB ────────────────────────────────────── */}
         {activeSubTab === 'cutoffs' && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Historical Cut-off Trends</Text>
+            <Text style={styles.sectionTitle}>Historical Category Cut-Offs</Text>
+            <Text style={styles.sectionSubtitle}>Score trends across past 3 examination cycles</Text>
 
             <View style={styles.tableCard}>
               <View style={styles.tableHeader}>
-                <Text style={[styles.tableCell, styles.tableCellBold]}>Year</Text>
-                <Text style={[styles.tableCell, styles.tableCellBold]}>General</Text>
+                <Text style={[styles.tableCell, styles.tableCellBold]}>Cycle</Text>
+                <Text style={[styles.tableCell, styles.tableCellBold]}>UR (Gen)</Text>
                 <Text style={[styles.tableCell, styles.tableCellBold]}>OBC</Text>
                 <Text style={[styles.tableCell, styles.tableCellBold]}>SC/ST</Text>
               </View>
-              <View style={styles.tableRow}>
-                <Text style={styles.tableCell}>2024</Text>
-                <Text style={styles.tableCell}>162</Text>
-                <Text style={styles.tableCell}>158</Text>
-                <Text style={styles.tableCell}>142</Text>
-              </View>
-              <View style={styles.tableRow}>
-                <Text style={styles.tableCell}>2023</Text>
-                <Text style={styles.tableCell}>160</Text>
-                <Text style={styles.tableCell}>154</Text>
-                <Text style={styles.tableCell}>138</Text>
-              </View>
-              <View style={styles.tableRow}>
-                <Text style={styles.tableCell}>2022</Text>
-                <Text style={styles.tableCell}>154</Text>
-                <Text style={styles.tableCell}>148</Text>
-                <Text style={styles.tableCell}>134</Text>
-              </View>
+              {analytics.cutoffs.map((row, idx) => (
+                <View key={idx} style={styles.tableRow}>
+                  <Text style={[styles.tableCell, { fontWeight: '700' }]}>{row.year}</Text>
+                  <Text style={[styles.tableCell, { color: '#AF2800', fontWeight: '800' }]}>{row.general}</Text>
+                  <Text style={styles.tableCell}>{row.obc}</Text>
+                  <Text style={styles.tableCell}>{row.sc_st}</Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Target Recommendation */}
+            <View style={[styles.infoCard, { marginTop: 14, backgroundColor: '#FFE2DB', borderColor: '#AF2800' }]}>
+              <Text style={[styles.cardHeader, { color: '#AF2800' }]}>🎯 Safe Score Strategy Recommendation</Text>
+              <Text style={[styles.cardText, { color: '#374151' }]}>
+                To overcome unpredictable normalization and competition variance, aim for at least{' '}
+                <Text style={{ fontWeight: '800', color: '#AF2800' }}>{analytics.targetSafeScore}</Text> in your mock drill practice sessions.
+              </Text>
             </View>
           </View>
         )}
 
+        {/* ─── 4. STRATEGY & ROADMAP TAB ──────────────────────────────────── */}
         {activeSubTab === 'strategy' && (
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Step-by-Step 3-Phase Strategy</Text>
+            <Text style={styles.sectionTitle}>3-Phase Preparation Blueprint</Text>
 
-            <View style={styles.phaseCard}>
-              <Text style={styles.phaseBadge}>Phase 1: Foundation (Month 1-3)</Text>
-              <Text style={styles.phaseText}>Complete core NCERTs and State GK textbooks. Build strong conceptual clarity in MP History, Polity, and Geography.</Text>
-            </View>
+            {analytics.phases.map((ph, idx) => (
+              <View key={idx} style={styles.phaseCard}>
+                <View style={styles.phaseBadgeRow}>
+                  <Text style={styles.phaseBadge}>{ph.phase}</Text>
+                </View>
+                <Text style={styles.phaseTitle}>{ph.title}</Text>
+                <Text style={styles.phaseText}>{ph.description}</Text>
+              </View>
+            ))}
 
-            <View style={styles.phaseCard}>
-              <Text style={styles.phaseBadge}>Phase 2: Revision & Speed (Month 4-5)</Text>
-              <Text style={styles.phaseText}>Solve Previous 10 Years' Question Papers. Take subject-wise sectional quizzes to boost speed & accuracy.</Text>
-            </View>
-
-            <View style={styles.phaseCard}>
-              <Text style={styles.phaseBadge}>Phase 3: Mock Test Mastery (Last Month)</Text>
-              <Text style={styles.phaseText}>Attempt 2 Full-Length Mock Exams weekly. Analyze weak areas and review detailed solution notes.</Text>
+            <View style={styles.infoCard}>
+              <Text style={styles.cardHeader}>💡 Mock Drill Advice</Text>
+              <Text style={styles.cardText}>{analytics.mockAdvice}</Text>
             </View>
           </View>
         )}
@@ -185,201 +361,355 @@ export default function TargetExamInfoScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.bg.primary,
+    backgroundColor: '#FAFAFA',
   },
   header: {
     paddingHorizontal: 16,
     paddingTop: 12,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#E5E7EB',
   },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.text.primary,
-  },
-  headerSubtitle: {
-    fontSize: 12,
-    color: Colors.text.tertiary,
-    marginTop: 2,
-  },
-  examScroll: {
-    marginTop: 12,
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 10,
   },
-  examChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: Colors.bg.secondary,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: Colors.card.border,
+  backBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
   },
-  examChipActive: {
-    backgroundColor: Colors.accent.glow,
-    borderWidth: 1.5,
-    borderColor: Colors.accent.primary,
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#111827',
   },
-  examChipText: {
-    color: Colors.text.tertiary,
-    fontSize: 12,
+  headerSubtitle: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginTop: 1,
   },
-  examChipTextActive: {
-    color: Colors.accent.primary,
-    fontWeight: 'bold',
+  activeGoalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFE2DB',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 3,
+  },
+  activeGoalBadgeText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#AF2800',
+    letterSpacing: 0.4,
   },
   subTabRow: {
     flexDirection: 'row',
     borderTopWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#F3F4F6',
+    marginTop: 6,
   },
   subTab: {
     flex: 1,
+    flexDirection: 'row',
     paddingVertical: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   subTabActive: {
-    borderBottomWidth: 2,
-    borderColor: Colors.accent.primary,
+    borderBottomWidth: 2.5,
+    borderColor: '#AF2800',
   },
   subTabText: {
-    color: Colors.text.tertiary,
+    color: '#6B7280',
     fontSize: 12,
     fontWeight: '600',
   },
   subTabTextActive: {
-    color: Colors.accent.primary,
+    color: '#AF2800',
+    fontWeight: '800',
   },
   body: {
     flex: 1,
     padding: 16,
   },
+
+  // Readiness Hero Card
+  readinessCard: {
+    borderRadius: 18,
+    overflow: 'hidden',
+    marginBottom: 16,
+    ...Shadows.md,
+  },
+  readinessGradient: {
+    padding: 16,
+  },
+  readinessTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  readinessSubtitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.85)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  readinessTitle: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    marginTop: 2,
+  },
+  readinessScorePill: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    alignItems: 'center',
+    ...Shadows.sm,
+  },
+  readinessScoreVal: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#AF2800',
+  },
+  readinessScoreLbl: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#6B7280',
+    textTransform: 'uppercase',
+  },
+  progressBarTrack: {
+    height: 7,
+    backgroundColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 4,
+  },
+  readinessMetricsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginBottom: 10,
+  },
+  readinessMetricItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  readinessMetricText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  targetSafePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.18)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    gap: 6,
+    alignSelf: 'flex-start',
+  },
+  targetSafeText: {
+    fontSize: 11,
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+
+  // Sections & Content
   section: {
-    marginBottom: 30,
+    marginBottom: 20,
+  },
+  sectionTitleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.text.primary,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#111827',
     marginBottom: 4,
   },
-  sectionDesc: {
-    fontSize: 12,
-    color: Colors.text.tertiary,
-    marginBottom: 14,
+  sectionSubtitle: {
+    fontSize: 11,
+    color: '#6B7280',
+    marginBottom: 10,
   },
+  sectionCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#AF2800',
+  },
+
+  // Subject Block & Topics
   subjectBlock: {
-    backgroundColor: Colors.bg.secondary,
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 14,
-    marginBottom: 14,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#E5E7EB',
+    ...Shadows.sm,
+  },
+  subjectHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderColor: '#F3F4F6',
   },
   subjectName: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: Colors.accent.primary,
-    marginBottom: 10,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
   },
   topicRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 10,
+    paddingVertical: 9,
     borderBottomWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#F9FAFB',
   },
   topicRowChecked: {
-    opacity: 0.6,
+    opacity: 0.65,
   },
   topicName: {
     flex: 1,
-    color: Colors.text.primary,
+    color: '#1F2937',
     fontSize: 13,
-    marginLeft: 10,
+    marginLeft: 8,
+    fontWeight: '500',
   },
   topicNameChecked: {
     textDecorationLine: 'line-through',
-    color: Colors.text.tertiary,
+    color: '#9CA3AF',
   },
   weightBadge: {
-    backgroundColor: Colors.bg.tertiary,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  weightBadgeHigh: {
+    backgroundColor: '#FFE2DB',
   },
   weightText: {
-    color: Colors.text.tertiary,
-    fontSize: 11,
+    color: '#6B7280',
+    fontSize: 10,
+    fontWeight: '600',
   },
+  weightTextHigh: {
+    color: '#AF2800',
+    fontWeight: '800',
+  },
+
+  // Info Cards
   infoCard: {
-    backgroundColor: Colors.bg.secondary,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#E5E7EB',
+    ...Shadows.sm,
   },
   cardHeader: {
-    color: Colors.text.primary,
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 8,
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 6,
   },
   cardText: {
-    color: Colors.text.secondary,
-    fontSize: 13,
-    lineHeight: 20,
-    marginBottom: 4,
+    color: '#4B5563',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 3,
   },
+
+  // Table Card
   tableCard: {
-    backgroundColor: Colors.bg.secondary,
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#E5E7EB',
+    ...Shadows.sm,
   },
   tableHeader: {
     flexDirection: 'row',
-    backgroundColor: Colors.bg.tertiary,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    backgroundColor: '#F9FAFB',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderColor: '#E5E7EB',
   },
   tableRow: {
     flexDirection: 'row',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderBottomWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#F3F4F6',
   },
   tableCell: {
     flex: 1,
-    color: Colors.text.primary,
-    fontSize: 13,
+    color: '#374151',
+    fontSize: 12,
     textAlign: 'center',
   },
   tableCellBold: {
-    fontWeight: 'bold',
-    color: Colors.accent.primary,
+    fontWeight: '800',
+    color: '#111827',
   },
+
+  // Phase Card
   phaseCard: {
-    backgroundColor: Colors.bg.secondary,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
     borderWidth: 1,
-    borderColor: Colors.card.border,
+    borderColor: '#E5E7EB',
+    ...Shadows.sm,
+  },
+  phaseBadgeRow: {
+    marginBottom: 4,
   },
   phaseBadge: {
-    color: Colors.accent.primary,
-    fontWeight: 'bold',
-    fontSize: 14,
-    marginBottom: 6,
+    color: '#AF2800',
+    fontWeight: '800',
+    fontSize: 11,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  phaseTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#111827',
+    marginBottom: 4,
   },
   phaseText: {
-    color: Colors.text.secondary,
-    fontSize: 13,
-    lineHeight: 19,
+    color: '#4B5563',
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

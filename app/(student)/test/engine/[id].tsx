@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useQuizStore } from '@/stores/useQuizStore';
 import { getTestFromLocal, saveTestToLocal, saveTestProgressToLocal } from '@/lib/localDb';
+import { getCachedOfflineTest, saveOfflineTestResult, syncOfflineResultsToSupabase } from '@/lib/offlineTestStorage';
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { CustomAlert } from '@/components/CustomAlert';
@@ -19,6 +20,62 @@ const { width: windowWidth } = Dimensions.get('window');
 
 // Use basic requestAnimationFrame for reliable physics timer without triggering reanimated crashes
 const GRACE_PERIOD_MS = 20000;
+
+// Helper to separate mixed Hindi/English bilingual questions based on language selection
+export function getLocalizedText(rawText: string, lang: 'hi' | 'en' | 'bilingual'): string {
+  if (!rawText || lang === 'bilingual') return rawText;
+  const str = String(rawText).trim();
+
+  // 1. Primary Format: "Hindi Text [English Text]"
+  // Find the outermost / trailing square bracket [...]
+  const lastOpenBracket = str.lastIndexOf('[');
+  const lastCloseBracket = str.lastIndexOf(']');
+
+  if (lastOpenBracket !== -1 && lastCloseBracket > lastOpenBracket) {
+    const hindiPart = str.substring(0, lastOpenBracket).trim();
+    const englishPart = str.substring(lastOpenBracket + 1, lastCloseBracket).trim();
+
+    if (lang === 'hi') {
+      return hindiPart || str;
+    }
+    if (lang === 'en') {
+      return englishPart || str;
+    }
+  }
+
+  // 2. Secondary Format: "Hindi Text / English Text"
+  if (str.includes(' / ')) {
+    const parts = str.split(' / ');
+    if (parts.length === 2) {
+      const p0IsHindi = /[\u0900-\u097F]/.test(parts[0]);
+      if (p0IsHindi) {
+        return lang === 'hi' ? parts[0].trim() : parts[1].trim();
+      } else {
+        return lang === 'en' ? parts[0].trim() : parts[1].trim();
+      }
+    }
+  }
+
+  // 3. Multiline format: "Hindi Line\nEnglish Line"
+  if (str.includes('\n') && !str.includes('\n\n')) {
+    const lines = str.split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length === 2) {
+      const l0IsHindi = /[\u0900-\u097F]/.test(lines[0]);
+      if (l0IsHindi) {
+        return lang === 'hi' ? lines[0] : lines[1];
+      } else {
+        return lang === 'en' ? lines[0] : lines[1];
+      }
+    }
+  }
+
+  // 4. Fallback by character set
+  const hasHindi = /[\u0900-\u097F]/.test(str);
+  if (lang === 'hi' && hasHindi) return str;
+  if (lang === 'en' && !hasHindi) return str;
+
+  return str;
+}
 
 export default function ZenZaTestEngineScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -36,6 +93,7 @@ export default function ZenZaTestEngineScreen() {
   const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState<'hi' | 'en' | 'bilingual'>('hi');
   const endTimeRef = useRef<number>(0);
   const reqFrameRef = useRef<number>(0);
 
@@ -353,16 +411,44 @@ export default function ZenZaTestEngineScreen() {
 
       // Fetch Test (Try Local SQLite Engine SSOT first for 0ms launch & offline mode)
       let test: any = getTestFromLocal(String(id));
-      if (!test || test.status === 'scheduled' || test.status === 'live') {
-        const { data: remoteTest, error: tErr } = await supabase.from('tests').select('*').eq('id', id).single();
-        if (tErr) throw tErr;
-        test = remoteTest;
-        saveTestToLocal(String(id), test);
+      if (!test || test.status === 'scheduled' || test.status === 'live' || !test.questions || test.questions.length === 0) {
+        const { data: pubTest } = await supabase.from('public_tests').select('*').eq('id', id).maybeSingle();
+        if (pubTest) {
+          test = pubTest;
+        } else {
+          const { data: remoteTest } = await supabase.from('tests').select('*').eq('id', id).maybeSingle();
+          if (remoteTest) {
+            test = remoteTest;
+          } else {
+            const cachedOffline = await getCachedOfflineTest(String(id));
+            if (cachedOffline) {
+              test = cachedOffline;
+            } else {
+              try {
+                const all100 = require('../../../../Test Engine/From Repository/all_100_pyq_tests.json');
+                const found = all100.find((t: any) => t.id === id || String(t.id) === String(id));
+                if (found) test = found;
+              } catch (_) {}
+            }
+          }
+        }
+        if (test) saveTestToLocal(String(id), test);
       }
+      if (!test) throw new Error('Test not found');
       
       let finalQuestions: any[] = [];
       if (test.questions && Array.isArray(test.questions) && test.questions.length > 0) {
-        finalQuestions = test.questions;
+        finalQuestions = test.questions.map((q: any, idx: number) => {
+          const opts = Array.isArray(q.options) && q.options.length > 0
+            ? q.options
+            : [q.option_a, q.option_b, q.option_c, q.option_d].filter((o: any) => o !== undefined && o !== null && String(o).trim() !== '');
+          return {
+            ...q,
+            id: q.id || `q_${idx + 1}`,
+            question_text: q.question_text || '',
+            options: opts.length > 0 ? opts : ['Option A', 'Option B', 'Option C', 'Option D'],
+          };
+        });
       } else {
         // 🔒 SECURITY FIX: Exclude correct_option and explanation from client question fetch
         const { data: qData } = await supabase
@@ -370,7 +456,17 @@ export default function ZenZaTestEngineScreen() {
           .select('id, test_id, question_text, option_a, option_b, option_c, option_d, topic_tag, order_index')
           .eq('test_id', id)
           .order('created_at');
-        finalQuestions = qData || [];
+        finalQuestions = (qData || []).map((q: any, idx: number) => {
+          const opts = Array.isArray(q.options) && q.options.length > 0
+            ? q.options
+            : [q.option_a, q.option_b, q.option_c, q.option_d].filter((o: any) => o !== undefined && o !== null && String(o).trim() !== '');
+          return {
+            ...q,
+            id: q.id || `q_${idx + 1}`,
+            question_text: q.question_text || '',
+            options: opts.length > 0 ? opts : ['Option A', 'Option B', 'Option C', 'Option D'],
+          };
+        });
       }
 
       setTestDetails(test);
@@ -466,7 +562,7 @@ export default function ZenZaTestEngineScreen() {
       
       // Fallback: If user joins exactly after test ended (or Date parse failed)
       if (!isNaN(endTimeRef.current) && Date.now() >= endTimeRef.current) {
-         submitTest(false);
+         submitTest('time_up');
          return;
       }
     } else {
@@ -630,131 +726,158 @@ export default function ZenZaTestEngineScreen() {
       return;
     }
 
-    let activeStudentId = studentId || useAuthStore.getState().studentData?.id;
-    if (!activeStudentId) {
-      const currentUser = useAuthStore.getState().user;
-      if (currentUser) {
-        const { data: st } = await supabase.from('students').select('id').eq('user_id', currentUser.id).maybeSingle();
-        if (st) {
-          activeStudentId = st.id;
+    // Resolve student identity gracefully across enrolled, public, or guest profile
+    const currentUser = useAuthStore.getState().user;
+    const currentStudentData = useAuthStore.getState().studentData;
+    let activeStudentId = studentId || currentStudentData?.id;
+    let studentDisplayName = currentStudentData?.name || currentUser?.user_metadata?.full_name || currentUser?.email?.split('@')[0] || 'Public Aspirant';
+    let studentAvatar = currentStudentData?.photo_url || currentUser?.user_metadata?.avatar_url || null;
+
+    if (!activeStudentId && currentUser?.id) {
+      try {
+        const { data: pubSt } = await supabase.from('public_students').select('*').eq('user_id', currentUser.id).maybeSingle();
+        if (pubSt) {
+          activeStudentId = pubSt.id;
+          if (pubSt.name) studentDisplayName = pubSt.name;
+          if (pubSt.avatar_url) studentAvatar = pubSt.avatar_url;
+        } else {
+          const { data: prof } = await supabase.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
+          if (prof) {
+            activeStudentId = prof.id;
+            if (prof.name) studentDisplayName = prof.name;
+            if (prof.avatar_url) studentAvatar = prof.avatar_url;
+          } else {
+            activeStudentId = currentUser.id;
+          }
         }
+      } catch (_) {
+        activeStudentId = currentUser?.id || `anon_${Date.now()}`;
       }
     }
 
     if (!activeStudentId) {
-      setIsSubmitting(false);
-      hasSubmitted.current = false;
-      setTimeout(() => {
-        CustomAlert.alert('Error', 'Unable to verify your student profile. Please ensure you are logged in correctly.');
-      }, 400);
-      return;
+      activeStudentId = `anon_${Date.now()}`;
     }
 
-    // Calculate score using test metadata or defaults
-    const posMarks = testDetails?.positive_marks ?? 5;
+    // Helper to accurately compare numerical indices (0, 1, 2, 3) with letter keys ('A', 'B', 'C', 'D')
+    const isAnswerCorrect = (studentAns: any, correctOpt: any): boolean => {
+      if (studentAns === undefined || studentAns === null || correctOpt === undefined || correctOpt === null) return false;
+      if (studentAns === correctOpt) return true;
+      const sStr = String(studentAns).trim().toUpperCase();
+      const cStr = String(correctOpt).trim().toUpperCase();
+      if (sStr === cStr) return true;
+      const numToChar: Record<string, string> = { '0': 'A', '1': 'B', '2': 'C', '3': 'D' };
+      const charToNum: Record<string, number> = { 'A': 0, 'B': 1, 'C': 2, 'D': 3 };
+      if (numToChar[sStr] === cStr) return true;
+      if (charToNum[cStr] === Number(studentAns)) return true;
+      return false;
+    };
+
+    // Calculate score using question marks or test defaults
+    const posMarks = testDetails?.positive_marks ?? (testDetails?.marks_per_question ?? 2);
     const negMarks = testDetails?.negative_marks ?? 0;
     
     let totalScore = 0;
-    questions.forEach((q) => {
-      const studentAns = latestAnswers[q.id];
-      if (studentAns !== undefined && studentAns !== null) {
-        if (studentAns === q.correct_option) {
-          totalScore += posMarks;
-        } else {
-          totalScore -= negMarks;
-        }
-      }
-    });
-
     let correctCount = 0;
     let wrongCount = 0;
     let skippedCount = 0;
+
     questions.forEach((q) => {
       const studentAns = latestAnswers[q.id];
       if (studentAns === undefined || studentAns === null) {
         skippedCount++;
-      } else if (studentAns === q.correct_option) {
+      } else if (isAnswerCorrect(studentAns, q.correct_option)) {
         correctCount++;
+        totalScore += (q.marks ?? posMarks);
       } else {
         wrongCount++;
+        totalScore -= (q.negative_marks ?? negMarks);
       }
     });
 
-    let retryCount = 0;
-    const maxRetries = 4;
-    let success = false;
-    let newSubId = null;
-    let lastError = null;
+    totalScore = Math.max(0, totalScore);
+    const totalMarks = testDetails?.total_marks || (questions.length * posMarks);
+    const accuracyPercent = questions.length > 0 ? Math.round((correctCount / questions.length) * 100) : 0;
+    const timeSpentSec = Math.round(Object.values(timeLogsSeconds).reduce((a: any, b: any) => (typeof b === 'number' ? a + b : a), 0)) || 60;
 
-    while (retryCount < maxRetries && !success) {
+    // 1. Submit to public_test_submissions table & offline storage with robust error isolation
+    try {
       try {
-        // 🔒 SECURE SERVER-SIDE EVALUATION & RANK CALCULATION VIA RPC
-        const { data: rpcRes, error: rpcErr } = await supabase.rpc('submit_test_answers', {
-          p_test_id: id,
-          p_student_id: activeStudentId,
-          p_answers: latestAnswers,
-          p_time_logs: timeLogsSeconds,
-          p_exit_logs: exitLogsRef.current || []
-        });
-
-        if (rpcErr) throw rpcErr;
-
-        if (rpcRes && rpcRes.length > 0) {
-          newSubId = rpcRes[0].submission_id;
-          totalScore = rpcRes[0].final_score;
-        }
-
-        success = true;
-      } catch (err) {
-        lastError = err;
-        retryCount++;
-        if (retryCount < maxRetries) {
-          const delay = 400 * Math.pow(2, retryCount);
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-      }
-    }
-
-    // 1. Buffer attempt progress into local SQLite engine (ACID persistence)
-    saveTestProgressToLocal(String(id), activeStudentId, latestAnswers, timeLogsSeconds, totalScore, questions.length, success);
-
-    if (success && newSubId) {
-      clearAnswers();
-      setIsSubmitting(false);
-      router.replace(`/(student)/test/result/${newSubId}`);
-    } else {
-      console.warn('Supabase submission failed. Saving attempt offline:', lastError);
-      try {
-        const stored = await AsyncStorage.getItem('@offline_test_submissions');
-        const queue = stored ? JSON.parse(stored) : [];
-        queue.push({
-          test_id: id,
-          student_id: activeStudentId,
-          answers: latestAnswers,
-          time_logs: timeLogsSeconds,
-          score: totalScore,
-          total_questions: questions.length
-        });
-        await AsyncStorage.setItem('@offline_test_submissions', JSON.stringify(queue));
+        await supabase
+          .from('public_test_submissions')
+          .insert({
+            test_id: String(id),
+            user_id: currentUser?.id || null,
+            student_name: studentDisplayName,
+            score: totalScore,
+            total_marks: totalMarks,
+            accuracy_percent: accuracyPercent,
+            time_taken_seconds: timeSpentSec,
+            submitted_answers: latestAnswers,
+            avatar_url: studentAvatar,
+            target_exam: testDetails?.exam_category || 'MPPSC',
+            state: 'Madhya Pradesh',
+            city: '',
+          });
       } catch (e) {
-        console.warn('Failed to cache offline test submission:', e);
+        console.log('[Submit Note] Supabase submission sync notice:', e);
       }
 
+      // 2. Save attempt to offline storage & local leaderboard
+      try {
+        await saveOfflineTestResult({
+          test_id: String(id),
+          user_id: currentUser?.id,
+          student_name: studentDisplayName,
+          score: totalScore,
+          total_marks: totalMarks,
+          accuracy: `${accuracyPercent}%`,
+          questions_answered: Object.keys(latestAnswers).length,
+          total_questions: questions.length,
+          time_spent_seconds: timeSpentSec,
+          submitted_answers: latestAnswers,
+          completed_at: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.log('[Submit Note] Local storage sync notice:', e);
+      }
+
+      // 3. If enrolled in institute, attempt institute RPC
+      if (useAuthStore.getState().activeEnvironment !== 'public') {
+        try {
+          await supabase.rpc('submit_test_answers', {
+            p_test_id: id,
+            p_student_id: activeStudentId,
+            p_answers: latestAnswers,
+            p_time_logs: timeLogsSeconds,
+            p_exit_logs: exitLogsRef.current || [],
+          });
+        } catch (_) {}
+      }
+
+      // Save to local SQLite buffer
+      saveTestProgressToLocal(String(id), activeStudentId, latestAnswers, timeLogsSeconds, totalScore, questions.length, true);
+    } catch (err) {
+      console.warn('submitTest execution note:', err);
+    } finally {
       clearAnswers();
       setIsSubmitting(false);
+
+      // Route cleanly to result screen with actual test UUID
       router.replace({
-        pathname: `/(student)/test/result/offline`,
+        pathname: `/(student)/test/result/${id}`,
         params: {
           testId: String(id),
           score: totalScore,
           total: questions.length,
+          totalMarks: totalMarks,
           correct: correctCount,
           wrong: wrongCount,
           skipped: skippedCount,
           testTitle: testDetails?.title || 'Online Mock Test',
           answers: JSON.stringify(latestAnswers),
-          timeLogs: JSON.stringify(timeLogsSeconds)
-        }
+          timeLogs: JSON.stringify(timeLogsSeconds),
+        },
       });
     }
   };
@@ -774,8 +897,20 @@ export default function ZenZaTestEngineScreen() {
   const isLowTime = timeLeft < 300; // less than 5 min
 
   if (!isStarted) {
-    const posMarks = testDetails?.positive_marks ?? 5;
-    const negMarks = testDetails?.negative_marks ?? 0;
+    const isMains = testDetails?.title?.toLowerCase().includes('mains');
+    const isJeeNeet = testDetails?.exam_category?.toLowerCase().includes('jee') || testDetails?.exam_category?.toLowerCase().includes('neet');
+    const posMarks = testDetails?.positive_marks 
+      ?? testDetails?.marks_per_question 
+      ?? (questions[0]?.marks) 
+      ?? (testDetails?.total_marks && questions.length > 0 ? Math.round(testDetails.total_marks / questions.length) : (isJeeNeet ? 4 : isMains ? 3 : 2));
+
+    const negMarks = testDetails?.negative_marks 
+      ?? (questions[0]?.negative_marks)
+      ?? (isJeeNeet ? 1 : 0);
+
+    const calculatedTotalMarks = testDetails?.total_marks || (questions.length * posMarks);
+    const durationMins = testDetails?.duration_minutes || (isMains ? 30 : 20);
+
     return (
       <SafeAreaView style={[styles.container, { paddingHorizontal: 20, paddingTop: 12, paddingBottom: Platform.OS === 'android' ? 8 : 16, backgroundColor: '#F8F9FA' }]}>
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', alignItems: 'center', paddingBottom: 16 }}>
@@ -803,7 +938,7 @@ export default function ZenZaTestEngineScreen() {
               <Ionicons name="time-outline" size={18} color={Colors.accent.primary} style={{ marginRight: 10 }} />
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 10, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Test Duration</Text>
-                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>{testDetails?.duration_minutes || 60} Minutes</Text>
+                <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>{durationMins} Minutes</Text>
               </View>
             </View>
 
@@ -812,7 +947,7 @@ export default function ZenZaTestEngineScreen() {
               <View style={{ flex: 1 }}>
                 <Text style={{ fontSize: 10, color: Colors.text.tertiary, fontWeight: '600', textTransform: 'uppercase' }}>Marking Scheme</Text>
                 <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.text.primary }}>
-                  +{posMarks} for Correct, {negMarks > 0 ? `-${negMarks} for Incorrect` : '0 Negative Marking'}
+                  +{posMarks} for Correct, {negMarks > 0 ? `-${negMarks} Negative Marking` : '0 Negative Marking'}
                 </Text>
               </View>
             </View>
@@ -824,6 +959,51 @@ export default function ZenZaTestEngineScreen() {
                 <Text style={{ fontSize: 12, color: Colors.text.secondary, lineHeight: 16 }}>
                   Do not lock your device or exit the app during the test. Doing so for more than 20 seconds will trigger automatic submission.
                 </Text>
+              </View>
+            </View>
+
+            {/* Language Selection Card */}
+            <View style={{ marginTop: 12, borderTopWidth: 1, borderTopColor: '#F0F0F0', paddingTop: 12 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 8, gap: 6 }}>
+                <Ionicons name="language-outline" size={16} color={Colors.accent.primary} />
+                <Text style={{ fontSize: 11, color: Colors.text.primary, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                  Select Paper Language / भाषा चुनें
+                </Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {[
+                  { key: 'hi', label: 'हिन्दी', sub: 'Pure Hindi' },
+                  { key: 'en', label: 'English', sub: 'Pure English' },
+                  { key: 'bilingual', label: 'Bilingual', sub: 'हिन्दी + Eng' },
+                ].map((lang) => {
+                  const isSel = selectedLanguage === lang.key;
+                  return (
+                    <TouchableOpacity
+                      key={lang.key}
+                      activeOpacity={0.8}
+                      onPress={() => setSelectedLanguage(lang.key as any)}
+                      style={{
+                        flex: 1,
+                        paddingVertical: 10,
+                        paddingHorizontal: 4,
+                        borderRadius: 10,
+                        backgroundColor: isSel ? '#FFE2DB' : '#F9FAFB',
+                        borderWidth: 1.5,
+                        borderColor: isSel ? '#AF2800' : '#E5E7EB',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: '800', color: isSel ? '#AF2800' : '#374151' }}>
+                        {lang.label}
+                      </Text>
+                      <Text style={{ fontSize: 9, color: isSel ? '#AF2800' : '#6B7280', marginTop: 2, fontWeight: '600' }}>
+                        {lang.sub}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
           </View>
@@ -885,9 +1065,36 @@ export default function ZenZaTestEngineScreen() {
       <View style={styles.header}>
         <View style={styles.progressHeader}>
           <Text style={styles.progressText}>Question {currentQIndex + 1} of {questions.length}</Text>
-          <View style={[styles.timerBadge, isLowTime && styles.timerLow]}>
-            <Ionicons name="time-outline" size={16} color={isLowTime ? '#fff' : Colors.text.primary} />
-            <Text style={[styles.timerText, isLowTime && styles.timerTextLow]}>{formatTime(timeLeft)}</Text>
+          
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onPress={() => {
+                const nextLang = selectedLanguage === 'hi' ? 'en' : selectedLanguage === 'en' ? 'bilingual' : 'hi';
+                setSelectedLanguage(nextLang);
+              }}
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#FFE2DB',
+                borderWidth: 1,
+                borderColor: '#AF2800',
+                paddingHorizontal: 8,
+                paddingVertical: 4,
+                borderRadius: 8,
+                gap: 4,
+              }}
+            >
+              <Ionicons name="language" size={12} color="#AF2800" />
+              <Text style={{ fontSize: 11, fontWeight: '800', color: '#AF2800' }}>
+                {selectedLanguage === 'hi' ? 'हिन्दी' : selectedLanguage === 'en' ? 'EN' : 'HI+EN'}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.timerBadge, isLowTime && styles.timerLow]}>
+              <Ionicons name="time-outline" size={16} color={isLowTime ? '#fff' : Colors.text.primary} />
+              <Text style={[styles.timerText, isLowTime && styles.timerTextLow]}>{formatTime(timeLeft)}</Text>
+            </View>
           </View>
         </View>
         <View style={styles.progressBarBg}>
@@ -903,7 +1110,7 @@ export default function ZenZaTestEngineScreen() {
         pagingEnabled
         showsHorizontalScrollIndicator={false}
         scrollEventThrottle={16}
-        extraData={answers}
+        extraData={[answers, selectedLanguage]}
         getItemLayout={(data, index) => ({
           length: windowWidth,
           offset: windowWidth * index,
@@ -926,7 +1133,9 @@ export default function ZenZaTestEngineScreen() {
           <View style={[styles.page, { width: windowWidth }]}>
             <View style={styles.questionCard}>
               <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ flexGrow: 1, paddingBottom: 10 }}>
-                <Text style={styles.questionText}>{q.question_text}</Text>
+                <Text style={styles.questionText}>
+                  {getLocalizedText(q.question_text, selectedLanguage)}
+                </Text>
                 
                 <View style={styles.optionsList}>
                   {q.options.map((opt: string, oIdx: number) => {
@@ -941,7 +1150,9 @@ export default function ZenZaTestEngineScreen() {
                         <View style={[styles.radio, isSelected && styles.radioSelected]}>
                           {isSelected && <View style={styles.radioDot} />}
                         </View>
-                        <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>{opt}</Text>
+                        <Text style={[styles.optionText, isSelected && styles.optionTextSelected]}>
+                          {getLocalizedText(opt, selectedLanguage)}
+                        </Text>
                       </TouchableOpacity>
                     );
                   })}

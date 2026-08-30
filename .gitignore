@@ -30,3 +30,10 @@ app_brain/.obsidian/workspace-mobile.json
 android/app/src/main/assets/index.android.bundle
 android/app/src/main/assets/*.bundle
 
+# Google Cloud Service Account Keys & Temporary Downloads
+service_account.json
+*/service_account.json
+**/service_account.json
+**/temp_downloads/
+**/local_drop/
+

@@ -114,7 +114,31 @@ export default function PublicHeaderProfileModal({
 
       if (error) throw error;
 
-      Alert.alert('Saved! 🎉', 'Your profile details have been updated successfully.');
+      // 2. Also update public_students table for 100% synchronization
+      await supabase
+        .from('public_students')
+        .upsert({
+          user_id: user.id,
+          name: fullName,
+          phone: mobileNum,
+          target_exam: selectedTargetExam,
+          category_type: selectedCategory,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'user_id' });
+
+      // 3. Update AsyncStorage & Zustand Auth store
+      await AsyncStorage.setItem('@student_target_exam', selectedTargetExam);
+      await AsyncStorage.setItem('@student_category_type', selectedCategory);
+
+      const currentStudentData = useAuthStore.getState().studentData || {};
+      useAuthStore.getState().setStudentData({
+        ...currentStudentData,
+        name: fullName,
+        target_exam: selectedTargetExam,
+        category_type: selectedCategory,
+      });
+
+      Alert.alert('Saved! 🎉', 'Your profile and target exam have been updated successfully.');
       if (onSaved) onSaved();
       onClose();
     } catch (err: any) {
